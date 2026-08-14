@@ -270,14 +270,32 @@ command line whatever the code behind it does.
   survives into the bytes, and rewriting anything else would break the rule
   that a value is never silently altered. `--json` is read by programs, and it
   hands them what was actually there. `TestJSONDoesNotAlterAValue`.
-- **Chat markup is generated, never concatenated** (SPEC.md §9). `internal/format`
-  owns the only place a link or a mention is built, and any literal `<`, `>`, or
-  `|` in user text is escaped so that it cannot close a wrapper and become
-  syntax. This is the package most likely to have the bug, which is why the
-  spec requires it at ~100% coverage with fuzz targets **(M2)**.
+- **Chat markup is generated, never concatenated** (SPEC.md §9).
+  `internal/format` owns the only place a link or a mention is built.
+  `TestALinkCannotBeClosedByItsOwnText`, `TestMentionOnlyAcceptsAResolvedName`,
+  and `FuzzTranslate`. The package is at 100% statement coverage, which the
+  spec asks for because this is where a bug would actually appear.
+
+  **A wrapper character is refused, not escaped**, which is a correction to
+  what this document used to say. Chat has no escape syntax: there is no way to
+  write a pipe inside the display half of `<url|text>` such that the far end
+  reads it as a pipe. So a link whose text contains `<`, `>`, or `|` cannot be
+  represented, and the whole message is refused at exit 2 naming the character
+  and its offset. The alternative was altering the text to fit, and a reader at
+  the other end cannot tell an altered message from an intended one.
+
+  A user resource name reaching a mention is checked against the same standard
+  SPEC.md §15.8 sets for a space name, rather than escaped: anything a parser
+  accepts is safe inside a wrapper unescaped. Escaping is the second layer and
+  never the only one.
+- **Nothing inside a fenced or inline code span is transformed.**
+  `TestNothingInsideACodeSpanIsTransformed`, fifteen cases. Somebody pasting a
+  shell command or a diff is what code spans are for, and a translator that
+  worked by substitution would rewrite the inside of one.
 - **A value is never altered to make it representable.** Invalid UTF-8 is
   refused, not replaced with U+FFFD. A message that is not what was sent is a
-  wrong answer that looks like a right one **(M2)**.
+  wrong answer that looks like a right one. `TestInvalidUTF8IsRefused`, exit 2,
+  naming the byte offset.
 - **Cache and state paths stay under their roots.** A space ID that reached a
   filename could otherwise name a file anywhere **(M4)**.
 
