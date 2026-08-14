@@ -26,6 +26,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 )
@@ -106,7 +107,10 @@ with, sponsored by, or endorsed by Google.`,
 	})
 
 	f := root.PersistentFlags()
-	f.StringVar(&opts.Profile, "profile", "", "profile to use (overrides SPACEBAR_PROFILE and the configured default)")
+	// The environment variable is named by config rather than written out. A
+	// rename is a change to meta.AppName and to nothing else, and help text
+	// that spelled the old name would survive one and go on being wrong.
+	f.StringVar(&opts.Profile, "profile", "", "profile to use (overrides "+config.EnvProfile()+" and the configured default)")
 	f.BoolVar(&opts.JSON, "json", false, "emit structured output on stdout; one object per line for lists")
 	f.BoolVar(&opts.Quiet, "quiet", false, "suppress progress and non-essential messages on stderr")
 	f.BoolVar(&opts.Verbose, "verbose", false, "log requests, retries, and timings to stderr")

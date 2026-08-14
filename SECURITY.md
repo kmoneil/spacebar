@@ -140,9 +140,21 @@ it **(M2)**.
 - **`config.json` holds a reference, never a secret** (SPEC.md §5.3). The
   config is meant to be hand-edited and kept in a dotfiles repository. A
   webhook URL is stored as `keyring:spacebar/<profile>/webhook`, and the secret
-  lives in the OS keyring. Where there is no keyring, it falls back to
-  `credentials.json` at mode `0600`, is refused on read if it is wider, and
-  **warns on stderr every invocation** that it did so **(M2/M3)**.
+  lives in the OS keyring. `TestASecretIsRefusedInTheConfigFile` and
+  `TestSaveRefusesToWriteASecret`: a field that holds a reference is refused
+  both on read and on write when it holds anything else, and the refusal never
+  quotes the value back. An unknown key is refused too, because
+  `webhook_url` written where `webhook_url_ref` belongs would otherwise be a
+  credential in a file, silently ignored by the tool that put it there.
+
+  This is why `client_secret` from SPEC.md §5.1 is written as
+  `client_secret_ref`. RFC 8252 is right that a native-app secret is not
+  confidential and none of this tool's security rests on it, but a user who
+  made a client in their own Cloud project did not agree to keep the secret in
+  the file they paste into an issue.
+- **Where there is no keyring**, the secret falls back to `credentials.json` at
+  mode `0600`, refused on read if it is wider, **warning on stderr every
+  invocation** that it did so **(M2)**.
 - **A webhook URL is a bearer credential, not a URL.** It carries `key` and
   `token` query parameters that are the entire authentication for posting to
   that space. It is redacted, stored, and refused on the command line exactly
