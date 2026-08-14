@@ -115,6 +115,11 @@ func TestEveryCapabilityHasADescription(t *testing.T) {
 // TestARefusalNamesTheProfileAndTheFix, per SPEC.md §8.2. Somebody running a
 // script across four profiles needs to know which one could not do the work,
 // and what to do instead.
+//
+// It deliberately does not name `auth login`. That command arrives with the
+// milestone that adds the transport, and a refusal sending somebody to a
+// command this binary does not have is a second dead end on top of the first.
+// The milestone that adds it puts the pointer back.
 func TestARefusalNamesTheProfileAndTheFix(t *testing.T) {
 	err := Require(stub{kind: config.TransportWebhook, profile: "alerts"}, "tail", CanRead)
 	if err == nil {
@@ -128,7 +133,6 @@ func TestARefusalNamesTheProfileAndTheFix(t *testing.T) {
 		"alerts",                          // the profile.
 		"write-only",                      // why, for somebody who was handed a URL.
 		string(config.TransportUserOAuth), // the alternative.
-		meta.AppName + " auth login",      // the command that sets one up.
 	} {
 		if !strings.Contains(message, want) {
 			t.Errorf("the refusal is missing %q:\n%s", want, message)
@@ -159,6 +163,9 @@ func TestTheCardRefusalPointsTheOtherWay(t *testing.T) {
 	}
 	if strings.Contains(message, meta.AppName+" auth login") {
 		t.Errorf("the refusal tells an authorized user to authorize again:\n%s", message)
+	}
+	if strings.Contains(message, "useroauth.") && !strings.Contains(message, "webhook") {
+		t.Errorf("the refusal points the wrong way:\n%s", message)
 	}
 	if !strings.Contains(message, "text-only") {
 		t.Errorf("the refusal does not say why:\n%s", message)

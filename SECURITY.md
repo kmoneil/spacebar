@@ -61,12 +61,22 @@ hand to a model. Message text is treated as data at every point it is touched.
 **Assumed hostile: values that flow into a request path.** A space ID, a
 message ID, a resolved alias, and an email that came back from a directory
 lookup are all strings from somewhere else. None of them may change which URL
-is requested. A resolved space is refused unless it matches
-`^spaces/[A-Za-z0-9_-]+$` (SPEC.md §15.8) **(M3)**.
+is requested. A space is refused unless it matches `^spaces/[A-Za-z0-9_-]+$`
+(SPEC.md §15.8), by `chat.CheckSpaceName`, which is the one place that rule
+lives. Held today on the two paths that exist: the space a webhook URL names,
+and a target given on the command line.
+`TestABadURLIsRefusedAtConstruction`, `TestARubbishTargetIsRefusedAsOne`.
+
+That is a check on the value and not the only defence. Anything reaching a
+request path also goes through the relative-path rule below, which refuses a
+path that would leave the base at all, and `FuzzAPathStaysOnTheBase` states it
+as a property rather than as a list of cases. What Milestone 3 owes is the
+third path: a resolver turning an alias or an email into a space, whose output
+has to go through the same function **(M3)**.
 
 **Assumed trusted: the caller.** Flags, arguments, the config file, and the
-profile are the operator's own instructions. `spacebar send eng "shipping now"
---yes` does what it says. The tool defends the operator from mistakes with a
+profile are the operator's own instructions. `spacebar send "shipping now"`
+does what it says. The tool defends the operator from mistakes with a
 confirmation gate and a capability check; it does not defend the machine from
 its own user.
 
@@ -510,8 +520,20 @@ rather than retried. `TestAnOversizeResponseIsRefusedRatherThanTruncated`.
   `internal/lint/toolversion_test.go` holds the one version that has to be
   written twice to the one that does not.
 - **The test suite never touches the network** (SPEC.md §16). CI runs with
-  egress blocked. Every host in a test uses a reserved TLD: `.invalid`,
-  `.test`, `.example` **(M2)**.
+  egress blocked, and `TestEveryHostInATestIsUnreachable` reads every URL
+  literal in every test file: it must name a reserved TLD, a loopback address,
+  or one of three real hosts that are listed with the reason they are only ever
+  parsed. Egress blocking alone catches a stray request in CI and nowhere else,
+  so on the machine a test was written on the same test passes by quietly
+  reaching somebody.
+
+  This claim used to read "every host in a test uses a reserved TLD", and that
+  was not true on the day it was written: `chat.googleapis.com` appears in
+  twenty-five test literals as a fixture for the URL parsing and redaction
+  rules, and an OAuth scope is a URL-shaped identifier beginning
+  `https://www.googleapis.com/auth/`. Both are strings that are never dialled,
+  and the corrected claim says so rather than describing a tidier repository
+  than this one.
 
 ## What a hostile space can still do
 

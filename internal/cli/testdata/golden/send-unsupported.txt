@@ -2,4 +2,4 @@ exit 5
 --- stdout
 --- stderr
 error: "send --file" needs attachment upload, and profile "alerts" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.
-Use a profile whose transport is useroauth, or set one up with: spacebar auth login --profile NAME
+Use a profile whose transport is useroauth.

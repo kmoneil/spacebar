@@ -17,6 +17,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -631,5 +632,47 @@ func TestABodyLargerThanChatAcceptsIsRefusedRatherThanSent(t *testing.T) {
 	}
 	if s.count() != 0 {
 		t.Errorf("%d requests were made", s.count())
+	}
+}
+
+// TestWhereTheMessageWentIsNotTakenOnTheServersWord.
+//
+// A webhook is issued for one space and is the only thing that authenticates
+// the request, so the API cannot put the message anywhere else: the URL is the
+// fact and a response naming a different space is saying something that cannot
+// be true. The threat model says a hostile space can lie about the data, and
+// the line a person reads to confirm where their message went is the worst
+// place to believe it.
+func TestWhereTheMessageWentIsNotTakenOnTheServersWord(t *testing.T) {
+	isolate(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// A server claiming the message landed somewhere it cannot have.
+		_, _ = fmt.Fprint(w, `{"name":"spaces/CCCCLies/messages/BBB","space":{"name":"spaces/CCCCLies"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	if got := runCLIIn(t, url+"\n", "profile", "set-webhook", "alerts"); got.exit != output.ExitOK {
+		t.Fatalf("configuring: exit %d\n%s", got.exit, got.stderr)
+	}
+
+	got := runCLIIn(t, "", "--json", "send", "deploy done")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	var result sendResult
+	if err := json.Unmarshal([]byte(got.stdout), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v", err)
+	}
+	if result.Space != "spaces/AAAATestSpace" {
+		t.Errorf("space = %q, want the one the webhook is for; the server was believed", result.Space)
+	}
+
+	// The message name is still reported as it came back, because that is the
+	// server's to assign and there is no second source for it.
+	if result.Message != "spaces/CCCCLies/messages/BBB" {
+		t.Errorf("message = %q, and the name is the server's to give", result.Message)
 	}
 }

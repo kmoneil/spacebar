@@ -374,25 +374,34 @@ func send(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, req chat
 	return r.Result(result, fields)
 }
 
-// spaceOf is where the message went, from the most reliable source available.
+// spaceOf is where the message went, and the order here is the one thing in
+// this file that is a security decision rather than a formatting one.
 //
-// The response is preferred because it is the far end saying where it put the
-// message, which is the only account of it that cannot be wrong about the
-// request having been rewritten on the way. A webhook's own space is next, then
-// the target as given.
+// What we asked for wins over what came back. A webhook is issued for one space
+// and is the only thing that authenticates the request, so the API cannot put
+// the message anywhere else and the URL is the fact; a response naming a
+// different space is a server saying something that cannot be true. The threat
+// model says plainly that a hostile space can lie about the data, and reporting
+// a destination on its word is exactly that, in the one line a person reads to
+// confirm where their message went.
+//
+// The response is used only where we did not say: a profile that reaches many
+// spaces and a caller who let it choose. Then the message name is the only
+// account there is.
 func spaceOf(opened *profile.Open, req chat.SendRequest, sent *chat.Message) string {
-	if sent.Space != nil && sent.Space.Name != "" {
-		return sent.Space.Name
-	}
-	if name := sent.Name; name != "" {
-		if space, _, ok := strings.Cut(name, "/messages/"); ok {
-			return space
-		}
-	}
 	if space, fixed := transport.SpaceOf(opened.Transport); fixed {
 		return space
 	}
-	return req.Space
+	if req.Space != "" {
+		return req.Space
+	}
+	if space, _, ok := strings.Cut(sent.Name, "/messages/"); ok {
+		return space
+	}
+	if sent.Space != nil {
+		return sent.Space.Name
+	}
+	return ""
 }
 
 // verboseLog is the logger the transport gets, or nil.

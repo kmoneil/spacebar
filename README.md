@@ -3,11 +3,12 @@
 A focused terminal client and MCP server for Google Chat.
 
 ```
-spacebar send eng-alerts "deploy done"
+spacebar send "deploy done"
 ```
 
 That is the whole point. One line, from a script or a terminal, with no
-ceremony after setup. The same capabilities are available to an agent with no
+ceremony after setup: a webhook profile knows which space it posts to, so
+there is nothing else to say. The same capabilities are available to an agent with no
 human in the loop, through `--json` and through a built-in MCP server.
 
 > Google Chat and Google are trademarks of Google LLC. `spacebar` is an
@@ -16,18 +17,24 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestone 2 of 6, in progress.** `spacebar send` works over an incoming
-webhook, with no OAuth, no administrator approval, and no Cloud project: give a
-profile a webhook URL and send. `version`, `licenses` and `completion` work.
-What is not here yet is reading anything: no `tail`, no `messages list`, no
-`spaces list`, and no MCP server.
+**Milestone 2 of 6 is done.** `spacebar send` works over an incoming webhook,
+with no OAuth, no administrator approval, and no Cloud project: give a profile a
+webhook URL and send. `version`, `licenses` and `completion` work. What is not
+here yet is reading anything: no `tail`, no `messages list`, no `spaces list`,
+and no MCP server.
+
+One thing worth knowing before you rely on it. Every behaviour described below
+is covered by tests, including against a server that answers the way the Chat
+API does, and none of it has yet been run against a real Google Chat space,
+because building it did not require one. The parts that are guesses rather than
+observations are marked as such in the source where they occur.
 
 The plan, in six milestones:
 
 | #   | Deliverable                                               | State    |
 | --- | --------------------------------------------------------- | -------- |
 | 1   | Skeleton, licensing, CI gates                             | **done** |
-| 2   | Webhook transport: `send` with no OAuth at all            | in progress |
+| 2   | Webhook transport: `send` with no OAuth at all            | **done** |
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  |          |
 | 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  |          |
 | 5   | MCP server                                                |          |
@@ -208,9 +215,12 @@ capability and the profile rather than pretending the flag does not exist:
 $ spacebar send --file report.pdf 'here it is'
 error: "send --file" needs attachment upload, and profile "alerts" is an
 incoming webhook, which is fixed to one space, write-only, and posts as a bot.
-Use a profile whose transport is useroauth, or set one up with:
-spacebar auth login --profile NAME
+Use a profile whose transport is useroauth.
 ```
+
+That transport arrives in Milestone 3. Until then a webhook is the only way to
+send, which is the point: it is the one that needs nothing from an
+administrator.
 
 ## Development
 

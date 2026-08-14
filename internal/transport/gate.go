@@ -19,7 +19,6 @@ import (
 	"fmt"
 
 	"github.com/kmoneil/spacebar/internal/config"
-	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 )
 
@@ -165,8 +164,13 @@ func explainKind(kind config.Transport) string {
 // what setting up the alternative involves rather than only naming it.
 func fix(kind config.Transport, want Capability) string {
 	if kind == config.TransportWebhook {
-		return "Use a profile whose transport is " + string(config.TransportUserOAuth) +
-			", or set one up with: " + meta.AppName + " auth login --profile NAME"
+		// Deliberately does not name the command that sets one up. `auth login`
+		// arrives with the milestone that adds the transport, and a refusal
+		// that sends somebody to a command this binary does not have is a
+		// second dead end on top of the first. internal/profile is where a
+		// caller who configures the transport anyway gets told what is missing,
+		// because that is the package that knows which transports are built.
+		return "Use a profile whose transport is " + string(config.TransportUserOAuth) + "."
 	}
 
 	if kind == config.TransportUserOAuth && want == CanSendCards {
