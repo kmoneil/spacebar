@@ -213,8 +213,12 @@ it is pasted rather than as a `400` about an API key days later.
   `TestVerboseOutputCarriesNoCredential`,
   `TestATransportFailureDoesNotQuoteTheURL`,
   `TestAnErrorMessageFromTheServerIsScrubbed`,
-  `TestAMalformedBaseIsNotQuotedBack`. Dry-run output is `(M2)`, owned by the
-  card that adds the command that has one.
+  `TestAMalformedBaseIsNotQuotedBack`, and, for `--dry-run`,
+  `TestNoDryRunOutputAnywhereCarriesACredential`, which runs every write command
+  in the tree in all three renderings and asserts both that the values never
+  appear and that the placeholders do. The second half matters: a test that only
+  grepped for `key=` would pass on output that leaked, because a correctly
+  redacted URL still reads `key=REDACTED`.
 
   The failure this is arranged around is not hypothetical.
   `net/http` wraps every failure in a `*url.Error` whose `Error` method quotes
@@ -228,8 +232,8 @@ it is pasted rather than as a `400` about an API key days later.
   including at `--verbose`, where the `Authorization` header prints as
   `REDACTED` rather than being omitted: a missing line says a credential was
   not sent, which is a different answer to the question somebody reading a log
-  is asking. `TestVerboseOutputCarriesNoCredential`. `--dry-run` output is
-  **(M2)**, owned by the card that adds it.
+  is asking. `TestVerboseOutputCarriesNoCredential` and
+  `TestADryRunShowsTheHeaderAsRedactedRatherThanOmittingIt`.
 - **A credential never travels in the clear.** A base URL that is not `https`
   is refused when the client is built, before anything is sent. The one
   exception is a loopback IP literal, which is what a test server is; the name
@@ -393,6 +397,26 @@ read. It is gated more tightly than the CLI, on purpose.
   `TestAnotherSpaceIsRefusedBeforeTheRequest`. Sending anyway would mean
   somebody who typed the wrong target watched their message arrive in a space
   full of people, with a success code saying it went where they asked.
+- **`--dry-run` cannot send, and that is enforced where the request would be
+  sent rather than at each command.** The client stops on the line before the
+  send, after the URL has been resolved and checked, the body encoded and the
+  credential attached, and returns that request instead of making it. So what a
+  dry run prints is the request that would have gone rather than a second
+  description of one, which can drift from it silently.
+
+  A command still has to render what comes back, and forgetting to is the one
+  thing that could go wrong. `TestEveryCommandIsClassifiedAsWritingOrNot` walks
+  the command tree and fails when a command is in neither the writing nor the
+  read-only list, so a command added in a later milestone cannot be merged
+  without somebody deciding in writing whether it can put something into a
+  space; `TestEveryWriteCommandHonoursDryRun` then runs each writing one against
+  a server that fails the test if it is ever reached. Verified by planting a new
+  command and watching the first fail.
+
+  A dry run of a command that writes locally means the whole command.
+  `spacebar profile set-webhook --dry-run` stores nothing, because the other
+  reading, where it saves the credential and only declines to send, is a
+  `--dry-run` that wrote to disk. `TestADryRunOfSetupStoresNothing`.
 - **A capability the profile does not have is exit code 5, before any request.**
   A write-only webhook profile cannot read, and `spacebar tail` on one fails
   naming both the profile and the fix rather than sending anything (SPEC.md

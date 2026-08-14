@@ -38,6 +38,33 @@ type space struct {
 	requests int
 	bodies   []string
 	queries  []string
+
+	// refusing fails the test if anything reaches the server, which is how a
+	// dry run is checked: by counting requests rather than by reading what came
+	// back, because a refusal that arrives after the POST looks the same from
+	// the outside.
+	refusing *testing.T
+
+	// url is the webhook URL for this server, for a command that reads one.
+	url string
+}
+
+// stdinFor returns the webhook URL when a command reads one, and nothing
+// otherwise.
+func (s *space) stdinFor(needsURL bool) string {
+	if !needsURL {
+		return ""
+	}
+	return s.url + "\n"
+}
+
+// refuse makes any request from here on fail t.
+func (s *space) refuse(t *testing.T) {
+	t.Helper()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refusing = t
 }
 
 func (s *space) count() int {
@@ -81,7 +108,12 @@ func configured(t *testing.T) *space {
 		s.requests++
 		s.bodies = append(s.bodies, string(body))
 		s.queries = append(s.queries, r.URL.RawQuery)
+		refusing := s.refusing
 		s.mu.Unlock()
+
+		if refusing != nil {
+			refusing.Errorf("a request reached the network: %s %s", r.Method, r.URL.Path)
+		}
 
 		var sent chat.Message
 		_ = json.Unmarshal(body, &sent)
@@ -97,8 +129,8 @@ func configured(t *testing.T) *space {
 	}))
 	t.Cleanup(server.Close)
 
-	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
-	if got := runCLIIn(t, url+"\n", "profile", "set-webhook", "alerts"); got.exit != output.ExitOK {
+	s.url = server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	if got := runCLIIn(t, s.url+"\n", "profile", "set-webhook", "alerts"); got.exit != output.ExitOK {
 		t.Fatalf("configuring: exit %d\n%s", got.exit, got.stderr)
 	}
 	return s
@@ -322,10 +354,15 @@ func TestDryRunSendsNothing(t *testing.T) {
 	if s.count() != 0 {
 		t.Fatalf("--dry-run made %d requests", s.count())
 	}
-	for _, want := range []string{"spaces/AAAATestSpace", "alerts", "not sent"} {
+	// stdout is the request, exactly, and nothing else. Which profile it
+	// resolved to is commentary and goes to stderr.
+	for _, want := range []string{"POST ", "spaces/AAAATestSpace", "not sent", "key=REDACTED"} {
 		if !strings.Contains(got.stdout, want) {
 			t.Errorf("the dry run does not show %q:\n%s", want, got.stdout)
 		}
+	}
+	if !strings.Contains(got.stderr, "alerts") {
+		t.Errorf("nothing said which profile it would have gone through:\n%s", got.stderr)
 	}
 
 	// The card's claim: a body from stdin is shown as it will be sent, so the

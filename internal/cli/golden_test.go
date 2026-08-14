@@ -48,6 +48,11 @@ var volatile = []*regexp.Regexp{
 	regexp.MustCompile(`("arch":\s*")[^"]*(")`),
 	regexp.MustCompile(`(?m)^(go      ).*$`),
 	regexp.MustCompile(`(?m)^(os/arch ).*$`),
+
+	// A dry run prints the URL it would have posted to, and under test that is
+	// a loopback server on whatever port the kernel handed out. The port is the
+	// machine; the rest of the line, including the redaction, is the contract.
+	regexp.MustCompile(`(http://127\.0\.0\.1:)\d+(/)`),
 }
 
 func normalize(s string) string {
@@ -201,6 +206,13 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"send-unsupported.json", []string{"--json", "send", "--file", "report.pdf", "hi"}, output.ExitUnsupported, "", true, true},
 
 		{"send-wrong-space.txt", []string{"send", "spaces/BBBBSomewhereElse", "hi"}, output.ExitUsage, "", true, true},
+
+		// A dry run of the setup command, which stores nothing and sends
+		// nothing. The second half of that is the interesting one: --dry-run on
+		// a command that writes to disk has to mean the whole command, not the
+		// network half of it.
+		{"profile-set-webhook-dry-run.txt", []string{"--dry-run", "profile", "set-webhook", "alerts"}, output.ExitOK, "", true, true},
+		{"profile-set-webhook-verify-dry-run.txt", []string{"--dry-run", "profile", "set-webhook", "alerts", "--verify"}, output.ExitOK, "", true, true},
 	}
 
 	for _, tc := range cases {
@@ -222,7 +234,11 @@ func TestGoldenOutputContract(t *testing.T) {
 			if tc.serve {
 				stdin = chatShapedServer(t)
 			}
-			if strings.HasPrefix(tc.name, "send") {
+			if strings.HasPrefix(tc.name, "profile-set-webhook-") && strings.Contains(tc.name, "dry-run") {
+				// Reads the URL from stdin like any other set-webhook, and
+				// deliberately has no profile configured first: a dry run of
+				// setup has to work before there is anything set up.
+			} else if strings.HasPrefix(tc.name, "send") {
 				// send needs a profile that already exists. Configuring it is
 				// setup rather than part of the recorded output.
 				if setup := runCLIIn(t, stdin, "profile", "set-webhook", "alerts"); setup.exit != output.ExitOK {

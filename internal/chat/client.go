@@ -154,6 +154,15 @@ type Options struct {
 
 	// Log is nil unless --verbose.
 	Log Logger
+
+	// DryRun stops every request at the moment before it is sent and returns
+	// what would have gone (SPEC.md §10.2).
+	//
+	// It is here, on the client, rather than at each command, because a command
+	// that had to opt in is a command that can forget, and the thing it would
+	// forget is not sending. Set here, no request can leave this process
+	// whatever any caller does with the result.
+	DryRun bool
 }
 
 // Client is a Chat API client for one profile.
@@ -165,6 +174,7 @@ type Client struct {
 	auth      Authorizer
 	http      *http.Client
 	log       Logger
+	dryRun    bool
 
 	// secrets are the credential values from the base URL, held so that they
 	// can be struck out of anything this package is about to say. See scrub.
@@ -200,6 +210,7 @@ func New(opts Options) (*Client, error) {
 		auth:      opts.Auth,
 		http:      httpClient,
 		log:       opts.Log,
+		dryRun:    opts.DryRun,
 		secrets:   baseSecrets(base),
 		now:       time.Now,
 		sleep:     sleepFor,
@@ -396,6 +407,14 @@ func (c *Client) attempt(ctx context.Context, req Request, target *url.URL, body
 	}
 
 	c.logRequest(httpReq)
+	if c.dryRun {
+		// The last line before the send, deliberately. Everything above it has
+		// happened: the URL was resolved and checked against the base, the body
+		// was encoded, the credential was attached. What is returned is that
+		// request and not a description of one.
+		return nil, &DryRun{Request: c.preview(httpReq, body)}
+	}
+
 	started := c.now()
 	resp, err := c.http.Do(httpReq)
 	if err != nil {

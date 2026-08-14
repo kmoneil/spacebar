@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -170,6 +171,7 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 		Name:    opts.Profile,
 		Timeout: opts.Timeout,
 		Log:     verboseLog(opts, r),
+		DryRun:  opts.DryRun,
 	})
 	r.Warnings(opened.Warnings)
 	if err != nil {
@@ -200,9 +202,6 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 		MessageID: messageID(flags, target, message.Text),
 	}
 
-	if opts.DryRun {
-		return dryRun(r, opened, req)
-	}
 	return send(cmd, r, opened, req)
 }
 
@@ -337,6 +336,20 @@ func messageID(flags *sendFlags, space, text string) string {
 
 func send(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, req chat.SendRequest) error {
 	sent, err := opened.Transport.Send(cmd.Context(), req)
+
+	// A dry run comes back here rather than being decided above, because the
+	// decision not to send is the client's and this is where its answer
+	// arrives. A command that failed to handle this would report an error and
+	// send nothing, which is the right way round for a mistake to fail;
+	// TestEveryWriteCommandHonoursDryRun is what stops one shipping.
+	if dry, ok := errors.AsType[*chat.DryRun](err); ok {
+		// stdout carries the request and nothing else, because SPEC.md §10.2
+		// asks for the exact request and a profile line is not part of one.
+		// Which profile it resolved to is still worth saying, and stderr is
+		// where everything that is not the result goes.
+		r.Note("through profile %q. Nothing was sent.", opened.Name)
+		return r.Block(dry.Request, dry.Request.Text())
+	}
 	if err != nil {
 		return err
 	}
@@ -380,60 +393,6 @@ func spaceOf(opened *profile.Open, req chat.SendRequest, sent *chat.Message) str
 		return space
 	}
 	return req.Space
-}
-
-// dryRun stops before the transport is asked to do anything.
-//
-// What it prints is provisional and deliberately small: the target, the profile
-// and the body that would have been sent. SPEC.md §10.2 asks for the exact HTTP
-// request, method, URL, headers and body, and that has to be printed by the
-// code that builds one, in internal/chat, or it is a second representation of
-// the request that can differ from the real one without anybody noticing. The
-// card that adds it owns the shape.
-//
-// What is not provisional is that nothing is sent. That is the property worth
-// having early, because a --dry-run that posted would be the worst failure this
-// command has.
-func dryRun(r *output.Renderer, opened *profile.Open, req chat.SendRequest) error {
-	space := req.Space
-	if space == "" {
-		if fixed, ok := transport.SpaceOf(opened.Transport); ok {
-			space = fixed
-		}
-	}
-
-	fields := output.Fields{
-		{Label: "space", Value: space},
-		{Label: "profile", Value: opened.Name},
-		{Label: "transport", Value: string(opened.Transport.Kind())},
-	}
-	if req.ThreadKey != "" {
-		fields = append(fields, output.Field{Label: "thread-key", Value: req.ThreadKey})
-	}
-	if req.MessageID != "" {
-		fields = append(fields, output.Field{Label: "message-id", Value: req.MessageID})
-	}
-	fields = append(fields, output.Field{Label: "text", Value: req.Message.Text})
-
-	return r.Result(struct {
-		Space     string `json:"space"`
-		Profile   string `json:"profile"`
-		Transport string `json:"transport"`
-		ThreadKey string `json:"thread_key,omitempty"`
-		MessageID string `json:"message_id,omitempty"`
-		Text      string `json:"text"`
-		Cards     int    `json:"cards,omitempty"`
-		DryRun    bool   `json:"dry_run"`
-	}{
-		Space:     space,
-		Profile:   opened.Name,
-		Transport: string(opened.Transport.Kind()),
-		ThreadKey: req.ThreadKey,
-		MessageID: req.MessageID,
-		Text:      req.Message.Text,
-		Cards:     len(req.Message.CardsV2),
-		DryRun:    true,
-	}, fields)
 }
 
 // verboseLog is the logger the transport gets, or nil.

@@ -163,7 +163,7 @@ spacebar send spaces/AAAAAAA 'deploy done'     # name the space
 spacebar send --md 'deploy **done**'           # translate CommonMark
 echo 'deploy done' | spacebar send -           # body from stdin
 spacebar send --thread-key deploys 'v1.2.3'    # group into a thread
-spacebar send --dry-run 'deploy done'          # show what would be sent
+spacebar send --dry-run 'deploy done'          # print the request, send nothing
 ```
 
 ```
@@ -182,6 +182,24 @@ asterisk, so `**bold**` arrives with the asterisks showing. `--md` translates,
 and **the translation is one way**. `**bold**` becomes `*bold*`, which read back
 as CommonMark is italic, so a body that has already been through `--md` must not
 go through it again. The output of a dry run is not an input.
+
+`--dry-run` prints the exact request and sends nothing. It works on every
+command that can write, and the credential is redacted before it is printed:
+
+```
+$ spacebar send --dry-run 'deploy done'
+POST https://chat.googleapis.com/v1/spaces/AAAAAAA/messages?key=REDACTED&token=REDACTED
+Accept: application/json
+Content-Type: application/json; charset=UTF-8
+User-Agent: spacebar/1.0.0 (+https://github.com/kmoneil/spacebar)
+
+{"text":"deploy done"}
+```
+
+The `Authorization` header, when there is one, prints as `REDACTED` rather than
+being left out: an omitted line reads as "no credential was sent", which is a
+different answer to the question a dry run is asked. `--json` gives the same
+thing as an object with a `dry_run` field.
 
 A flag this profile cannot honour fails before the network call, naming the
 capability and the profile rather than pretending the flag does not exist:

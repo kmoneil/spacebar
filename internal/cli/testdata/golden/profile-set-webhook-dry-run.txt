@@ -1,0 +1,7 @@
+exit 0
+--- stdout
+profile     alerts
+transport   webhook
+credential  keyring:spacebar/alerts/webhook
+dry-run     nothing was stored
+--- stderr

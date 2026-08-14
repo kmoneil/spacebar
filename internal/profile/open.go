@@ -51,6 +51,11 @@ type Options struct {
 
 	// Log is nil unless --verbose.
 	Log chat.Logger
+
+	// DryRun stops every request before it is sent. Threaded through rather
+	// than set by each transport, so that a transport added later cannot forget
+	// it: the flag reaches the one place that would do the sending.
+	DryRun bool
 }
 
 // Open is a transport for one profile, and the warnings that came with reading
@@ -139,5 +144,6 @@ func openWebhook(name string, profile config.Profile, store *auth.Store, opts Op
 		URL:     url,
 		Timeout: opts.Timeout,
 		Log:     opts.Log,
+		DryRun:  opts.DryRun,
 	})
 }

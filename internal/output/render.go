@@ -77,6 +77,28 @@ func (r *Renderer) Result(data any, fields Fields) error {
 	return r.writeFields(fields)
 }
 
+// Block writes one result to stdout that is a block of text rather than a set
+// of labelled values.
+//
+// It exists for --dry-run, whose text rendering is an HTTP request: a method
+// line, headers, a blank line, a body. That is not label-and-value shaped, and
+// forcing it into Fields would produce something that is neither a request
+// somebody can compare against the API documentation nor a field list.
+//
+// stdout, and this is the decision the dry-run card was asked to make. A dry
+// run is the result of the command that was asked for: it exits 0, so the rule
+// that a failing command writes nothing to stdout is not in play, and in --json
+// mode it has to be parseable by whatever the caller pipes it into. Putting it
+// on stderr would mean every consumer of a dry run needed 2>&1, mixing it with
+// the warnings it is not.
+func (r *Renderer) Block(data any, text string) error {
+	if r.opts.JSON {
+		return r.encode(r.out, data, true)
+	}
+	_, err := fmt.Fprint(r.out, Sanitize(text))
+	return err
+}
+
 // Item writes one element of a list to stdout.
 //
 // One object per line in --json mode, with no wrapping array, so that output

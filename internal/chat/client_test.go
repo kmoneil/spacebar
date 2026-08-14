@@ -16,6 +16,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kmoneil/spacebar/internal/auth"
 	"github.com/kmoneil/spacebar/internal/config"
 )
 
@@ -649,5 +651,127 @@ func TestTheBodyKeepsChatMarkupUnescaped(t *testing.T) {
 	defer h.mu.Unlock()
 	if !strings.Contains(h.bodies[0], `<https://example.test|the release>`) {
 		t.Errorf("the request body escaped the markup: %s", h.bodies[0])
+	}
+}
+
+// TestADryRunShowsTheRequestAndSendsNothing.
+//
+// The preview is built from the request the client actually built, at the last
+// line before the send, so what is printed is what would have gone rather than
+// a second description of it. A parallel description can drift, and it drifts
+// silently.
+func TestADryRunShowsTheRequestAndSendsNothing(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("a dry run reached the network")
+	})
+	h.client.dryRun = true
+	h.client.auth = staticAuthorizer{header: "Bearer ya29.NotARealAccessTokenValue"}
+
+	_, err := h.client.SendMessage(context.Background(), SendRequest{Message: Message{Text: "deploy done"}})
+	dry, ok := errors.AsType[*DryRun](err)
+	if !ok {
+		t.Fatalf("a dry run returned %v, want a *DryRun", err)
+	}
+	if h.count() != 0 {
+		t.Fatalf("a dry run made %d requests", h.count())
+	}
+
+	req := dry.Request
+	if !req.DryRun {
+		t.Error("the preview is not marked as one")
+	}
+	if req.Method != http.MethodPost {
+		t.Errorf("method = %q", req.Method)
+	}
+	if !strings.Contains(req.URL, "/v1/spaces/AAAATestSpace/messages") {
+		t.Errorf("url = %q", req.URL)
+	}
+	if string(req.Body) != `{"text":"deploy done"}` {
+		t.Errorf("body = %s, want the exact bytes with no trailing newline", req.Body)
+	}
+}
+
+// TestADryRunShowsTheHeaderAsRedactedRatherThanOmittingIt.
+//
+// A missing line reads as "no header was sent", which is a different and wrong
+// answer to the question somebody is using a dry run to ask. They want to know
+// whether a credential would go, not to be left inferring it from an absence.
+func TestADryRunShowsTheHeaderAsRedactedRatherThanOmittingIt(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("a dry run reached the network")
+	})
+	h.client.dryRun = true
+	h.client.auth = staticAuthorizer{header: "Bearer ya29.NotARealAccessTokenValue"}
+
+	_, err := h.client.SendMessage(context.Background(), SendRequest{Message: Message{Text: "hello"}})
+	dry, ok := errors.AsType[*DryRun](err)
+	if !ok {
+		t.Fatalf("a dry run returned %v", err)
+	}
+
+	if got, ok := dry.Request.Headers["Authorization"]; !ok {
+		t.Error("the Authorization header was omitted, which reads as one not being sent")
+	} else if got != auth.Redacted {
+		t.Errorf("Authorization = %q, want %q", got, auth.Redacted)
+	}
+
+	rendered := dry.Request.Text()
+	for _, secret := range []string{testKey, testToken, "ya29.NotARealAccessTokenValue"} {
+		if strings.Contains(rendered, secret) {
+			t.Errorf("the rendered request carries a credential:\n%s", rendered)
+		}
+	}
+	for _, want := range []string{"Authorization: REDACTED", "key=REDACTED", "token=REDACTED"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the rendered request is missing %q:\n%s", want, rendered)
+		}
+	}
+	// The space survives, because it is what somebody running a dry run is
+	// checking.
+	if !strings.Contains(rendered, "spaces/AAAATestSpace") {
+		t.Errorf("the rendered request redacted the space away:\n%s", rendered)
+	}
+}
+
+// TestADryRunIsNotRetried. There is nothing to retry: no request was made, and
+// the answer will be the same every time.
+func TestADryRunIsNotRetried(t *testing.T) {
+	h := newHarness(t, func(http.ResponseWriter, *http.Request) {
+		t.Error("a dry run reached the network")
+	})
+	h.client.dryRun = true
+
+	if _, err := h.client.do(context.Background(), Request{Method: http.MethodGet}); err == nil {
+		t.Fatal("a dry run reported success")
+	}
+	if len(h.waits()) != 0 {
+		t.Errorf("the retry loop backed off after a dry run: %v", h.waits())
+	}
+}
+
+// TestPreviewBodyKeepsWhatWouldBeSent.
+func TestPreviewBodyKeepsWhatWouldBeSent(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"json", `{"text":"hi"}`, `{"text":"hi"}`},
+
+		// The encoder writes a trailing newline that is not part of the
+		// document, and a golden recording it would be recording the encoder.
+		{"trailing newline", "{\"text\":\"hi\"}\n", `{"text":"hi"}`},
+		{"empty", "", ""},
+
+		// Not something this tool sends yet. Quoted rather than emitted raw, so
+		// that the output is still a JSON document when media upload arrives
+		// and somebody has not thought about it.
+		{"not json", "--boundary\r\nContent-Type: image/png", `"--boundary\r\nContent-Type: image/png"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := previewBody([]byte(tc.body))
+			if string(got) != tc.want {
+				t.Errorf("previewBody(%q) = %s, want %s", tc.body, got, tc.want)
+			}
+			if len(got) > 0 && !json.Valid(got) {
+				t.Errorf("previewBody(%q) is not valid JSON: %s", tc.body, got)
+			}
+		})
 	}
 }

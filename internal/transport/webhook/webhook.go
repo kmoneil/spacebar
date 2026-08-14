@@ -56,6 +56,10 @@ type Options struct {
 
 	// Log is nil unless --verbose.
 	Log chat.Logger
+
+	// DryRun stops the request before it is sent and returns what would have
+	// gone instead.
+	DryRun bool
 }
 
 // Compile-time proof that this satisfies the interface. Milestone 3 and
@@ -97,6 +101,7 @@ func New(opts Options) (*Transport, error) {
 		Profile:   opts.Profile,
 		Timeout:   opts.Timeout,
 		Log:       opts.Log,
+		DryRun:    opts.DryRun,
 	})
 	if err != nil {
 		return nil, err

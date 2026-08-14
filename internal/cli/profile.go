@@ -16,6 +16,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -230,6 +231,15 @@ func runSetWebhook(cmd *cobra.Command, opts *Options, name string, verify verify
 		return err
 	}
 
+	// A dry run of this command changes nothing at all, not the keyring and not
+	// the configuration file. The other reading, where it stores the credential
+	// and only declines to send, would be a --dry-run that wrote to disk, and
+	// somebody who typed it to find out what would happen would have had half
+	// of it happen.
+	if opts.DryRun {
+		return dryRunSetWebhook(cmd, opts, r, name, rawURL, verify)
+	}
+
 	result, err := storeWebhook(r, name, rawURL)
 	if err != nil {
 		return err
@@ -254,6 +264,41 @@ func runSetWebhook(cmd *cobra.Command, opts *Options, name string, verify verify
 	}
 
 	return r.Result(result, fields)
+}
+
+// dryRunSetWebhook shows what the command would do and does none of it.
+//
+// With --verify there is a request to show, and it is the real one: the same
+// transport builds it and internal/chat stops it at the moment before sending.
+// Without --verify there is no request at all, so what is reported is the
+// change that would have been made to the configuration.
+func dryRunSetWebhook(cmd *cobra.Command, opts *Options, r *output.Renderer, name, rawURL string, verify verifyOptions) error {
+	if err := auth.CheckWebhookURL(rawURL); err != nil {
+		return err
+	}
+
+	if verify.on {
+		_, err := verifySend(cmd.Context(), name, rawURL, verify.text, opts, r)
+		if dry, ok := errors.AsType[*chat.DryRun](err); ok {
+			r.Note("nothing was stored and nothing was sent.")
+			return r.Block(dry.Request, dry.Request.Text())
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	result := webhookResult{
+		Name:      name,
+		Reference: auth.Ref(name, auth.WebhookSecret),
+		Transport: string(config.TransportWebhook),
+	}
+	return r.Result(result, output.Fields{
+		{Label: "profile", Value: result.Name},
+		{Label: "transport", Value: result.Transport},
+		{Label: "credential", Value: result.Reference},
+		{Label: "dry-run", Value: "nothing was stored"},
+	})
 }
 
 // storeWebhook puts the credential where it belongs and records the reference.
@@ -309,6 +354,7 @@ func verifySend(ctx context.Context, profile, rawURL, text string, opts *Options
 		Profile: profile,
 		URL:     rawURL,
 		Timeout: opts.Timeout,
+		DryRun:  opts.DryRun,
 
 		// Only under --verbose. Without this the flag would be accepted and do
 		// nothing, which is worse than not having it: somebody debugging a

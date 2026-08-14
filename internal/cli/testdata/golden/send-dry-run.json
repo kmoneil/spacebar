@@ -1,10 +1,16 @@
 exit 0
 --- stdout
 {
-  "space": "spaces/AAAATestSpace",
-  "profile": "alerts",
-  "transport": "webhook",
-  "text": "deploy done",
-  "dry_run": true
+  "dry_run": true,
+  "method": "POST",
+  "url": "http://127.0.0.1:ELIDED/v1/spaces/AAAATestSpace/messages?key=REDACTED&token=REDACTED",
+  "headers": {
+    "Accept": "application/json",
+    "Content-Type": "application/json; charset=UTF-8",
+    "User-Agent": "spacebar/0.0.0-dev (+https://github.com/kmoneil/spacebar)"
+  },
+  "body": {
+    "text": "deploy done"
+  }
 }
 --- stderr
