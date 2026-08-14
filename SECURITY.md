@@ -91,11 +91,19 @@ one to.
 - **No telemetry, no phone-home, no update check.** Ever. The only hosts this
   binary contacts are the Chat API, Google's OAuth endpoints, and a webhook URL
   the operator supplied.
-- **Only `internal/chat` speaks HTTP** **(M2)**. Nothing else may import
-  `net/http`, so header redaction cannot be bypassed by a package that builds
-  its own client.
-- **Only `internal/output` writes to stdout or stderr** **(M2)**, so an
-  escaping rule holds everywhere or nowhere.
+- **Only `internal/chat` speaks HTTP.** Nothing else may import `net/http`, so
+  header redaction cannot be bypassed by a package that builds its own client.
+  `TestOnlyChatImportsNetHTTP`, which reads the source rather than asking the go
+  command, so that a file behind a build tag for another platform is still held
+  to it. What it does not cover is a dependency that speaks HTTP on our behalf:
+  `golang.org/x/oauth2` will build the token request itself, and that request
+  carries a client secret and a refresh token.
+- **Only `internal/output` writes to stdout or stderr**, so an escaping rule
+  holds everywhere or nowhere. `TestOnlyOutputWritesToTheProcessStreams`, which
+  covers `fmt.Println` and the `println` builtin as well as the streams named
+  directly, because a stray debugging line is the likely way stdout stops being
+  data. Cobra reaches stdout on its own behalf, which is how `internal/cli` is
+  meant to write; the golden files are what hold what travels through it.
 - **No shell is involved in building a request.** Nothing is interpolated into
   a command line, because there is no command line.
 
