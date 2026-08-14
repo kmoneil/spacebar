@@ -247,7 +247,29 @@ command line whatever the code behind it does.
   people this operator may not know, and a terminal is a program that
   interprets bytes: an OSC sequence in a message body could set a window title,
   move a cursor, or in some terminals prime the input buffer. Nothing this tool
-  prints to a data column can do any of those **(M2)**.
+  prints to a data column can do any of those. `output.Sanitize` and
+  `output.Cell`, held by `TestSanitize`, `TestADataColumnCannotDriveTheTerminal`,
+  and `FuzzSanitize`.
+
+  Beyond the control characters: the C1 range at U+0080 to U+009F, because
+  U+009B is a second encoding of the control sequence introducer that a
+  terminal in eight-bit mode acts on; and the bidirectional overrides and
+  isolates, because they let a string display as something other than what it
+  contains, which in a tool that prints message bodies beside space names is a
+  way to make one look like another.
+
+  `Cell` escapes tab and newline as well. A list is one record per line with
+  tab between columns, so a body containing either could otherwise forge a
+  column or a whole row in something that is parsing the output.
+
+  Colour is the only escape sequence written on purpose, from constants in
+  `internal/output`, applied to labels and never to a value. `TestColourIsNeverDataDerived`.
+
+  **`--json` output is deliberately not sanitized.** `encoding/json` already
+  writes every character below U+0020 as an escape, so no control sequence
+  survives into the bytes, and rewriting anything else would break the rule
+  that a value is never silently altered. `--json` is read by programs, and it
+  hands them what was actually there. `TestJSONDoesNotAlterAValue`.
 - **Chat markup is generated, never concatenated** (SPEC.md §9). `internal/format`
   owns the only place a link or a mention is built, and any literal `<`, `>`, or
   `|` in user text is escaped so that it cannot close a wrapper and become
