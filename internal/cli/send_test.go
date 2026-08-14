@@ -118,12 +118,16 @@ func configured(t *testing.T) *space {
 
 		var sent chat.Message
 		_ = json.Unmarshal(body, &sent)
+		// What a real webhook send returns, measured against a live space:
+		// name, space, text and thread. No createTime, no sender, and no
+		// formattedText, which is why a live check was the only way to learn
+		// how Chat interprets markup. A fixture more generous than the wire
+		// tests the fixture.
 		reply, _ := json.Marshal(chat.Message{
-			Name:       "spaces/AAAATestSpace/messages/BBB",
-			Text:       sent.Text,
-			Thread:     sent.Thread,
-			CreateTime: "2026-08-14T18:42:20Z",
-			Sender:     &chat.User{Name: "users/1", Type: "BOT"},
+			Name:   "spaces/AAAATestSpace/messages/BBB",
+			Text:   sent.Text,
+			Thread: sent.Thread,
+			Space:  &chat.Space{Name: "spaces/AAAATestSpace"},
 		})
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 		_, _ = w.Write(reply)
@@ -617,8 +621,12 @@ func TestTheJSONResultIsOneObjectOnStdout(t *testing.T) {
 	if result.Space != "spaces/AAAATestSpace" || result.Profile != "alerts" {
 		t.Errorf("result = %+v", result)
 	}
-	if result.CreateTime != "2026-08-14T18:42:20Z" {
-		t.Errorf("create_time = %q, and a timestamp is passed through rather than reformatted", result.CreateTime)
+	// A webhook send returns no timestamp, so there is none to report. The
+	// field stays because a user-authorized read will have one, and
+	// TestATimestampIsPassedThroughRatherThanReformatted holds what happens
+	// then.
+	if result.CreateTime != "" {
+		t.Errorf("create_time = %q, and a webhook send returns none", result.CreateTime)
 	}
 }
 
@@ -674,5 +682,39 @@ func TestWhereTheMessageWentIsNotTakenOnTheServersWord(t *testing.T) {
 	// server's to assign and there is no second source for it.
 	if result.Message != "spaces/CCCCLies/messages/BBB" {
 		t.Errorf("message = %q, and the name is the server's to give", result.Message)
+	}
+}
+
+// TestATimestampIsPassedThroughRatherThanReformatted.
+//
+// A webhook send returns no createTime, which is why the fixture above has
+// none. A user-authorized read will, and when it does the string is carried
+// exactly: decoding it into a time.Time to print it again is a conversion that
+// can lose or change something, and this tool does not alter a value to make it
+// representable.
+func TestATimestampIsPassedThroughRatherThanReformatted(t *testing.T) {
+	isolate(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB","createTime":"2026-08-14T18:42:20.123456Z"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	if got := runCLIIn(t, url+"\n", "profile", "set-webhook", "alerts"); got.exit != output.ExitOK {
+		t.Fatalf("configuring: exit %d\n%s", got.exit, got.stderr)
+	}
+
+	got := runCLIIn(t, "", "--json", "send", "deploy done")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	var result sendResult
+	if err := json.Unmarshal([]byte(got.stdout), &result); err != nil {
+		t.Fatalf("stdout is not JSON: %v", err)
+	}
+	if result.CreateTime != "2026-08-14T18:42:20.123456Z" {
+		t.Errorf("create_time = %q, and the sub-second part is the caller's to keep", result.CreateTime)
 	}
 }

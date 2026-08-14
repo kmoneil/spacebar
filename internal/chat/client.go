@@ -427,6 +427,7 @@ func (c *Client) attempt(ctx context.Context, req Request, target *url.URL, body
 	if err != nil {
 		return nil, c.readError(err)
 	}
+	c.logBody(payload)
 	if resp.StatusCode/100 == 2 {
 		return payload, nil
 	}
@@ -617,6 +618,32 @@ func (c *Client) logResponse(resp *http.Response, elapsed time.Duration) {
 	if after := resp.Header.Get("Retry-After"); after != "" {
 		c.logf("< Retry-After: %s", after)
 	}
+}
+
+// maxLoggedBody bounds what --verbose prints of a response.
+//
+// A response body is worth seeing when something is not behaving as documented,
+// which is what --verbose is for, and it is the only way to find out what the
+// API did with what was sent. It is also unbounded in principle: a page of
+// messages at Milestone 4 is not something to put in a terminal in full.
+const maxLoggedBody = 4 << 10
+
+// logBody writes the response body to the verbose log.
+//
+// Scrubbed like every other line, because a server chooses what is in it. Kept
+// separate from logResponse because it happens after the body has been read,
+// and reading it is what can fail.
+func (c *Client) logBody(payload []byte) {
+	if c.log == nil || len(payload) == 0 {
+		return
+	}
+
+	body := strings.TrimRight(string(payload), "\n")
+	if len(body) > maxLoggedBody {
+		c.logf("< %s\n< ... %d more bytes", body[:maxLoggedBody], len(body)-maxLoggedBody)
+		return
+	}
+	c.logf("< %s", body)
 }
 
 // sensitiveHeaders are the ones whose value is a credential.

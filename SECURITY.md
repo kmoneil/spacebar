@@ -406,13 +406,30 @@ it is pasted rather than as a `400` about an API key days later.
   and `FuzzTranslate`. The package is at 100% statement coverage, which the
   spec asks for because this is where a bug would actually appear.
 
-  **A wrapper character is refused, not escaped**, which is a correction to
-  what this document used to say. Chat has no escape syntax: there is no way to
-  write a pipe inside the display half of `<url|text>` such that the far end
-  reads it as a pipe. So a link whose text contains `<`, `>`, or `|` cannot be
-  represented, and the whole message is refused at exit 2 naming the character
-  and its offset. The alternative was altering the text to fit, and a reader at
-  the other end cannot tell an altered message from an intended one.
+  **A wrapper character is refused, not escaped.** Chat has no escape syntax,
+  which was measured against a real space rather than assumed: a backslash
+  renders as a backslash and an HTML entity renders as an entity. So a character
+  that cannot appear cannot be escaped into appearing, and the whole message is
+  refused at exit 2 naming the character and its offset. The alternative was
+  altering the text to fit, and a reader at the other end cannot tell an altered
+  message from an intended one.
+
+  **What is refused is narrower than this document twice claimed.** The same
+  live check measured the parser: the URL is everything to the first `|` and the
+  display is everything from there to the first `>`. So a `|` and a `<` both
+  survive in the display half and are permitted, and only `>` is refused there,
+  because it ends the link early and turns the rest of the message into text
+  somebody else wrote. The URL half keeps the stricter rule, since a `|` there
+  truncates the address. `TestAPipeOrAnOpeningBracketInLinkTextIsRepresentable`
+  holds the permissive half and `TestALinkCannotBeClosedByItsOwnText` the
+  refusing half.
+
+  This is worth reading as a note about method rather than about links. The
+  package was careful about something it could not check, which is the right way
+  to be wrong, and it stayed wrong for two milestones because nothing here could
+  settle it: a webhook send returns no `formattedText`, so the API cannot report
+  its own interpretation and a person looking at the space is the only
+  instrument there is.
 
   A user resource name reaching a mention is checked against the same standard
   SPEC.md §15.8 sets for a space name, rather than escaped: anything a parser

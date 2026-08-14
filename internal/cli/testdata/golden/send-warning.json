@@ -3,7 +3,7 @@ exit 0
 {
   "message": "spaces/AAAATestSpace/messages/BBB",
   "space": "spaces/AAAATestSpace",
-  "create_time": "2026-08-14T18:42:20Z",
+  "thread": "spaces/AAAATestSpace/threads/BBB",
   "profile": "alerts"
 }
 --- stderr

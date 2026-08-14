@@ -22,25 +22,34 @@ import (
 )
 
 // TestALinkCannotBeClosedByItsOwnText is the claim from the card, and the
-// answer to it changed during the work.
+// answer to it changed twice.
 //
 // The card said the wrapper characters would be escaped. They cannot be: Chat
-// has no escape syntax, so there is no way to write a pipe inside the display
-// half of a link such that the far end reads it as a pipe. The choice is
-// therefore between refusing and altering, and altering a message so that it
-// can be represented is the thing this tool does not do.
+// has no escape syntax, which was later checked against a real space rather
+// than assumed, and a backslash renders as a backslash. So the choice is
+// between refusing and altering, and altering a message so that it can be
+// represented is the thing this tool does not do.
+//
+// The second change is what is refused. The same live check measured the
+// parser: the URL is everything to the first pipe and the display is everything
+// from there to the first closing bracket. Only that closing bracket cannot
+// appear in the display, and this package refused all three for two milestones,
+// which failed a message that would have worked. See the sibling test.
 func TestALinkCannotBeClosedByItsOwnText(t *testing.T) {
 	cases := []struct {
 		name    string
 		url     string
 		display string
 	}{
-		{"a pipe in the text", "https://x.invalid", "a|b"},
 		{"a closing bracket in the text", "https://x.invalid", "a>b"},
-		{"an opening bracket in the text", "https://x.invalid", "a<b"},
-		{"a whole wrapper in the text", "https://x.invalid", "x|https://evil.invalid"},
 		{"a pipe in the url", "https://x.invalid|evil", "text"},
 		{"a bracket in the url", "https://x.invalid>", "text"},
+		{"an opening bracket in the url", "https://x.invalid/a<evil", "text"},
+
+		// The display ends at the first closing bracket, so this one is refused
+		// for the bracket rather than for the mention: what would arrive is
+		// "click" as a link and the rest as ordinary text, which is not the
+		// message that was written.
 		{"markup smuggled through the text", "https://x.invalid", "click> <users/all"},
 	}
 
@@ -60,11 +69,50 @@ func TestALinkCannotBeClosedByItsOwnText(t *testing.T) {
 	}
 }
 
+// TestAPipeOrAnOpeningBracketInLinkTextIsRepresentable.
+//
+// Measured against a real space, which is the only instrument there is: the
+// API returns no formattedText on a webhook send, so it cannot report its own
+// interpretation. `<url|a | b>` renders as a link labelled `a | b`, because the
+// split is on the first pipe, and `<url|a < b>` renders as `a < b`, because an
+// opening bracket starts nothing.
+//
+// This package refused both for two milestones on the assumption that it could
+// not know, which is the right way to be wrong, and the cost was that
+// `[the a|b docs](url)` failed at exit 2 on something that works.
+func TestAPipeOrAnOpeningBracketInLinkTextIsRepresentable(t *testing.T) {
+	for _, tc := range []struct{ name, display, want string }{
+		{"a pipe", "a | b", "<https://x.invalid|a | b>"},
+		{"two pipes", "a || b", "<https://x.invalid|a || b>"},
+		{"an opening bracket", "a < b", "<https://x.invalid|a < b>"},
+		{"what looks like a mention but has no close", "a <users/all", "<https://x.invalid|a <users/all>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Link("https://x.invalid", tc.display)
+			if err != nil {
+				t.Fatalf("Link refused a display Chat renders: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("Link = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// And through the translator, which is how anybody actually reaches it.
+	got, _, err := Translate("see [the a|b docs](https://x.invalid)")
+	if err != nil {
+		t.Fatalf("Translate refused a link Chat renders: %v", err)
+	}
+	if got != "see <https://x.invalid|the a|b docs>" {
+		t.Errorf("Translate = %q", got)
+	}
+}
+
 // TestARefusedLinkStopsTheWholeMessage keeps the refusal from being something
 // a caller can walk past. Nothing is sent, rather than the message being sent
 // with one link quietly dropped.
 func TestARefusedLinkStopsTheWholeMessage(t *testing.T) {
-	_, _, err := Translate("ok [a|b](https://x.invalid) more")
+	_, _, err := Translate("ok [a>b](https://x.invalid) more")
 	if err == nil {
 		t.Fatal("a message with an unrepresentable link was accepted")
 	}
@@ -78,7 +126,7 @@ func TestARefusedLinkStopsTheWholeMessage(t *testing.T) {
 // through a different path, and a path that swallowed the error would send the
 // message with the link silently mangled.
 func TestARefusalSurvivesEveryConstructItIsBuriedIn(t *testing.T) {
-	const bad = "[a|b](https://x.invalid)"
+	const bad = "[a>b](https://x.invalid)"
 
 	for _, src := range []string{
 		bad,
@@ -267,3 +315,57 @@ var errUnclosed = &wrapperError{}
 type wrapperError struct{}
 
 func (*wrapperError) Error() string { return "a wrapper was opened and never closed" }
+
+// TestCardsChecksOnlyTheShapeTheAPIRequires.
+//
+// A card is a deep tree of widgets with its own schema, and a struct written
+// here would be a guess reviewed as though it were knowledge, with every field
+// this tool had not heard of silently dropped out of somebody's message. So the
+// elements are not decoded, and what is checked is the part a person gets
+// wrong: cardsV2 is a list of objects that each have a card.
+//
+// This test exists because the invariant says this package is at 100% statement
+// coverage and it was not: Cards arrived with the send command, was covered
+// through internal/cli, and left two functions here untouched. The milestone
+// exit sweep did not catch it, which is worth knowing about the sweep.
+func TestCardsChecksOnlyTheShapeTheAPIRequires(t *testing.T) {
+	good := `[{"cardId":"deploy","card":{"header":{"title":"Deployed"}}},{"cardId":"b","card":{}}]`
+
+	cards, err := Cards([]byte(good))
+	if err != nil {
+		t.Fatalf("Cards refused a valid list: %v", err)
+	}
+	if len(cards) != 2 {
+		t.Fatalf("got %d cards, want 2", len(cards))
+	}
+
+	// Carried through byte for byte, because the caller owns the shape.
+	if !strings.Contains(string(cards[0]), `"header"`) {
+		t.Errorf("a field this package does not model was dropped: %s", cards[0])
+	}
+
+	for _, tc := range []struct{ name, body, says string }{
+		// The common mistake, and it is named rather than fixed: wrapping it
+		// would be this package deciding what somebody meant.
+		{"one card where a list belongs", `{"cardId":"a","card":{}}`, "holds one card"},
+
+		{"an element with no card", `[{"cardId":"a"}]`, `no "card" field`},
+		{"an element that is not an object", `["a"]`, "not an object"},
+		{"an empty list", `[]`, "holds no cards"},
+		{"not JSON at all", `{`, "not the JSON"},
+		{"nothing", ``, "not the JSON"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Cards([]byte(tc.body))
+			if err == nil {
+				t.Fatalf("Cards accepted %q and returned %d cards", tc.body, len(got))
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("the refusal does not say %q:\n%v", tc.says, err)
+			}
+			if code := output.ExitCodeOf(err); code != output.ExitUsage {
+				t.Errorf("exit %d, want %d: the file has to be corrected by whoever wrote it", code, output.ExitUsage)
+			}
+		})
+	}
+}

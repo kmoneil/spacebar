@@ -325,7 +325,11 @@ func chatShapedServer(t *testing.T) string {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB","sender":{"name":"users/1","type":"BOT"},"createTime":"2026-08-14T18:42:20Z"}`)
+		// What a real webhook send returns, measured: name, space, text and
+		// thread, and nothing else. No createTime, no sender, and no
+		// formattedText. A fixture more generous than the wire produces a
+		// golden showing fields a user never sees.
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB","space":{"name":"spaces/AAAATestSpace"},"thread":{"name":"spaces/AAAATestSpace/threads/BBB"}}`)
 	}))
 	t.Cleanup(server.Close)
 

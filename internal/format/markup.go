@@ -28,6 +28,22 @@ import (
 // message they are ordinary text.
 const wrapperChars = "<>|"
 
+// closeChar is the only one of them that a display text cannot contain.
+//
+// Chat's parser was measured rather than assumed, by sending markup to a real
+// space and reading back what rendered. The rule is: the URL is everything from
+// the opening angle bracket to the **first** pipe, and the display is everything
+// from there to the **first** closing angle bracket.
+//
+// Two things follow, and one of them contradicts what this package assumed for
+// two milestones. A pipe in the display half survives, because the split is on
+// the first one: `<url|a | b>` renders as a link labelled `a | b`. So does an
+// opening angle bracket: `<url|a < b>` renders as `a < b`, and does not start a
+// nested wrapper. Only a closing bracket cannot appear, because it ends the
+// link early and everything after it becomes ordinary text, which is a message
+// that is not the one that was written.
+const closeChar = ">"
+
 // MentionAll is the markup that notifies everybody in a space.
 const MentionAll = "<users/all>"
 
@@ -37,20 +53,30 @@ const MentionAll = "<users/all>"
 // concatenated rule means: a link assembled at a call site is a link whose
 // display text nobody checked.
 //
-// Chat has no escape syntax. There is no way to write a pipe inside the
-// display half of a link such that the far end reads it as a pipe rather than
-// as the separator, so a display text containing one cannot be represented at
-// all, and this refuses rather than producing something that renders as
-// neither what was asked for nor an error. Refusing is the only option that
-// does not silently change what a reader sees.
+// Chat has no escape syntax, which was checked against a real space rather than
+// assumed: a backslash renders as a backslash and an HTML entity renders as an
+// entity. So a character that cannot appear cannot be escaped into appearing,
+// and the only options are to refuse or to send something that renders as
+// neither what was asked for nor an error.
 //
-// If a way to escape these does exist, this is the one function that changes.
-// See the note in this package's tests about what was not verified.
+// What is refused is narrower than it was, and narrower than the surrounding
+// caution suggests, because the parser was measured. A closing angle bracket in
+// the display text ends the link early, so it is refused. A pipe and an opening
+// bracket both survive there, so they are not: the split is on the first pipe
+// and the end is the first closing bracket, and everything between is the
+// label. Refusing them was this package being careful about something that
+// works, which cost a legitimate message a failure at exit 2.
+//
+// The URL half keeps the stricter rule. A pipe there truncates the address, an
+// angle bracket ends the wrapper, and neither is legal in a URL unencoded
+// anyway. Percent-encoding them instead would be defensible and is not done
+// here, because only the display half was measured and changing two things on
+// the evidence for one is how a careful change becomes a guess.
 func Link(url, display string) (string, error) {
-	if err := checkWrapper(url, "the URL of a link"); err != nil {
+	if err := checkWrapper(url, wrapperChars, "the URL of a link"); err != nil {
 		return "", err
 	}
-	if err := checkWrapper(display, "the text of a link"); err != nil {
+	if err := checkWrapper(display, closeChar, "the text of a link"); err != nil {
 		return "", err
 	}
 
@@ -93,15 +119,15 @@ func safeResourceName(s string) bool {
 	return true
 }
 
-func checkWrapper(s, what string) error {
-	i := strings.IndexAny(s, wrapperChars)
+func checkWrapper(s, forbidden, what string) error {
+	i := strings.IndexAny(s, forbidden)
 	if i < 0 {
 		return nil
 	}
 	return output.Errorf("MARKUP", output.ExitUsage,
 		"%s contains %q at offset %d, and Chat markup has no way to escape it there.\n"+
-			"A link is written <url|text>, so an angle bracket or a pipe inside one ends it early "+
-			"and the rest becomes markup somebody else wrote.\n"+
+			"A link is written <url|text>, and that character ends it early, so the rest of the "+
+			"message would arrive as markup somebody else wrote.\n"+
 			"Nothing was sent. Remove the character, or send the message without --md.",
 		what, s[i], i)
 }
