@@ -185,15 +185,31 @@ func (c *Config) SaveTo(path string) error {
 	}
 	body = append(body, '\n')
 
+	if err := WriteFileAtomic(path, body); err != nil {
+		return err
+	}
+
+	c.path = path
+	return nil
+}
+
+// WriteFileAtomic writes body to path at FileMode, in a directory it creates at
+// DirMode, without ever leaving a partial file where path is.
+//
+// Exported because the credential fallback file in internal/auth has the same
+// two requirements and the routine is subtle enough that a second copy of it
+// would be a second chance to get the mode or the ordering wrong.
+func WriteFileAtomic(path string, body []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, DirMode); err != nil {
 		return configErr("cannot create %s: %v", dir, err)
 	}
 
-	// os.CreateTemp creates at 0600 before umask, which is the mode this file
-	// needs, so there is no window in which it exists more widely readable than
-	// it ends up.
-	tmp, err := os.CreateTemp(dir, ".config-*.json")
+	// os.CreateTemp creates at 0600 before umask, which is the mode these files
+	// need, so there is no window in which one exists more widely readable than
+	// it ends up. The temporary file is in the same directory so that the
+	// rename stays on one filesystem and is therefore atomic.
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return configErr("cannot write in %s: %v", dir, err)
 	}
@@ -207,8 +223,6 @@ func (c *Config) SaveTo(path string) error {
 		_ = os.Remove(tmpName)
 		return configErr("cannot replace %s: %v", path, err)
 	}
-
-	c.path = path
 	return nil
 }
 

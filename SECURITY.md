@@ -112,7 +112,7 @@ one to.
 Stated plainly, because it is the sharpest difference between this tool and a
 pure API client, and because a document that only lists absences is not one.
 
-Two child processes exist, both during authentication, both unavoidable:
+Three child processes exist, and only the first is limited to authentication:
 
 - **A browser, once, during `spacebar auth login`** **(M3)**. The OAuth
   authorization code flow requires a user agent, and out-of-band copy/paste
@@ -122,20 +122,43 @@ Two child processes exist, both during authentication, both unavoidable:
   separate argument and never through a shell, so it cannot become a command. If
   the launch fails the flow does not: the URL is printed for the operator to
   open themselves.
-- **The macOS keyring helper** **(M3)**. `zalando/go-keyring` calls
-  `/usr/bin/security` on darwin; on Linux it speaks D-Bus in-process and on
-  Windows it uses the credential API directly.
+- **The macOS keyring helper.** `zalando/go-keyring` calls `/usr/bin/security`
+  on darwin, once per credential read or write. On Windows it uses the
+  credential API in-process and starts nothing. This happens from Milestone 2,
+  not Milestone 3: the webhook URL is a credential and lives in the keyring
+  like any other.
 
-Both inherit the environment, which is where a `SPACEBAR_CLIENT_SECRET` may
-live. That is accepted rather than mitigated, because a browser that cannot see
-the environment is not a browser the user is already logged into.
+  The secret is passed to that helper on stdin rather than in an argument, so
+  it does not appear in the process list. It is base64-encoded on the way, and
+  `internal/auth` scrubs both the raw and the encoded form out of any keyring
+  error it reports, rather than trusting that an upstream change keeps the two
+  apart.
+- **`dbus-launch`, on Linux, when there is no session bus.** `go-keyring`
+  speaks D-Bus in-process when `DBUS_SESSION_BUS_ADDRESS` is set, and when it
+  is not, the D-Bus library tries to start a bus by running `dbus-launch`. A
+  container, a CI runner, and a headless server all reach that path, and on
+  most of them the binary is absent and the call fails in a few milliseconds,
+  which is what sends this tool to the fallback credentials file. It fails
+  rather than hanging, which matters: a keyring call that blocked would hang
+  every invocation on a headless box.
+
+All three inherit the environment, which is where a `SPACEBAR_CLIENT_SECRET`
+may live. That is accepted rather than mitigated, because a browser that cannot
+see the environment is not a browser the user is already logged into.
 
 ## Credentials
 
 A credential reaches `spacebar` from the keyring, from the environment, or from
 a fallback file, and never as a flag value: an argument lands in the shell
-history and in the process list, where every other user on the machine can read
-it **(M2)**.
+history, where it outlives the session, and in the process list, where every
+other user on the machine can read it while the command runs. Neither is
+something the operator can undo afterwards.
+
+`TestNoFlagTakesASecret` walks the whole command tree and fails on any flag
+whose name suggests it takes one. The check is on the name rather than on where
+the value goes, because the name is what a user types and what documentation
+tells them to type: a flag called `--webhook-url` invites a credential on the
+command line whatever the code behind it does.
 
 - **`config.json` holds a reference, never a secret** (SPEC.md §5.3). The
   config is meant to be hand-edited and kept in a dotfiles repository. A
@@ -154,7 +177,17 @@ it **(M2)**.
   the file they paste into an issue.
 - **Where there is no keyring**, the secret falls back to `credentials.json` at
   mode `0600`, refused on read if it is wider, **warning on stderr every
-  invocation** that it did so **(M2)**.
+  invocation** that it did so. `TestAWideFallbackFileIsRefused` and
+  `TestFallbackWarnsAndRoundTrips`. Refused rather than warned about, because a
+  warning leaves the file exactly as readable as it was and becomes a line the
+  operator learns to scroll past. The warning is deduplicated within one run
+  and not across runs: a warning printed once is a warning nobody sees.
+
+  A container, a CI runner, and a headless server all lack a keyring, and all
+  three are where a script that posts to Chat actually runs. Refusing to work
+  without one would exclude the population this tool is built for, so the
+  fallback is a supported path rather than a degraded one, and it says plainly
+  that the credential is on disk in plain text.
 - **A webhook URL is a bearer credential, not a URL.** It carries `key` and
   `token` query parameters that are the entire authentication for posting to
   that space. It is redacted, stored, and refused on the command line exactly

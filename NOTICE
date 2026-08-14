@@ -40,21 +40,49 @@ list spelled out.
     github.com/spf13/pflag                BSD-3-Clause
                                           Copyright (c) 2012 Alex Ogier
                                           Copyright (c) 2012 The Go Authors
-                                          (indirect, reached through cobra)
+    github.com/zalando/go-keyring         MIT
+                                          Copyright (c) 2019 Zalando SE
+    github.com/zalando/go-keyring/internal/shellescape
+                                          MIT
+                                          Copyright (c) 2016 Alessio Treglia
+                                          (vendored inside go-keyring, and so
+                                          carrying its own licence)
+    github.com/godbus/dbus/v5             BSD-2-Clause
+                                          Copyright (c) 2013, Georg Reinke and
+                                          others
+                                          (indirect, reached through
+                                          go-keyring, and used only on Linux)
+    github.com/danieljoos/wincred         MIT
+                                          Copyright (c) 2016 Daniel Joos
+                                          (indirect, reached through
+                                          go-keyring, and linked only in a
+                                          Windows build)
+    golang.org/x/sys/windows              BSD-3-Clause
+                                          Copyright (c) 2009 The Go Authors
+                                          (indirect, reached through wincred,
+                                          and linked only in a Windows build)
     github.com/inconshreveable/mousetrap  Apache-2.0
                                           (indirect, reached through cobra, and
                                           linked only in a Windows build)
 
-One direct dependency, and two indirect. Each licence text is in the module's
-own source, which `go mod download` fetches and `go.sum` pins, and the full
-text of all three is in THIRD_PARTY_LICENSES so that it travels with a
-distribution that is one executable and nothing else. `spacebar licenses`
-prints that file from inside the binary.
+Three direct requirements and four indirect, and eight rows above, because two
+of them are reported at a finer grain than a module: `go-licenses` sees the
+shellescape copy vendored inside go-keyring and the Windows subtree of
+`golang.org/x/sys` as units of their own, since each carries its own licence
+file. Each licence text is in the module's own source, which `go mod download`
+fetches and `go.sum` pins, and the full text of all of them is in
+THIRD_PARTY_LICENSES so that it travels with a distribution that is one
+executable and nothing else. `spacebar licenses` prints that file from inside
+the binary.
 
-SPEC.md §3.1 permits four more, each named with the reason it earns its place,
-and no others. A pull request that would add a sixth direct requirement has to
-argue for it. This list grows as the milestones land; it does not grow
-otherwise.
+`github.com/spf13/pflag` is a direct requirement without being a choice. It is
+cobra's own flag package and was already linked; it moved out of the indirect
+block when a test began importing it to walk the flag tree, and `go.mod` says
+what is imported.
+
+SPEC.md §3.1 permits three more, each named with the reason it earns its place,
+and no others. A pull request that would add another has to argue for it. This
+list grows as the milestones land; it does not grow otherwise.
 
 This list is asserted rather than maintained by hand:
 internal/lint/notice_test.go holds it to THIRD_PARTY_LICENSES, which is
