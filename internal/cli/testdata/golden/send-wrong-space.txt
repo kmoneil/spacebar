@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: profile "alerts" is a webhook for spaces/AAAATestSpace, and it cannot post to spaces/BBBBSomewhereElse.
+A webhook is issued for one space and is the only thing that authenticates the request, so there is no version of this that reaches another one.
+Use a profile whose webhook is for spaces/BBBBSomewhereElse, or leave the target off to post to spaces/AAAATestSpace.

@@ -15,6 +15,7 @@
 package format
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/kmoneil/spacebar/internal/output"
@@ -103,4 +104,51 @@ func checkWrapper(s, what string) error {
 			"and the rest becomes markup somebody else wrote.\n"+
 			"Nothing was sent. Remove the character, or send the message without --md.",
 		what, s[i], i)
+}
+
+// Cards reads the cardsV2 payload for a message.
+//
+// The elements are not decoded. A card is a deep tree of widgets with its own
+// schema, and a struct written here would be a guess reviewed as though it were
+// knowledge, with every field this tool had not heard of silently dropped out
+// of somebody's message. What is checked is only the shape the API requires of
+// the list itself, which is the part a person gets wrong: cardsV2 is an array
+// of CardWithId, each of which has a card.
+//
+// The most common mistake is pasting a single card where an array belongs, and
+// it is worth naming rather than approximating. Wrapping it would be this tool
+// deciding what somebody meant, and the whole point of refusing is that a
+// message which is not the one they wrote is worse than a failure.
+func Cards(raw []byte) ([]json.RawMessage, error) {
+	var cards []json.RawMessage
+	if err := json.Unmarshal(raw, &cards); err != nil {
+		var single map[string]json.RawMessage
+		if json.Unmarshal(raw, &single) == nil {
+			return nil, cardErr("that file holds one card, and %s is a list of them.\n"+
+				"Wrap it in brackets: [{\"cardId\": \"a-name\", \"card\": { ... }}]", "cardsV2")
+		}
+		return nil, cardErr("that file is not the JSON %s takes: %v", "cardsV2", err)
+	}
+	if len(cards) == 0 {
+		return nil, cardErr("that file holds no cards.")
+	}
+
+	for i, one := range cards {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(one, &fields); err != nil {
+			return nil, cardErr("card %d is not an object.", i+1)
+		}
+		if _, ok := fields["card"]; !ok {
+			return nil, cardErr("card %d has no %q field.\n"+
+				"Each element is {\"cardId\": \"a-name\", \"card\": { ... }}, and the card itself goes inside.",
+				i+1, "card")
+		}
+	}
+	return cards, nil
+}
+
+// cardErr is exit 2: the file has to be corrected by whoever wrote it, and no
+// retry changes that.
+func cardErr(format string, a ...any) error {
+	return output.Errorf("CARD", output.ExitUsage, format, a...)
 }

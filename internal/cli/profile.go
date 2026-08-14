@@ -305,20 +305,15 @@ func storeWebhook(r *output.Renderer, name, rawURL string) (webhookResult, error
 // own. This command is the first caller of the webhook transport and gets the
 // same treatment as any other.
 func verifySend(ctx context.Context, profile, rawURL, text string, opts *Options, r *output.Renderer) (string, error) {
-	// The logger is passed only under --verbose, and nil is how the client is
-	// told not to bother formatting lines nobody asked for. Without this the
-	// flag would be accepted and do nothing, which is worse than not having it:
-	// somebody debugging a webhook would conclude no request was made.
-	var log chat.Logger
-	if opts.Verbose {
-		log = r
-	}
-
 	post, err := webhook.New(webhook.Options{
 		Profile: profile,
 		URL:     rawURL,
 		Timeout: opts.Timeout,
-		Log:     log,
+
+		// Only under --verbose. Without this the flag would be accepted and do
+		// nothing, which is worse than not having it: somebody debugging a
+		// webhook would conclude no request was made.
+		Log: verboseLog(opts, r),
 	})
 	if err != nil {
 		return "", err

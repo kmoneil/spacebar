@@ -16,16 +16,18 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestone 1 of 6.** The repository builds, the gates are green, and three
-commands work: `version`, `licenses`, and `completion`. Nothing talks to Google
-Chat yet.
+**Milestone 2 of 6, in progress.** `spacebar send` works over an incoming
+webhook, with no OAuth, no administrator approval, and no Cloud project: give a
+profile a webhook URL and send. `version`, `licenses` and `completion` work.
+What is not here yet is reading anything: no `tail`, no `messages list`, no
+`spaces list`, and no MCP server.
 
 The plan, in six milestones:
 
 | #   | Deliverable                                               | State    |
 | --- | --------------------------------------------------------- | -------- |
 | 1   | Skeleton, licensing, CI gates                             | **done** |
-| 2   | Webhook transport: `send` with no OAuth at all            | next     |
+| 2   | Webhook transport: `send` with no OAuth at all            | in progress |
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  |          |
 | 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  |          |
 | 5   | MCP server                                                |          |
@@ -153,8 +155,44 @@ On a machine with no keyring, which is every container and most CI runners, the
 credential goes to a mode `0600` file beside the configuration instead, and
 says so every time it is used.
 
-`send` lands with the rest of Milestone 2. What already works is the transport
-underneath it: the message above is posted through the same code path.
+## Send
+
+```sh
+spacebar send 'deploy done'                    # the profile knows its space
+spacebar send spaces/AAAAAAA 'deploy done'     # name the space
+spacebar send --md 'deploy **done**'           # translate CommonMark
+echo 'deploy done' | spacebar send -           # body from stdin
+spacebar send --thread-key deploys 'v1.2.3'    # group into a thread
+spacebar send --dry-run 'deploy done'          # show what would be sent
+```
+
+```
+message  spaces/AAAAAAA/messages/BBBB
+space    spaces/AAAAAAA
+profile  alerts
+```
+
+`--json` puts one object on stdout and nothing else, so it pipes into `jq`.
+Warnings, logs and failures go to stderr, and the exit code says what happened:
+`0` sent, `2` you asked for something impossible, `3` the API said no, `4`
+authorize again, `5` this profile cannot do that, `6` rate limited.
+
+**Text is sent exactly as typed.** Chat markup is not CommonMark: bold is one
+asterisk, so `**bold**` arrives with the asterisks showing. `--md` translates,
+and **the translation is one way**. `**bold**` becomes `*bold*`, which read back
+as CommonMark is italic, so a body that has already been through `--md` must not
+go through it again. The output of a dry run is not an input.
+
+A flag this profile cannot honour fails before the network call, naming the
+capability and the profile rather than pretending the flag does not exist:
+
+```
+$ spacebar send --file report.pdf 'here it is'
+error: "send --file" needs attachment upload, and profile "alerts" is an
+incoming webhook, which is fixed to one space, write-only, and posts as a bot.
+Use a profile whose transport is useroauth, or set one up with:
+spacebar auth login --profile NAME
+```
 
 ## Development
 

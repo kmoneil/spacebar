@@ -1,0 +1,4 @@
+exit 5
+--- stdout
+--- stderr
+{"error":{"code":"UNSUPPORTED","message":"\"send --file\" needs attachment upload, and profile \"alerts\" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.\nUse a profile whose transport is useroauth, or set one up with: spacebar auth login --profile NAME","exit_code":5}}

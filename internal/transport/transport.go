@@ -134,3 +134,30 @@ func CapabilitiesFor(kind config.Transport) Capabilities {
 	}
 	return Capabilities{}
 }
+
+// Fixed is a transport that can reach exactly one space.
+//
+// An optional interface rather than a method on Transport, because it is only
+// true of one of the two: a webhook is issued for one space and is the only
+// thing that authenticates the request, while a user-authorized profile reaches
+// every space that account can. A Space() on the interface would force the
+// second one to answer a question it has no answer to.
+//
+// What it buys is the whole of the zero-ceremony case. A caller whose profile
+// can only reach one space should not have to name it, and a command can find
+// out whether that is so without knowing which transports exist.
+type Fixed interface {
+	Transport
+
+	// Space is where this transport posts, in spaces/AAAA form.
+	Space() string
+}
+
+// SpaceOf returns the one space t can reach, and whether there is one.
+func SpaceOf(t Transport) (string, bool) {
+	fixed, ok := t.(Fixed)
+	if !ok {
+		return "", false
+	}
+	return fixed.Space(), true
+}

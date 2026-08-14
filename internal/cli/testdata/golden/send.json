@@ -1,0 +1,9 @@
+exit 0
+--- stdout
+{
+  "message": "spaces/AAAATestSpace/messages/BBB",
+  "space": "spaces/AAAATestSpace",
+  "create_time": "2026-08-14T18:42:20Z",
+  "profile": "alerts"
+}
+--- stderr

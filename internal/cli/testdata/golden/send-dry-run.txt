@@ -1,0 +1,7 @@
+exit 0
+--- stdout
+space      spaces/AAAATestSpace
+profile    alerts
+transport  webhook
+text       deploy done
+--- stderr

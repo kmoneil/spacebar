@@ -30,11 +30,21 @@ var secretish = []string{"secret", "password", "passwd", "token", "credential", 
 
 // notASecret names the flags that trip the check and are not credentials.
 //
-// Empty today. It is a forcing function rather than an oversight: the first
-// flag that needs an entry here is --thread-key, which groups messages into a
-// thread and is not a credential, and adding it will be a sentence somebody
-// writes on purpose rather than a check that quietly stopped applying.
-var notASecret = map[string]string{}
+// It is a forcing function rather than an allowlist to be topped up. Every
+// entry is a sentence somebody wrote on purpose, and the reason is here rather
+// than in a commit message because the next person to add one reads this and
+// not the history.
+var notASecret = map[string]string{
+	// Predicted by the card that added `send`, and it arrived exactly as
+	// predicted. A thread key is a name a caller chooses for a conversation so
+	// that later messages can join it; it authenticates nothing, it grants
+	// nothing, and anybody who can already post to the space can read every
+	// thread key in it by looking. It trips the check because the check matches
+	// the fragment "key", which is the right thing for the check to do: the
+	// cost of it firing here is this paragraph, and the cost of it not firing
+	// on a real credential is that credential in everybody's shell history.
+	"thread-key": "a thread identifier, chosen by the caller and visible to anybody in the space",
+}
 
 // TestNoFlagTakesASecret holds SPEC.md §15 and the invariant behind it.
 //

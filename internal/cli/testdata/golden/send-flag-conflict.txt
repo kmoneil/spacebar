@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: --message-id and --idempotent both name the message, and they disagree.
+Use --message-id to choose the name, or --idempotent to have one derived.

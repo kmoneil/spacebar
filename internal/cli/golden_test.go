@@ -177,6 +177,30 @@ func TestGoldenOutputContract(t *testing.T) {
 
 		{"profile-set-webhook-verified.txt", []string{"profile", "set-webhook", "alerts", "--verify"}, output.ExitOK, "", true, true},
 		{"profile-set-webhook-verified.json", []string{"--json", "profile", "set-webhook", "alerts", "--verify"}, output.ExitOK, "", true, true},
+
+		// send. The output shape here is the one an agent parses, so a diff in
+		// any of these is a change every caller sees.
+		{"send.txt", []string{"send", "deploy done"}, output.ExitOK, "", true, true},
+		{"send.json", []string{"--json", "send", "deploy done"}, output.ExitOK, "", true, true},
+
+		{"send-dry-run.txt", []string{"send", "--dry-run", "deploy done"}, output.ExitOK, "", true, true},
+		{"send-dry-run.json", []string{"--json", "send", "--dry-run", "deploy done"}, output.ExitOK, "", true, true},
+
+		// The first golden of the warning envelope, which is why --md and a
+		// table: Chat has no tables, so the rows arrive as lines of text and
+		// somebody has to be told.
+		{"send-warning.txt", []string{"send", "--md", "deploy **done**\n\n| a | b |\n| - | - |\n| 1 | 2 |"}, output.ExitOK, "", true, true},
+		{"send-warning.json", []string{"--json", "send", "--md", "deploy **done**\n\n| a | b |\n| - | - |\n| 1 | 2 |"}, output.ExitOK, "", true, true},
+
+		{"send-no-arguments.txt", []string{"send"}, output.ExitUsage, "", true, true},
+		{"send-no-arguments.json", []string{"--json", "send"}, output.ExitUsage, "", true, true},
+
+		{"send-flag-conflict.txt", []string{"send", "--message-id", "client-a", "--idempotent", "hi"}, output.ExitUsage, "", true, true},
+
+		{"send-unsupported.txt", []string{"send", "--file", "report.pdf", "hi"}, output.ExitUnsupported, "", true, true},
+		{"send-unsupported.json", []string{"--json", "send", "--file", "report.pdf", "hi"}, output.ExitUnsupported, "", true, true},
+
+		{"send-wrong-space.txt", []string{"send", "spaces/BBBBSomewhereElse", "hi"}, output.ExitUsage, "", true, true},
 	}
 
 	for _, tc := range cases {
@@ -197,6 +221,14 @@ func TestGoldenOutputContract(t *testing.T) {
 			stdin := tc.stdin
 			if tc.serve {
 				stdin = chatShapedServer(t)
+			}
+			if strings.HasPrefix(tc.name, "send") {
+				// send needs a profile that already exists. Configuring it is
+				// setup rather than part of the recorded output.
+				if setup := runCLIIn(t, stdin, "profile", "set-webhook", "alerts"); setup.exit != output.ExitOK {
+					t.Fatalf("setup: exit %d\n%s", setup.exit, setup.stderr)
+				}
+				stdin = ""
 			}
 			if tc.name == "profile-rm-unconfirmed.txt" {
 				// Needs something to remove. Not part of the recorded output.
@@ -277,7 +309,7 @@ func chatShapedServer(t *testing.T) string {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB","sender":{"name":"users/1","type":"BOT"}}`)
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB","sender":{"name":"users/1","type":"BOT"},"createTime":"2026-08-14T18:42:20Z"}`)
 	}))
 	t.Cleanup(server.Close)
 

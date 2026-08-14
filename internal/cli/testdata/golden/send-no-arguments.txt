@@ -1,0 +1,7 @@
+exit 2
+--- stdout
+--- stderr
+error: send needs a message.
+  spacebar send 'deploy done'
+  spacebar send SPACE 'deploy done'
+  echo 'deploy done' | spacebar send -

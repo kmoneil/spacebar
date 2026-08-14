@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+{"error":{"code":"USAGE","message":"send needs a message.\n  spacebar send 'deploy done'\n  spacebar send SPACE 'deploy done'\n  echo 'deploy done' | spacebar send -","exit_code":2}}

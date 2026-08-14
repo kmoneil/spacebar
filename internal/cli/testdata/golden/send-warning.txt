@@ -1,0 +1,7 @@
+exit 0
+--- stdout
+message  spaces/AAAATestSpace/messages/BBB
+space    spaces/AAAATestSpace
+profile  alerts
+--- stderr
+warning: Chat has no tables, so the rows will arrive as the lines of text they are written as
