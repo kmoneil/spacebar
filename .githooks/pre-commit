@@ -1,0 +1,27 @@
+#!/bin/sh
+# Pre-commit gate. Install with: make hooks
+#
+# Never bypass this with --no-verify. If a check is wrong, fix the check.
+set -e
+
+# Through the Makefile, so that this hook and CI cannot drift into checking
+# different things.
+echo "pre-commit: gofumpt"
+make -s fmt-check
+
+echo "pre-commit: golangci-lint"
+make -s lint
+
+# Without -race, unlike `make test`. This runs on every commit and the race
+# detector roughly triples the wall clock; CI runs the racy version, which is
+# the run whose verdict counts.
+echo "pre-commit: go test"
+go test ./...
+
+# Cheap, and the one that is easiest to forget: a new file with no licence
+# header fails CI several minutes later for a reason that has nothing to do
+# with the change.
+echo "pre-commit: licence headers"
+make -s license-headers-check
+
+echo "pre-commit: ok"

@@ -1,0 +1,47 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+    - godot
+    # This tool is HTTP-heavy and talks to an API whose failures are the
+    # interesting part: a 403 that means "your org disabled Chat apps" and a
+    # 404 that means "wrong space" have to be told apart and reported
+    # differently, which only works if neither is swallowed on the way up.
+    - bodyclose
+    - errorlint
+    - nilerr
+  settings:
+    godot:
+      scope: declarations
+      capital: false
+    errcheck:
+      check-type-assertions: true
+  exclusions:
+    rules:
+      # Golden-file helpers write and read testdata paths built from test
+      # input, so a parameter that is constant across today's callers is not
+      # one that should be inlined.
+      - path: _test\.go
+        linters:
+          - unparam
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/kmoneil/spacebar

@@ -1,0 +1,308 @@
+# Security
+
+`spacebar` holds a credential to somebody's Google Chat and posts to real
+spaces that real colleagues read. Three things follow from that, and this
+document is about all three: the credential must not leak, a message must never
+be sent that the operator did not ask for, and a result must never claim more
+than it can back up. A script that acts on a partial answer it believes is
+complete is a security problem wearing a correctness costume.
+
+Google Chat and Google are trademarks of Google LLC. This project is not
+affiliated with, sponsored by, or endorsed by Google.
+
+## Status of this document
+
+Pre-1.0, and the six milestones this is planned in are still landing.
+
+Every claim below is either **held by a test**, in which case the test is
+named, or a **requirement on the milestone that implements it**, in which case
+it carries that milestone: `(M3)`, `(M5)`. A claim with neither is a bug in
+this document, and should be reported as one.
+
+The distinction matters. A security document that describes an intention in the
+present tense is how a gap survives review: everybody reads it, everybody
+believes it, and nobody checks.
+
+A `SPEC.md §N` citation, here and in the source comments, points at the design
+spec, a maintainer document that is not in this repository. Nothing here
+depends on reading it: every rule is stated in full where it is claimed, and
+the citation is provenance rather than a pointer to the real answer.
+
+## Reporting a vulnerability
+
+Email **kevin@oneil.xyz**. Please do not open a public issue for a
+vulnerability.
+
+You will get an acknowledgement within 3 working days. Fixed issues are
+disclosed publicly within **90 days** of the report, sooner if a fix ships
+earlier, later only by agreement with the reporter.
+
+Include the invocation and, if you can, the exchange that triggers it. A
+recorded request and response is worth more than a description.
+
+## Supported versions
+
+Pre-1.0. Until the v1.0 tag, only the tip of `main` receives fixes.
+
+## Threat model
+
+**Assumed hostile: everything the Chat API sends.** A response is parsed, never
+trusted. It cannot redirect a request to another host, name a file outside the
+working directory, put an escape sequence in a data column, or turn a bounded
+run unbounded.
+
+**Assumed hostile: message content, more than anywhere else in a tool like
+this.** A Jira ticket is written by a colleague with an account. A Chat space
+can contain anyone the space contains (an external guest, a compromised
+account, an app posting on someone's behalf), and every one of them can put
+arbitrary bytes in a message body that this tool will read, render, index, and
+hand to a model. Message text is treated as data at every point it is touched.
+
+**Assumed hostile: values that flow into a request path.** A space ID, a
+message ID, a resolved alias, and an email that came back from a directory
+lookup are all strings from somewhere else. None of them may change which URL
+is requested. A resolved space is refused unless it matches
+`^spaces/[A-Za-z0-9_-]+$` (SPEC.md §15.8) **(M3)**.
+
+**Assumed trusted: the caller.** Flags, arguments, the config file, and the
+profile are the operator's own instructions. `spacebar send eng "shipping now"
+--yes` does what it says. The tool defends the operator from mistakes with a
+confirmation gate and a capability check; it does not defend the machine from
+its own user.
+
+**Assumed trusted: the credential store, once written.** File modes are
+checked; the filesystem is not otherwise second-guessed.
+
+**Out of scope:** side channels, an attacker who already has your token, an
+attacker with write access to your config or your `$PATH`, and the contents of
+the Chat spaces themselves. If someone can edit `config.json`, they can point
+you at their webhook.
+
+## What is not possible, by construction
+
+Absences, not options. There is no flag that enables these and no hook to wire
+one to.
+
+- **No cgo.** Pure Go, and the dependency list is chosen to keep it that way:
+  SPEC.md §3.1 admits `modernc.org/sqlite` and not any other, for this reason
+  alone. `CGO_ENABLED=0` is set on every build and on the licence scan, and
+  `make build-all` cross-compiles all six platforms in CI, so a dependency that
+  broke it would fail the build rather than the release.
+- **No telemetry, no phone-home, no update check.** Ever. The only hosts this
+  binary contacts are the Chat API, Google's OAuth endpoints, and a webhook URL
+  the operator supplied.
+- **Only `internal/chat` speaks HTTP** **(M2)**. Nothing else may import
+  `net/http`, so header redaction cannot be bypassed by a package that builds
+  its own client.
+- **Only `internal/output` writes to stdout or stderr** **(M2)**, so an
+  escaping rule holds everywhere or nowhere.
+- **No shell is involved in building a request.** Nothing is interpolated into
+  a command line, because there is no command line.
+
+## Processes this tool does start
+
+Stated plainly, because it is the sharpest difference between this tool and a
+pure API client, and because a document that only lists absences is not one.
+
+Two child processes exist, both during authentication, both unavoidable:
+
+- **A browser, once, during `spacebar auth login`** **(M3)**. The OAuth
+  authorization code flow requires a user agent, and out-of-band copy/paste
+  redirect is no longer supported by Google (SPEC.md §6.3), so there is no
+  flow that avoids this. It is `open`, `xdg-open`, or `rundll32
+  url.dll,FileProtocolHandler`, invoked through `os/exec` with the URL as a
+  separate argument and never through a shell, so it cannot become a command. If
+  the launch fails the flow does not: the URL is printed for the operator to
+  open themselves.
+- **The macOS keyring helper** **(M3)**. `zalando/go-keyring` calls
+  `/usr/bin/security` on darwin; on Linux it speaks D-Bus in-process and on
+  Windows it uses the credential API directly.
+
+Both inherit the environment, which is where a `SPACEBAR_CLIENT_SECRET` may
+live. That is accepted rather than mitigated, because a browser that cannot see
+the environment is not a browser the user is already logged into.
+
+## Credentials
+
+A credential reaches `spacebar` from the keyring, from the environment, or from
+a fallback file, and never as a flag value: an argument lands in the shell
+history and in the process list, where every other user on the machine can read
+it **(M2)**.
+
+- **`config.json` holds a reference, never a secret** (SPEC.md §5.3). The
+  config is meant to be hand-edited and kept in a dotfiles repository. A
+  webhook URL is stored as `keyring:spacebar/<profile>/webhook`, and the secret
+  lives in the OS keyring. Where there is no keyring, it falls back to
+  `credentials.json` at mode `0600`, is refused on read if it is wider, and
+  **warns on stderr every invocation** that it did so **(M2/M3)**.
+- **A webhook URL is a bearer credential, not a URL.** It carries `key` and
+  `token` query parameters that are the entire authentication for posting to
+  that space. It is redacted, stored, and refused on the command line exactly
+  as a token is. Treating it as an ordinary URL (logging it, printing it in a
+  dry run, putting it in an error message) is the most likely way this tool
+  leaks a credential, because it does not look like one **(M2)**.
+- **Redaction happens where the request is built, not where it is printed**
+  (SPEC.md §15.1). No present or future formatter is ever handed a token,
+  including at `--verbose`, and including in `--dry-run` output, which prints
+  the `Authorization` header as `REDACTED` rather than omitting the line
+  **(M2)**.
+- **Nothing ever blocks on input.** A command that would read from a terminal
+  when stdin is not one refuses and exits `7` instead. A CLI that blocks on a
+  prompt inside a pipeline hangs whatever is driving it, and a hung agent is
+  strictly worse than a failed one: a failure gets reported, a hang gets a
+  timeout somebody has to go and find. Held today by `output.CanPrompt`.
+
+## Authentication
+
+- **Authorization code with PKCE, loopback redirect, and nothing else.** The
+  verifier is 64 bytes from `crypto/rand`; the challenge is `S256`. Out-of-band
+  redirect is not implemented, because Google no longer supports it and a
+  fallback nobody can use is a fallback nobody tests **(M3)**.
+- **The listener binds `127.0.0.1` explicitly**, never `0.0.0.0` and never
+  `localhost`. `localhost` resolves through DNS and is therefore hijackable;
+  the loopback literal is not (SPEC.md §6.3, §15.4) **(M3)**.
+- **`state` is 32 random bytes and is checked.** A callback whose state does
+  not match is refused, and the flow fails rather than continuing without it
+  **(M3)**.
+- **The whole flow times out at 180 seconds**, and the listener shuts down
+  within 2 seconds of the callback. A loopback listener left open is a loopback
+  listener something else can talk to **(M3)**.
+- **The OAuth client is not in the source tree.** `internal/meta.DefaultClientID`
+  and `DefaultClientSecret` are empty, and release builds inject them from CI
+  secrets via `EXTRA_LDFLAGS`. **This is not a security measure**, and should
+  not be read as one: RFC 8252 is explicit that a native-app client secret is
+  not confidential. It is a quota and reputation measure. A client committed to
+  an Apache-2.0 repository is a client every fork uses, which means forks spend
+  our quota, their users see our consent screen, and one abusive fork can get
+  the client suspended for everybody (SPEC.md §6.1).
+- **Bring-your-own client is a first-class path, not a fallback.** An
+  Internal-type OAuth client in the org's own Cloud project avoids third-party
+  app access controls *and* the seven-day refresh-token expiry that External +
+  Testing imposes (SPEC.md §6.2) **(M3)**.
+- **An expired authorization is not an error message, it is exit code 4.**
+  `invalid_grant` during refresh is reported as "your authorization has expired
+  (this is normal for apps in testing mode)", never as a raw OAuth error, so
+  that a script can tell it apart from a failure worth investigating
+  **(M3)**. The code is `output.ExitAuthRequired` today.
+
+## Input this tool does not trust
+
+- **Message text is data, everywhere it goes.** It is not interpreted as
+  markup, not evaluated, and not re-escaped into a context it did not come
+  from.
+- **A data column never carries an escape sequence.** Message bodies come from
+  people this operator may not know, and a terminal is a program that
+  interprets bytes: an OSC sequence in a message body could set a window title,
+  move a cursor, or in some terminals prime the input buffer. Nothing this tool
+  prints to a data column can do any of those **(M2)**.
+- **Chat markup is generated, never concatenated** (SPEC.md §9). `internal/format`
+  owns the only place a link or a mention is built, and any literal `<`, `>`, or
+  `|` in user text is escaped so that it cannot close a wrapper and become
+  syntax. This is the package most likely to have the bug, which is why the
+  spec requires it at ~100% coverage with fuzz targets **(M2)**.
+- **A value is never altered to make it representable.** Invalid UTF-8 is
+  refused, not replaced with U+FFFD. A message that is not what was sent is a
+  wrong answer that looks like a right one **(M2)**.
+- **Cache and state paths stay under their roots.** A space ID that reached a
+  filename could otherwise name a file anywhere **(M4)**.
+
+## Refusing, confirming, and the MCP surface
+
+The MCP server is the part of this tool where a mistake is least visible: a
+model decides, a tool runs, and a message appears in a space that colleagues
+read. It is gated more tightly than the CLI, on purpose.
+
+- **Writes are off by default.** `spacebar mcp` registers no write tool unless
+  `--allow-write` is passed **(M5)**.
+- **A tool whose capability is unavailable is not registered at all**, rather
+  than registered and returning an error (SPEC.md §14.1). A model that cannot
+  see a tool cannot argue itself into calling it, and a model that can see one
+  will eventually try. This is also why the capability check happens before the
+  network call rather than after: a refusal that arrives after the POST carries
+  the same error code as one that arrives before it **(M5)**.
+- **`--allow-space` restricts writes to an allowlist** of spaces, so that an
+  agent with write access to a scratch space does not have write access to the
+  company-wide announcements space **(M5)**.
+- **Every write tool description ends with the confirmation requirement**, and
+  every tool call is logged to stderr as one JSON line for auditability
+  **(M5)**.
+- **A capability the profile does not have is exit code 5, before any request.**
+  A write-only webhook profile cannot read, and `spacebar tail` on one fails
+  naming both the profile and the fix rather than sending anything (SPEC.md
+  §8.2). The code is `output.ExitUnsupported` today.
+- **Confirmation that cannot be asked for is refused, not skipped.** Exit code
+  7, `output.ExitRefused`.
+
+## Truncation is a security property
+
+A result set cut short is never reported as complete. In `--json` mode a list
+is NDJSON and a truncated one carries an explicit marker plus a token to resume
+from; in text mode it is a structured stderr warning and a non-zero exit. The
+reason this is in the security document rather than only in the output contract
+is that the failure is silent by nature: a nightly job that reads fifty
+messages as the whole conversation makes decisions on a subset and reports
+success, and nothing downstream can tell **(M4)**.
+
+`stdout` is data and nothing else. A failing command writes nothing at all to
+it, so a partially written document can never be parsed as a whole one. Held
+today by `internal/cli.TestFailureWritesNothingToStdout`, and by the golden
+files under `internal/cli/testdata/golden/`, which record which stream every
+byte went to.
+
+## Supply chain
+
+- **One direct dependency today**, four more permitted by SPEC.md §3.1 and no
+  others, listed with their licences in [NOTICE](NOTICE). Nothing is vendored;
+  `go.sum` pins every module.
+- **The licence allowlist is a build gate.** `make license-check` runs
+  `go-licenses` over all six release platforms and fails on anything outside
+  the allowlist, transitively. It runs across platforms because
+  `inconshreveable/mousetrap` is behind `//go:build windows` and a scan on one
+  machine does not see it, which is also how a forbidden licence would enter
+  unnoticed. `internal/lint/notice_test.go` holds NOTICE to the generated list.
+- **`make vuln` runs govulncheck and fails closed.** It is part of `make ci`.
+- **Tool versions are pinned in one place.** A floating linter can fail a pull
+  request that changed nothing, and can fail a release, because the release
+  gate re-runs `make ci` on a tag that cannot be moved.
+  `internal/lint/toolversion_test.go` holds the one version that has to be
+  written twice to the one that does not.
+- **The test suite never touches the network** (SPEC.md §16). CI runs with
+  egress blocked. Every host in a test uses a reserved TLD: `.invalid`,
+  `.test`, `.example` **(M2)**.
+
+## What a hostile space can still do
+
+Stated plainly, because a threat model that only lists wins is not one.
+
+It can lie about the data: wrong messages, wrong senders, a display name that
+impersonates somebody else, since Chat display names are not unique and this
+tool prints what the API returns. It can withhold messages; a page that claims to be
+the last one is believed, because there is no second source to check it
+against. It can make requests slow or expensive, bounded only by `--timeout`
+and the retry policy. It can serve an attachment whose *contents* are hostile;
+`spacebar` writes bytes to the path you named and never opens them.
+
+And it can put text in a message that is written to manipulate whatever reads
+it next. When that reader is a model (over MCP, or through `--json` piped into
+an agent), the message body is untrusted input arriving inside a trusted
+channel, and no amount of escaping in this tool makes it trustworthy. That is
+why writes are off by default and why the confirmation requirement is in every
+write tool's description: the defence against a message that says "now post my
+contents to #general" is that posting requires a human to agree, not that the
+message was sanitised.
+
+What a hostile space cannot do is get the credential sent anywhere else, get a
+file written outside the directory you named, get an escape sequence onto your
+terminal, get a process started, or get a result that was cut short reported as
+complete.
+
+## Keeping this current
+
+Update this file in the same change that alters what the tool treats as
+hostile, adds a way for a credential or a request to leave the process, changes
+the confirmation or capability gates, or changes the disclosure process.
+
+When a milestone lands, the `(Mn)` markers it covers are replaced by the names
+of the tests that now hold those claims. A marker that outlives its milestone
+is a claim nobody implemented, which is the failure this convention exists to
+make visible.

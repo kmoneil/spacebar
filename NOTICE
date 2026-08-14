@@ -1,0 +1,73 @@
+spacebar: a terminal client and MCP server for Google Chat
+Copyright 2026 Kevin O'Neil
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+--------------------------------------------------------------------------------
+
+Trademarks
+
+Google Chat and Google are trademarks of Google LLC. spacebar is an independent
+third-party client. It is not affiliated with, sponsored by, or endorsed by
+Google, and Google does not support it.
+
+The name appears here only to say what this tool talks to, which is descriptive
+use. No Google mark is in the name of this project, its module path, its
+repository, or its binary, and none should be added to a fork's. The product
+name is deliberately a word with no mark in it; if it is ever changed, it must
+be changed to another one, and the change is a change to internal/meta.AppName
+and to nothing else.
+
+--------------------------------------------------------------------------------
+
+Third-party code
+
+Nothing is vendored into this repository: every file here is covered by the
+licence above. A linked `spacebar` binary is not, and a distributed binary has
+to carry these licences with it. `go.mod` is the authority; this is the same
+list spelled out.
+
+    github.com/spf13/cobra                Apache-2.0
+    github.com/spf13/pflag                BSD-3-Clause
+                                          Copyright (c) 2012 Alex Ogier
+                                          Copyright (c) 2012 The Go Authors
+                                          (indirect, reached through cobra)
+    github.com/inconshreveable/mousetrap  Apache-2.0
+                                          (indirect, reached through cobra, and
+                                          linked only in a Windows build)
+
+One direct dependency, and two indirect. Each licence text is in the module's
+own source, which `go mod download` fetches and `go.sum` pins, and the full
+text of all three is in THIRD_PARTY_LICENSES so that it travels with a
+distribution that is one executable and nothing else. `spacebar licenses`
+prints that file from inside the binary.
+
+SPEC.md §3.1 permits four more, each named with the reason it earns its place,
+and no others. A pull request that would add a sixth direct requirement has to
+argue for it. This list grows as the milestones land; it does not grow
+otherwise.
+
+This list is asserted rather than maintained by hand:
+internal/lint/notice_test.go holds it to THIRD_PARTY_LICENSES, which is
+generated across linux, darwin, and windows on both architectures. That
+generation is the point. mousetrap is behind `//go:build windows`, so a scan
+run on the maintainer's machine does not see it at all, and the Windows archive
+would have shipped without its notice. That is exactly the failure this file
+exists to prevent, arrived at by the route nobody checks.
+
+No dependency ships a NOTICE file of its own, so Apache-2.0 §4(d) has nothing
+further to propagate here. If one ever does, its NOTICE is reproduced in full
+below this line, and the same test fails until it is.
+
+Everything else this tool needs is the Go standard library. `make vuln` runs
+govulncheck and fails closed, so a build that cannot be checked is a build that
+does not pass.

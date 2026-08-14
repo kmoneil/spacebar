@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+{"error":{"code":"USAGE","message":"unknown command \"bogus\"\nrun 'spacebar --help' for the command list","exit_code":2}}

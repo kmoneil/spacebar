@@ -1,0 +1,47 @@
+version: 2
+
+updates:
+  # Go modules. The list is deliberately short (SPEC.md §3.1 permits five
+  # direct dependencies and names the reason each one earns its place), so a
+  # bump here is a real event rather than noise, and grouping them would hide
+  # which one moved.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 4
+    commit-message:
+      # Conventional Commits, because the pre-commit hook checks the header
+      # shape and a PR whose commit cannot land is a PR nobody can merge.
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+
+  # The workflows pin actions by major version, so this is what moves them.
+  # Kept separate from gomod on purpose: an action bump changes what CI does,
+  # a module bump changes what ships, and reviewing them together invites
+  # waving through the half you did not read.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 4
+    commit-message:
+      prefix: "ci(deps)"
+    labels:
+      - dependencies
+      - ci
+    # Grouped, unlike gomod above, and for the reason gomod is not: these move
+    # together. The first run opened four pull requests for four actions that
+    # do the same thing in the same file, and merging any one of them made the
+    # other three out of date, because the ruleset requires a branch to be
+    # current before it merges. Four rebases to change four version numbers.
+    #
+    # A module bump changes what ships and deserves its own review; an action
+    # bump changes what CI does, and CI either runs or it does not.
+    groups:
+      actions:
+        patterns:
+          - "*"

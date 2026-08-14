@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+{"error":{"code":"USAGE","message":"unknown flag: --nope","exit_code":2}}

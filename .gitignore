@@ -1,0 +1,56 @@
+# Plans & reviews
+_plans/
+_reviews/
+_tmp/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE
+*.swp
+*.swo
+*~
+.idea/
+# Everything under .vscode is local except the one setting the repository has
+# an opinion about, so the directory is excluded by its contents rather than by
+# itself: git does not descend into an excluded directory, and a negation
+# inside one never matches.
+.vscode/*
+!.vscode/settings.json
+
+# Claude
+.claude/
+CLAUDE.md
+
+# Go
+vendor/
+bin/
+dist/
+coverage.out
+coverage.html
+*.test
+*.prof
+
+# Built binaries, if someone builds in place rather than into bin/
+/spacebar
+
+# Local credentials and state. Nothing under here is ever committed.
+#
+# The OAuth token and the webhook URL live in the OS keyring, or, when there is
+# no keyring, under $XDG_CONFIG_HOME at mode 0600. Never in the repository and
+# never in the config file (SPEC.md §5.3). These patterns are the second line:
+# a webhook URL is a bearer credential in a query string, and one pasted into a
+# scratch file is one `git add .` from being public.
+*.pem
+*.key
+.netrc
+# Anchored to the root on purpose. Unanchored, these would also match
+# internal/config/testdata/config.json, and a fixture that git silently refuses
+# to track is a test that passes locally and fails for everybody else.
+/config.json
+/credentials.json

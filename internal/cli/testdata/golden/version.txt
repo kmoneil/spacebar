@@ -1,0 +1,7 @@
+exit 0
+--- stdout
+spacebar 0.0.0-dev
+commit  unknown
+go      ELIDED
+os/arch ELIDED
+--- stderr

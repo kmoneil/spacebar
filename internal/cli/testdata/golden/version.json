@@ -1,0 +1,11 @@
+exit 0
+--- stdout
+{
+  "name": "spacebar",
+  "version": "0.0.0-dev",
+  "commit": "unknown",
+  "go": "ELIDED",
+  "os": "ELIDED",
+  "arch": "ELIDED"
+}
+--- stderr

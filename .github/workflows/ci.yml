@@ -1,0 +1,177 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # The patch, not the minor. actions/setup-go sets GOTOOLCHAIN=local, so the
+  # go command will not fetch what go.mod asks for: it refuses. This has to be
+  # the same patch version go.mod names, and internal/lint/goversion_test.go
+  # says so.
+  #
+  # It is not only about whether the build runs. go-licenses decides what is
+  # standard library by comparing against the GOROOT compiled into it, so the
+  # moment go.mod names a toolchain the runner does not have, GOROOT moves into
+  # the module cache, no package looks like stdlib any more, and the licence
+  # gate dies with an error that mentions none of this. The Makefile passes the
+  # real GOROOT through to survive that; the two numbers still move together.
+  GO_VERSION: "1.26.6"
+
+jobs:
+  check:
+    name: format, vet, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Pinned from the Makefile, on the same argument the steps below already
+      # made for themselves: a formatter that floats can fail a pull request
+      # that changed nothing, and here it can also fail a release, because the
+      # release gate re-runs `make ci` on a tag that cannot be moved.
+      - name: gofumpt
+        run: |
+          go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
+          make fmt-check
+      - name: vet
+        run: make vet
+      # v8 is the first action release that runs golangci-lint v2, which
+      # `.golangci.yml` declares with `version: "2"`, and v9 is the first that
+      # runs on Node 24.
+      #
+      # The version is pinned rather than `latest` because golangci-lint
+      # refuses a module whose Go directive is newer than the Go it was itself
+      # built with, and `latest` has resolved to a binary built with an older
+      # toolchain more than once. A linter that floats is also a linter that
+      # can fail a pull request that changed nothing.
+      #
+      # It is the one tool an action installs rather than `go install`, so its
+      # version cannot come from the Makefile the way the others do. It is
+      # asserted equal to GOLANGCI_LINT_VERSION by
+      # internal/lint/toolversion_test.go instead, since two places declaring
+      # one version is exactly the drift these comments keep warning about.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+  vuln:
+    name: vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # GO_VERSION is the patch go.mod names, so the scan reports the
+          # standard library this build is actually against. Most findings are
+          # in the toolchain rather than in anything this module wrote: the
+          # toolchain is the exposure.
+          go-version: ${{ env.GO_VERSION }}
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@$(make -s print-GOVULNCHECK_VERSION)
+          make vuln
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # internal/lint runs gocognit as a subprocess and fails rather than skips
+      # when it is absent, on the argument that a complexity gate which did not
+      # run reads exactly like one that passed. That argument only holds if CI
+      # installs the tool, so this step is part of the gate and not a
+      # convenience.
+      - name: gocognit
+        run: go install github.com/uudashr/gocognit/cmd/gocognit@$(make -s print-GOCOGNIT_VERSION)
+      # -race, and so deliberately not with CGO_ENABLED=0: the race detector
+      # needs cgo. The shipped binary is built without it (see the Makefile),
+      # but a test run that cannot see a data race is worth less than the
+      # symmetry costs.
+      - name: test
+        run: make test
+
+  licensing:
+    name: licence gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: install the licence tools
+        run: |
+          go install github.com/google/go-licenses@$(make -s print-GOLICENSES_VERSION)
+          go install github.com/google/addlicense@$(make -s print-ADDLICENSE_VERSION)
+      # SPEC.md §2.1. Runs over every platform, because the dependency graph is
+      # not the same on all of them and a forbidden licence that only appears
+      # in the Windows build is one that ships.
+      - name: every dependency's licence is on the allowlist
+        run: make license-check
+      - name: every .go file carries its header
+        run: make license-headers-check
+      # A dependency can be added without regenerating the notices, and the
+      # binary would then ship claiming a set of licences that is not the set
+      # it is subject to. Regenerating here and diffing is the only way to
+      # notice.
+      - name: THIRD_PARTY_LICENSES is current
+        run: |
+          make licenses
+          if ! git diff --exit-code --stat -- THIRD_PARTY_LICENSES NOTICE; then
+            echo
+            echo "The dependency set changed but the notices were not regenerated."
+            echo "Run 'make licenses', and update NOTICE in the same commit."
+            exit 1
+          fi
+
+  contract:
+    name: output contract is unchanged
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # The golden files are the public output contract, and an agent parsing
+      # --json is a consumer we never hear from until we break it. A diff here
+      # is a diff every caller sees, so it must be committed deliberately and
+      # never regenerated by CI.
+      - name: regenerate goldens
+        run: make golden
+      - name: fail if the contract drifted
+        run: |
+          if ! git diff --exit-code --stat; then
+            echo
+            echo "The output contract changed but the golden files were not updated."
+            echo "Run 'make golden' and read every diff before committing it."
+            exit 1
+          fi
+
+  build:
+    name: cross-compile every platform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # SPEC.md §1 requires CGO_ENABLED=0 across linux, darwin, and windows on
+      # both architectures. Finding out on a tag that one of the six does not
+      # compile is the expensive way to learn it, and the release workflow
+      # cannot be re-run against a moved tag.
+      - name: build every platform
+        run: make build-all
+      - name: the binary reports its own identity
+        run: |
+          make build
+          ./bin/spacebar version --json | jq -e '.name == "spacebar"'
+          ./bin/spacebar licenses | head -1
+          ./bin/spacebar completion bash > /dev/null

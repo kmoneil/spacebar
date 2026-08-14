@@ -1,0 +1,183 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+env:
+  # The patch, not the minor. See the note in ci.yml: setup-go pins
+  # GOTOOLCHAIN=local, so this has to match go.mod's directive exactly. A
+  # published archive is built with whatever this names.
+  GO_VERSION: "1.26.6"
+
+jobs:
+  # The tag is the release. Everything CI checks on a branch is checked again
+  # here rather than trusted from the commit's earlier run: a tag can be placed
+  # on any commit, including one that never had a green run, and the version it
+  # stamps is what every binary and every User-Agent will carry.
+  verify:
+    name: full gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # scripts/version.sh runs `git describe`, so the tag and its history
+          # have to be present. A shallow clone reports 0.0.0-unknown and the
+          # release would ship binaries that do not know what they are.
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # The versions live in the Makefile so that a developer running `make ci`
+      # runs what the gate runs.
+      - name: the pinned tool versions
+        id: tools
+        run: echo "key=$(make -s tools-key)" >> "$GITHUB_OUTPUT"
+      # This fetch is the only network in front of an operation that cannot be
+      # undone. A hit skips the install entirely rather than retrying it, so the
+      # common path does not touch the checksum database at all; a miss installs
+      # and saves, and `make ci` fails closed if a tool is somehow absent either
+      # way. It is here because a transient sum.golang.org error once killed a
+      # release whose tag was already public.
+      - name: restore the tools
+        id: toolcache
+        uses: actions/cache@v6
+        with:
+          path: ~/go/bin
+          key: gate-tools-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ steps.tools.outputs.key }}
+      - name: install the tools make ci expects
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: make tools
+      - name: make ci
+        run: make ci
+      - name: the binary agrees with the tag
+        # The one check only a tagged build can make. scripts/version.sh refuses
+        # a non-semver tag, and this refuses a semver tag the binary disagrees
+        # with: a release whose `spacebar version` does not match the tag people
+        # fetched is unpinnable in exactly the way the whole contract exists to
+        # prevent.
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          got=$(./bin/spacebar version --json | jq -r .version)
+          printf 'tag %s, binary reports %s\n' "$want" "$got"
+          [ "$want" = "$got" ] || { echo "the binary does not report the tag"; exit 1; }
+
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          # SPEC.md §6.1 and §17: the official OAuth client is injected here
+          # and only here. It is absent from source on purpose, so that a fork
+          # cannot spend our quota or show our consent screen to its users, and
+          # a build from source falls through to bring-your-own instead. Per
+          # RFC 8252 this is not a confidential secret; it is a quota and
+          # reputation measure.
+          #
+          # An empty secret produces an empty value, which is the same binary a
+          # build from source produces. That is a degraded release rather than
+          # a broken one, and `spacebar auth setup` still works.
+          CLIENT_ID: ${{ secrets.OAUTH_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.OAUTH_CLIENT_SECRET }}
+        # Through the Makefile rather than a bare `go build`, so the ldflags
+        # come from the one place that defines them. Cross-compiling is
+        # GOOS/GOARCH in the environment and nothing else; there is no cgo here.
+        run: |
+          mod=$(go list -m)
+          make build EXTRA_LDFLAGS="\
+            -X $mod/internal/meta.DefaultClientID=$CLIENT_ID \
+            -X $mod/internal/meta.DefaultClientSecret=$CLIENT_SECRET"
+
+          version="${GITHUB_REF_NAME#v}"
+          name="spacebar_${version}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          mkdir -p "dist/$name"
+          # The notices travel with the archive as well as inside the binary.
+          # Somebody who unpacks a tarball and never runs `spacebar licenses`
+          # is still owed them.
+          cp LICENSE NOTICE THIRD_PARTY_LICENSES README.md "dist/$name/"
+
+          if [ "${{ matrix.goos }}" = windows ]; then
+            cp bin/spacebar.exe "dist/$name/"
+            (cd dist && zip -qr "$name.zip" "$name")
+          else
+            cp bin/spacebar "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spacebar-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  publish:
+    name: publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # For build provenance: a consumer can verify these archives came from
+      # this workflow, on this repository, at this commit.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.zip > checksums.txt
+          cat checksums.txt
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+      - name: create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Notes from CHANGELOG.md rather than generated from commits: the
+        # changelog is written for somebody deciding whether to upgrade, and a
+        # commit list is written for somebody who already has.
+        run: |
+          # No regex: the version contains dots, and escaping them through YAML
+          # into a shell into awk is three chances to be wrong. A heading either
+          # contains this version or it does not.
+          notes=$(awk -v v="${GITHUB_REF_NAME#v}" '
+            /^## / { inside = (index($0, v) > 0); next }
+            inside { print }
+          ' CHANGELOG.md)
+          if [ -z "$(printf '%s' "$notes" | tr -d '[:space:]')" ]; then
+            echo "CHANGELOG.md has no section for ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+          printf '%s\n' "$notes" > notes.md
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md \
+            dist/*.tar.gz dist/*.zip dist/checksums.txt
