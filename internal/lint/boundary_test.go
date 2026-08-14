@@ -155,6 +155,40 @@ func importPaths(t *testing.T, f sourceFile) map[string]string {
 // httpOwner is the one package that may build an HTTP request.
 const httpOwner = "internal/chat"
 
+// serverOnly may import net/http to listen, and may not use any of it to speak.
+//
+// The OAuth redirect is a callback to a loopback listener, which means a package
+// that has to answer an HTTP request without ever making one. Parsing a request
+// line and a query string by hand to avoid an import would be worse than the
+// import: it is exactly the sort of code that is subtly wrong for a year.
+//
+// So the exemption is granted and then narrowed. The rule this gate exists for
+// is that requests are built in one place, and a server builds none, so what is
+// checked below is that this package uses no client-side API at all.
+const serverOnly = "internal/auth/loopback"
+
+// clientSideHTTP are the names in net/http that make a request rather than
+// answer one. The exempted package may name none of them.
+//
+// A list rather than "anything not on an allowlist", because the server side of
+// net/http is large and growing and a new handler type is not a breach. Every
+// way to send is here, including the package-level shorthands, which are the
+// ones somebody reaches for without thinking.
+var clientSideHTTP = map[string]bool{
+	"Client":                true,
+	"DefaultClient":         true,
+	"NewRequest":            true,
+	"NewRequestWithContext": true,
+	"Get":                   true,
+	"Post":                  true,
+	"PostForm":              true,
+	"Head":                  true,
+	"Do":                    true,
+	"Transport":             true,
+	"DefaultTransport":      true,
+	"RoundTripper":          true,
+}
+
 // TestOnlyChatImportsNetHTTP holds the rule that makes redaction possible.
 //
 // Every credential this tool handles leaves the process the same way: in a
@@ -170,15 +204,21 @@ const httpOwner = "internal/chat"
 // working rather than a breach of it.
 //
 // What this does not cover: a dependency that speaks HTTP on our behalf.
-// golang.org/x/oauth2 arrives in Milestone 3 and builds the token request
-// itself, carrying the client secret and the refresh token, and no direct
-// import of net/http appears anywhere near it. That is a real hole and it
-// belongs to the card that adds the dependency, not to this gate.
+// golang.org/x/oauth2 builds the token request itself, carrying the client
+// secret and the refresh token, and no direct import of net/http appears
+// anywhere near it. What is done about that is not a gate but a construction:
+// internal/chat hands it the client to use, so the request goes out through one
+// this repository configured, and the OAuth error is never printed raw. See
+// chat.TokenHTTPClient and SECURITY.md.
 func TestOnlyChatImportsNetHTTP(t *testing.T) {
 	fset, files := repoSource(t)
 
 	for _, f := range files {
-		if f.test || f.dir == httpOwner || strings.HasPrefix(f.dir, httpOwner+"/") {
+		if f.test || inPackage(f.dir, httpOwner) {
+			continue
+		}
+		if inPackage(f.dir, serverOnly) {
+			checkServerOnly(t, fset, f)
 			continue
 		}
 		for _, imp := range f.syn.Imports {
@@ -197,6 +237,34 @@ func TestOnlyChatImportsNetHTTP(t *testing.T) {
 				f.rel, fset.Position(imp.Pos()).Line, path, httpOwner, httpOwner)
 		}
 	}
+}
+
+// checkServerOnly holds the narrower rule the exemption is granted under.
+func checkServerOnly(t *testing.T, fset *token.FileSet, f sourceFile) {
+	names := importPaths(t, f)
+
+	ast.Inspect(f.syn, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || names[pkg.Name] != "net/http" || !clientSideHTTP[sel.Sel.Name] {
+			return true
+		}
+
+		t.Errorf("%s:%d uses http.%s, and %s may import net/http only to listen.\n"+
+			"The exemption exists because answering a callback needs a server and parsing HTTP by "+
+			"hand would be worse than the import. Making a request is what the rule is about.\n"+
+			"Build the request through %s instead.",
+			f.rel, fset.Position(sel.Pos()).Line, sel.Sel.Name, serverOnly, httpOwner)
+		return true
+	})
+}
+
+// inPackage reports whether dir is pkg or below it.
+func inPackage(dir, pkg string) bool {
+	return dir == pkg || strings.HasPrefix(dir, pkg+"/")
 }
 
 // clientOwner is the one package tree that may build a Chat client.
@@ -227,10 +295,7 @@ func TestOnlyATransportBuildsAChatClient(t *testing.T) {
 	fset, files := repoSource(t)
 
 	for _, f := range files {
-		if f.test || f.dir == clientOwner || strings.HasPrefix(f.dir, clientOwner+"/") {
-			continue
-		}
-		if f.dir == httpOwner || strings.HasPrefix(f.dir, httpOwner+"/") {
+		if f.test || inPackage(f.dir, clientOwner) || inPackage(f.dir, httpOwner) {
 			continue
 		}
 		names := importPaths(t, f)
@@ -322,7 +387,7 @@ func TestOnlyOutputWritesToTheProcessStreams(t *testing.T) {
 	fset, files := repoSource(t)
 
 	for _, f := range files {
-		if f.test || f.dir == streamOwner || strings.HasPrefix(f.dir, streamOwner+"/") {
+		if f.test || inPackage(f.dir, streamOwner) {
 			continue
 		}
 		names := importPaths(t, f)

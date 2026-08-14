@@ -124,14 +124,22 @@ pure API client, and because a document that only lists absences is not one.
 
 Three child processes exist, and only the first is limited to authentication:
 
-- **A browser, once, during `spacebar auth login`** **(M3)**. The OAuth
+- **A browser, once, during an authorization flow.** The OAuth
   authorization code flow requires a user agent, and out-of-band copy/paste
   redirect is no longer supported by Google (SPEC.md §6.3), so there is no
   flow that avoids this. It is `open`, `xdg-open`, or `rundll32
   url.dll,FileProtocolHandler`, invoked through `os/exec` with the URL as a
-  separate argument and never through a shell, so it cannot become a command. If
-  the launch fails the flow does not: the URL is printed for the operator to
-  open themselves.
+  separate argument and never through a shell, so it cannot become a command.
+  The argument is refused unless it is an `http` or `https` URL, because the set
+  of schemes a desktop will act on includes ones that run things, and refused if
+  it starts with a dash, which would be read as a flag.
+
+  If the launch fails the flow does not:
+  `TestABrowserThatWillNotLaunchDoesNotFailTheFlow`. That matters on exactly the
+  machines this tool is built for. On the development box this was written on
+  there is no `xdg-open` at all, so the real failure is `exec.ErrNotFound`
+  rather than a non-zero exit, and the URL is printed for the operator to open
+  themselves.
 - **The macOS keyring helper.** `zalando/go-keyring` calls `/usr/bin/security`
   on darwin, once per credential read or write. On Windows it uses the
   credential API in-process and starts nothing. This happens from Milestone 2,
@@ -291,16 +299,52 @@ it is pasted rather than as a `400` about an API key days later.
 - **Authorization code with PKCE, loopback redirect, and nothing else.** The
   verifier is 64 bytes from `crypto/rand`; the challenge is `S256`. Out-of-band
   redirect is not implemented, because Google no longer supports it and a
-  fallback nobody can use is a fallback nobody tests **(M3)**.
+  fallback nobody can use is a fallback nobody tests.
+  `TestTheChallengeIsTheHashOfTheVerifier` computes the challenge from RFC 7636
+  §4.2 rather than by calling the function under test, because a round trip
+  through one implementation agrees with itself whatever it does.
+  `TestTheAuthorizationURLCarriesWhatTheFlowDependsOn` checks that the challenge
+  on the consent URL and the verifier in the exchange are the same pair, which
+  is the whole of PKCE, and
+  `TestTheStateAndVerifierAreDifferentEveryTime` that neither repeats.
 - **The listener binds `127.0.0.1` explicitly**, never `0.0.0.0` and never
   `localhost`. `localhost` resolves through DNS and is therefore hijackable;
-  the loopback literal is not (SPEC.md §6.3, §15.4) **(M3)**.
-- **`state` is 32 random bytes and is checked.** A callback whose state does
-  not match is refused, and the flow fails rather than continuing without it
-  **(M3)**.
+  the loopback literal is not (SPEC.md §6.3, §15.4).
+  `TestTheListenerIsOnLoopbackAndNowhereElse` parses the bound address and
+  fails on a name as well as on a routable one.
+- **`state` is 32 random bytes and is checked**, in constant time, before
+  anything else about the callback is looked at. A callback whose state does
+  not match is answered with a 404 that explains nothing, because whoever sent
+  it is not the person who started the flow.
+  `TestAMismatchedStateIsNotAnswered` and
+  `TestACallbackWithTheWrongStateIsRejected`, which also asserts that no code
+  from such a callback is exchanged.
 - **The whole flow times out at 180 seconds**, and the listener shuts down
   within 2 seconds of the callback. A loopback listener left open is a loopback
-  listener something else can talk to **(M3)**.
+  listener something else can talk to.
+  `TestTheListenerIsClosedAfterTheCallback` dials the port afterwards, and
+  `TestAFlowThatNobodyAnswersTimesOutRatherThanHanging` covers the tab somebody
+  closed.
+
+  The flow timeout is not `--timeout` and neither bounds the other. One is the
+  budget for an HTTP attempt, measured in seconds because a request that takes
+  longer has failed; the other is the budget for somebody to read a consent
+  screen and decide.
+- **The token request goes out through a client this repository configured.**
+  `golang.org/x/oauth2` builds that request itself, carrying the client secret
+  and either an authorization code or a refresh token, and the gate that holds
+  every other request to one package cannot see it. What is done about that is
+  a construction rather than a gate: `chat.TokenHTTPClient` follows no
+  redirect, because a 3xx on a token request resends the POST and the POST body
+  is the credential.
+- **An OAuth error is read for its code and then dropped.**
+  `oauth2.RetrieveError` carries the whole response body and the
+  `http.Response` beside it. Its `Error` method is careful, printing only the
+  error code when there is one, but anything formatting the value with `%+v`
+  would print the body, and on a token endpoint that body is an access token
+  and a refresh token. `TestATokenResponseNeverReachesTheError` sends a
+  response that names an error and carries tokens, and asserts neither reaches
+  the failure message.
 - **The OAuth client is not in the source tree.** `internal/meta.DefaultClientID`
   and `DefaultClientSecret` are empty, and release builds inject them from CI
   secrets via `EXTRA_LDFLAGS`. **This is not a security measure**, and should
@@ -312,12 +356,17 @@ it is pasted rather than as a `400` about an API key days later.
 - **Bring-your-own client is a first-class path, not a fallback.** An
   Internal-type OAuth client in the org's own Cloud project avoids third-party
   app access controls *and* the seven-day refresh-token expiry that External +
-  Testing imposes (SPEC.md §6.2) **(M3)**.
+  Testing imposes (SPEC.md §6.2). A refusal carrying `admin_policy_enforced` is
+  the exact case it exists for, and says so:
+  `TestAnAdminPolicyRefusalNamesTheWayOut`.
 - **An expired authorization is not an error message, it is exit code 4.**
   `invalid_grant` during refresh is reported as "your authorization has expired
   (this is normal for apps in testing mode)", never as a raw OAuth error, so
-  that a script can tell it apart from a failure worth investigating
-  **(M3)**. The code is `output.ExitAuthRequired` today.
+  that a script can tell it apart from a failure worth investigating.
+  `TestInvalidGrantIsExplainedRatherThanQuoted`, which also asserts the raw
+  library error is not what gets printed. Held on the authorization exchange
+  today; the same mapping on a token refresh belongs to the card that adds
+  refreshing **(M3)**.
 
 ## Input this tool does not trust
 

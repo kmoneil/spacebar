@@ -42,6 +42,8 @@ list spelled out.
                                           Copyright (c) 2012 The Go Authors
     github.com/zalando/go-keyring         MIT
                                           Copyright (c) 2019 Zalando SE
+    golang.org/x/oauth2                   BSD-3-Clause
+                                          Copyright (c) 2009 The Go Authors
     github.com/zalando/go-keyring/internal/shellescape
                                           MIT
                                           Copyright (c) 2016 Alessio Treglia
@@ -65,7 +67,7 @@ list spelled out.
                                           (indirect, reached through cobra, and
                                           linked only in a Windows build)
 
-Three direct requirements and four indirect, and eight rows above, because two
+Four direct requirements and four indirect, and nine rows above, because two
 of them are reported at a finer grain than a module: `go-licenses` sees the
 shellescape copy vendored inside go-keyring and the Windows subtree of
 `golang.org/x/sys` as units of their own, since each carries its own licence
@@ -80,8 +82,11 @@ cobra's own flag package and was already linked; it moved out of the indirect
 block when a test began importing it to walk the flag tree, and `go.mod` says
 what is imported.
 
-SPEC.md §3.1 permits three more, each named with the reason it earns its place,
-and no others. A pull request that would add another has to argue for it. This
+SPEC.md §3.1 permits two more, each named with the reason it earns its place,
+and no others. `golang.org/x/oauth2` arrived with Milestone 3 and is the root
+package only: §3.2 forbids `golang.org/x/oauth2/google`, which drags in
+`cloud.google.com/go/compute/metadata` for Application Default Credentials this
+tool never uses. It brings no transitive requirement of its own. A pull request that would add another has to argue for it. This
 list grows as the milestones land; it does not grow otherwise.
 
 This list is asserted rather than maintained by hand:
