@@ -123,6 +123,26 @@ value.
 
 The first profile becomes the default, so nothing after this needs `--profile`.
 
+Add `--verify` to prove it works, which posts a message to the space:
+
+```sh
+pbpaste | spacebar profile set-webhook alerts --verify
+pbpaste | spacebar profile set-webhook alerts --verify --verify-text 'setting up spacebar'
+```
+
+```
+profile     alerts
+transport   webhook
+credential  keyring:spacebar/alerts/webhook
+verified    spaces/AAAATestSpace
+```
+
+It is off by default because it puts a real message into a space other people
+are reading. It is worth having because a webhook has no endpoint that reports
+whether it works: posting is the only way to find out, so without it there is no
+way to tell a mistyped URL from an organizational unit that has Chat apps
+switched off. Those two produce different failures and this says which you have.
+
 ```sh
 spacebar profile list           # what is configured, without reading a credential
 spacebar profile list --json    # one object per line
@@ -133,7 +153,8 @@ On a machine with no keyring, which is every container and most CI runners, the
 credential goes to a mode `0600` file beside the configuration instead, and
 says so every time it is used.
 
-`send` lands with the rest of Milestone 2.
+`send` lands with the rest of Milestone 2. What already works is the transport
+underneath it: the message above is posted through the same code path.
 
 ## Development
 

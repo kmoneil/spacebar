@@ -16,6 +16,10 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -306,5 +310,176 @@ func TestRemovingAProfileThatIsNotThereIsAUsageFailure(t *testing.T) {
 	}
 	if !strings.Contains(got.stderr, "alerts") {
 		t.Errorf("the failure does not say what is configured:\n%s", got.stderr)
+	}
+}
+
+// TestVerifyPostsToTheSpaceAndSaysWhere.
+//
+// A webhook has no endpoint that reports whether it works: the only way to find
+// out is to post. So somebody who cannot tell a mistyped URL from an
+// organizational unit with Chat apps switched off has no way to learn which
+// they have, and this is what gives them one.
+func TestVerifyPostsToTheSpaceAndSaysWhere(t *testing.T) {
+	isolate(t)
+
+	var posted []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		posted = append(posted, string(body))
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	got := runCLIIn(t, url+"\n", "--json", "profile", "set-webhook", "alerts", "--verify")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	if len(posted) != 1 {
+		t.Fatalf("posted %d messages, want 1", len(posted))
+	}
+	if !strings.Contains(posted[0], meta.AppName) {
+		t.Errorf("the verification message does not say what it is: %s", posted[0])
+	}
+
+	var result webhookResult
+	if err := json.Unmarshal([]byte(got.stdout), &result); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, got.stdout)
+	}
+	if !result.Verified || result.Space != "spaces/AAAATestSpace" {
+		t.Errorf("result = %+v, want verified and the space it reached", result)
+	}
+}
+
+// TestWithoutVerifyNothingIsPosted. A setup command that put a message into a
+// space full of people without being asked would be rude in a way somebody only
+// finds out about afterwards.
+func TestWithoutVerifyNothingIsPosted(t *testing.T) {
+	isolate(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("configuring a webhook posted a message nobody asked for")
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	if got := runCLIIn(t, url+"\n", "profile", "set-webhook", "alerts"); got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	// And the JSON says nothing was checked, rather than saying it failed. A
+	// caller has to be able to tell "it did not work" from "nobody looked".
+	got := runCLIIn(t, url+"\n", "--json", "profile", "set-webhook", "alerts")
+	if strings.Contains(got.stdout, "verified") {
+		t.Errorf("a run with no --verify reported a verification: %s", got.stdout)
+	}
+}
+
+// TestVerifyTextIsTheCallersToChoose, because the message lands in a real space
+// and what it says is not this tool's business.
+func TestVerifyTextIsTheCallersToChoose(t *testing.T) {
+	isolate(t)
+
+	var posted string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		posted = string(body)
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	got := runCLIIn(t, url+"\n", "profile", "set-webhook", "alerts",
+		"--verify", "--verify-text", "ignore me, testing the pipeline")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+	if !strings.Contains(posted, "ignore me, testing the pipeline") {
+		t.Errorf("the caller's text was not what was posted: %s", posted)
+	}
+}
+
+// TestAFailedVerifyStillLeavesTheProfileConfigured.
+//
+// The credential is stored before the check, so an organizational unit with
+// Chat apps switched off does not also cost somebody their configuration. The
+// failure says what is wrong; the profile is there to fix or to remove.
+func TestAFailedVerifyStillLeavesTheProfileConfigured(t *testing.T) {
+	path := isolate(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = fmt.Fprint(w, `{"error":{"code":403,"message":"The caller does not have permission","status":"PERMISSION_DENIED"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	got := runCLIIn(t, url+"\n", "profile", "set-webhook", "alerts", "--verify")
+	if got.exit != output.ExitAPI {
+		t.Fatalf("exit = %d, want %d\n%s", got.exit, output.ExitAPI, got.stderr)
+	}
+
+	// Appendix A.10: the message names the cause somebody cannot see for
+	// themselves.
+	if !strings.Contains(got.stderr, "Chat apps") {
+		t.Errorf("the failure does not name the likely cause:\n%s", got.stderr)
+	}
+	for _, secret := range []string{testKey, testToken} {
+		if strings.Contains(got.stderr, secret) {
+			t.Errorf("the failure holds a credential:\n%s", got.stderr)
+		}
+	}
+
+	cfg, err := config.LoadFrom(path)
+	if err != nil {
+		t.Fatalf("loading: %v", err)
+	}
+	if cfg.Profiles["alerts"].WebhookURLRef == "" {
+		t.Error("a failed verification threw away the configuration as well")
+	}
+}
+
+// TestVerboseLogsTheRequestWithoutTheCredential.
+//
+// Found by running the built binary rather than by a test failing: --verify
+// built a transport with no logger, so --verbose was accepted and printed
+// nothing, which is worse than not having the flag. Somebody debugging a
+// webhook would have concluded no request was made.
+func TestVerboseLogsTheRequestWithoutTheCredential(t *testing.T) {
+	isolate(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	}))
+	t.Cleanup(server.Close)
+
+	url := server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
+	got := runCLIIn(t, url+"\n", "--verbose", "profile", "set-webhook", "alerts", "--verify")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	for _, want := range []string{"> POST", "key=REDACTED", "token=REDACTED", "< 200 OK"} {
+		if !strings.Contains(got.stderr, want) {
+			t.Errorf("--verbose is missing %q:\n%s", want, got.stderr)
+		}
+	}
+	for _, secret := range []string{testKey, testToken} {
+		if strings.Contains(got.stderr, secret) {
+			t.Errorf("--verbose printed a credential:\n%s", got.stderr)
+		}
+	}
+
+	// The log is a diagnostic, not a result.
+	if strings.Contains(got.stdout, "> POST") {
+		t.Errorf("a log line reached stdout:\n%s", got.stdout)
+	}
+
+	// And without --verbose there is none of it.
+	quiet := runCLIIn(t, url+"\n", "profile", "set-webhook", "quiet", "--verify")
+	if strings.Contains(quiet.stderr, "> POST") {
+		t.Errorf("a run without --verbose logged requests:\n%s", quiet.stderr)
 	}
 }

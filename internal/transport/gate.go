@@ -82,6 +82,12 @@ var capabilityTable = [numCapabilities]capability{
 	CanResolveDM:  {"the ability to find a direct message", func(c Capabilities) bool { return c.CanResolveDM }},
 }
 
+// String is what this capability is called in a sentence, so that a %s or a %v
+// anywhere reads as something rather than as an integer. It is the same phrase
+// the refusal uses, from the same table, because two names for one capability
+// is one more than anybody needs.
+func (c Capability) String() string { return describe(c) }
+
 // Has reports whether these capabilities include one.
 func (c Capabilities) Has(want Capability) bool {
 	if want < 0 || want >= numCapabilities {

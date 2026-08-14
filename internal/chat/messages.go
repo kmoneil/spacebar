@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 )
 
 // MessageIDPrefix is what the API requires a caller-supplied message ID to
@@ -52,12 +53,21 @@ type SendRequest struct {
 	// ThreadKey groups this message with others that share it. It is the only
 	// threading a webhook has, since naming an existing thread requires reading
 	// the space first.
+	//
+	// It travels in the body, as message.thread.threadKey, and not as the query
+	// parameter of the same name that SPEC.md §7.3 lists. The query form is
+	// marked deprecated in the API reference in favour of thread.thread_key,
+	// and the webhook guide's own examples put it in the body. The spec is out
+	// of date here rather than wrong about intent.
 	ThreadKey string
 
 	// MessageReplyOption decides what happens when ThreadKey matches no
 	// existing thread. The API's own values, passed through rather than
 	// translated, because a name invented here would have to be mapped back and
 	// the mapping is where a wrong default hides.
+	//
+	// Left empty alongside a ThreadKey, this is filled in rather than sent
+	// empty. See ReplyFallbackToNewThread.
 	MessageReplyOption string
 
 	// MessageID is the caller's own name for this message, and it is what makes
@@ -74,16 +84,27 @@ type SendRequest struct {
 // SendMessage posts a message (SPEC.md §7.3).
 func (c *Client) SendMessage(ctx context.Context, req SendRequest) (*Message, error) {
 	query := url.Values{}
-	setIf(query, "threadKey", req.ThreadKey)
-	setIf(query, "messageReplyOption", req.MessageReplyOption)
+	setIf(query, "messageReplyOption", replyOption(req))
 	setIf(query, "messageId", req.MessageID)
 	setIf(query, "requestId", req.RequestID)
+
+	body := req.Message
+	if req.ThreadKey != "" {
+		// Merged rather than overwritten, so that a caller who set a thread by
+		// name keeps it. The key is what a webhook has instead of a name.
+		thread := Thread{}
+		if body.Thread != nil {
+			thread = *body.Thread
+		}
+		thread.ThreadKey = req.ThreadKey
+		body.Thread = &thread
+	}
 
 	payload, err := c.do(ctx, Request{
 		Method: http.MethodPost,
 		Path:   messagesPath(req.Space),
 		Query:  query,
-		Body:   req.Message,
+		Body:   body,
 
 		// The whole of the no-replay rule, in one field. A POST carrying a
 		// message ID cannot produce a second message however many times it is
@@ -101,6 +122,40 @@ func (c *Client) SendMessage(ctx context.Context, req SendRequest) (*Message, er
 		return nil, c.wrapTransport(fmt.Errorf("the message was accepted but the response could not be read: %w", err))
 	}
 	return &sent, nil
+}
+
+// The values messageReplyOption takes, from the API reference.
+const (
+	// ReplyFallbackToNewThread replies to the thread the key names, and starts
+	// a new one when there is no such thread.
+	ReplyFallbackToNewThread = "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD"
+
+	// ReplyOrFail replies to the thread the key names, or returns NOT_FOUND.
+	// For a caller who would rather be told than be somewhere unexpected.
+	ReplyOrFail = "REPLY_MESSAGE_OR_FAIL"
+)
+
+// replyOption is the messageReplyOption to send.
+//
+// The default is filled in whenever a thread key is present, and this is the
+// most important line in the file. The API's own default,
+// MESSAGE_REPLY_OPTION_UNSPECIFIED, is documented as "Starts a new thread.
+// Using this option ignores any thread ID or threadKey that's included": a
+// caller who asks to group a message into a thread and says nothing else gets a
+// new thread every time, silently, with a successful response and no indication
+// that the thing they asked for did not happen.
+//
+// That is the exact failure this tool exists not to have. Supplying a thread
+// key is a request to thread, so the option that threads is what gets sent, and
+// a caller who wants the stricter behaviour asks for ReplyOrFail by name.
+func replyOption(req SendRequest) string {
+	if req.MessageReplyOption != "" {
+		return req.MessageReplyOption
+	}
+	if req.ThreadKey != "" {
+		return ReplyFallbackToNewThread
+	}
+	return ""
 }
 
 // messagesPath is where a send goes.
@@ -146,4 +201,30 @@ func DeriveMessageID(space, text, threadKey string) string {
 		_, _ = digest.Write([]byte(field))
 	}
 	return MessageIDPrefix + hex.EncodeToString(digest.Sum(nil))[:messageIDHexLength]
+}
+
+// spaceName is what the API calls a space: spaces/ and an opaque identifier.
+var spaceName = regexp.MustCompile(`^spaces/[A-Za-z0-9_-]+$`)
+
+// CheckSpaceName refuses anything that is not a space resource name
+// (SPEC.md §15.8).
+//
+// The rule is here rather than at each place a space arrives, because there is
+// more than one such place and they land on the same request path. A space
+// reaches this tool from a command line, from a webhook URL, from an alias
+// somebody was sent, and at Milestone 4 from a resolver reading the API's own
+// answers. Anything the pattern accepts is safe as a URL path segment
+// unescaped, which makes escaping the second layer rather than the only one.
+//
+// Milestone 3's resolver is the other caller. It validates what it produces
+// with this, so the two cannot disagree about what a space is.
+func CheckSpaceName(space string) error {
+	if space == "" {
+		return clientErr("no space was given.")
+	}
+	if !spaceName.MatchString(space) {
+		return clientErr("%q is not a space name.\nA space is %q followed by its identifier, as in %q.",
+			space, "spaces/", "spaces/AAAAAAAAAAA")
+	}
+	return nil
 }

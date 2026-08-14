@@ -19,6 +19,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -134,38 +136,47 @@ func TestGoldenOutputContract(t *testing.T) {
 		// would record that machine.
 		stdin    string
 		isolated bool
+
+		// serve stands up a Chat-shaped server and feeds its webhook URL in on
+		// stdin. The port is random and the recorded output does not contain
+		// it, which is what makes this deterministic: what is frozen is the
+		// shape of a verified setup, not the address it reached.
+		serve bool
 	}{
-		{"version.txt", []string{"version"}, output.ExitOK, "", false},
-		{"version.json", []string{"version", "--json"}, output.ExitOK, "", false},
+		{"version.txt", []string{"version"}, output.ExitOK, "", false, false},
+		{"version.json", []string{"version", "--json"}, output.ExitOK, "", false, false},
 
 		// An unknown command has to be a usage failure and not a help screen.
 		// Cobra's own default for a root command with no Run is to print help
 		// and exit 0, which tells a script that asked for something that does
 		// not exist that it succeeded.
-		{"unknown-command.txt", []string{"bogus"}, output.ExitUsage, "", false},
-		{"unknown-command.json", []string{"--json", "bogus"}, output.ExitUsage, "", false},
+		{"unknown-command.txt", []string{"bogus"}, output.ExitUsage, "", false, false},
+		{"unknown-command.json", []string{"--json", "bogus"}, output.ExitUsage, "", false, false},
 
-		{"unknown-flag.txt", []string{"--nope"}, output.ExitUsage, "", false},
-		{"unknown-flag.json", []string{"--json", "--nope"}, output.ExitUsage, "", false},
+		{"unknown-flag.txt", []string{"--nope"}, output.ExitUsage, "", false, false},
+		{"unknown-flag.json", []string{"--json", "--nope"}, output.ExitUsage, "", false, false},
 
 		// The profile group. These are the first commands with output worth
 		// freezing: an empty list has to be exit 0 with an empty stdout, and
 		// the no-URL failure is the message a first-time user meets.
-		{"profile-list-empty.txt", []string{"profile", "list"}, output.ExitOK, "", true},
-		{"profile-list-empty.json", []string{"--json", "profile", "list"}, output.ExitOK, "", true},
+		{"profile-list-empty.txt", []string{"profile", "list"}, output.ExitOK, "", true, false},
+		{"profile-list-empty.json", []string{"--json", "profile", "list"}, output.ExitOK, "", true, false},
 
-		{"profile-set-webhook.txt", []string{"profile", "set-webhook", "alerts"}, output.ExitOK, testWebhook, true},
-		{"profile-set-webhook.json", []string{"--json", "profile", "set-webhook", "alerts"}, output.ExitOK, testWebhook, true},
+		{"profile-set-webhook.txt", []string{"profile", "set-webhook", "alerts"}, output.ExitOK, testWebhook, true, false},
+		{"profile-set-webhook.json", []string{"--json", "profile", "set-webhook", "alerts"}, output.ExitOK, testWebhook, true, false},
 
-		{"profile-list-two.txt", []string{"profile", "list"}, output.ExitOK, "", true},
-		{"profile-list-two.json", []string{"--json", "profile", "list"}, output.ExitOK, "", true},
+		{"profile-list-two.txt", []string{"profile", "list"}, output.ExitOK, "", true, false},
+		{"profile-list-two.json", []string{"--json", "profile", "list"}, output.ExitOK, "", true, false},
 
-		{"profile-set-webhook-no-url.txt", []string{"profile", "set-webhook", "alerts"}, output.ExitUsage, "", true},
-		{"profile-set-webhook-no-url.json", []string{"--json", "profile", "set-webhook", "alerts"}, output.ExitUsage, "", true},
+		{"profile-set-webhook-no-url.txt", []string{"profile", "set-webhook", "alerts"}, output.ExitUsage, "", true, false},
+		{"profile-set-webhook-no-url.json", []string{"--json", "profile", "set-webhook", "alerts"}, output.ExitUsage, "", true, false},
 
 		// A removal in a pipeline, where there is nobody to answer the
 		// question. Exit 7, and nothing removed.
-		{"profile-rm-unconfirmed.txt", []string{"profile", "rm", "alerts"}, output.ExitRefused, "y\n", true},
+		{"profile-rm-unconfirmed.txt", []string{"profile", "rm", "alerts"}, output.ExitRefused, "y\n", true, false},
+
+		{"profile-set-webhook-verified.txt", []string{"profile", "set-webhook", "alerts", "--verify"}, output.ExitOK, "", true, true},
+		{"profile-set-webhook-verified.json", []string{"--json", "profile", "set-webhook", "alerts", "--verify"}, output.ExitOK, "", true, true},
 	}
 
 	for _, tc := range cases {
@@ -183,6 +194,10 @@ func TestGoldenOutputContract(t *testing.T) {
 					}
 				}
 			}
+			stdin := tc.stdin
+			if tc.serve {
+				stdin = chatShapedServer(t)
+			}
 			if tc.name == "profile-rm-unconfirmed.txt" {
 				// Needs something to remove. Not part of the recorded output.
 				if setup := runCLIIn(t, testWebhook, "profile", "set-webhook", "alerts"); setup.exit != output.ExitOK {
@@ -190,7 +205,7 @@ func TestGoldenOutputContract(t *testing.T) {
 				}
 			}
 
-			got := runCLIIn(t, tc.stdin, tc.args...)
+			got := runCLIIn(t, stdin, tc.args...)
 			if got.exit != tc.want {
 				t.Errorf("exit code = %d, want %d", got.exit, tc.want)
 			}
@@ -250,4 +265,21 @@ func TestLicensesComesFromTheBinary(t *testing.T) {
 			t.Errorf("`licenses` output does not mention %q; run: make licenses", want)
 		}
 	}
+}
+
+// chatShapedServer stands up something that answers a webhook POST the way the
+// Chat API does, and returns a webhook URL for it.
+//
+// The response body is a copy of a real one. A fixture that does not match the
+// wire tests the fixture.
+func chatShapedServer(t *testing.T) string {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB","sender":{"name":"users/1","type":"BOT"}}`)
+	}))
+	t.Cleanup(server.Close)
+
+	return server.URL + "/v1/spaces/AAAATestSpace/messages?key=" + testKey + "&token=" + testToken
 }

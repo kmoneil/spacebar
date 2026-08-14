@@ -16,6 +16,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -55,8 +56,13 @@ func TestASendPostsWhereTheProfileSaysAndNowhereElse(t *testing.T) {
 	}
 }
 
-// TestASendCarriesItsQueryParameters, all four of them, under the names the API
-// uses.
+// TestASendCarriesItsQueryParameters, under the names the API uses.
+//
+// threadKey is deliberately not among them. The query parameter of that name is
+// marked deprecated in the API reference in favour of thread.thread_key, and
+// the webhook guide's own examples put it in the body, so SPEC.md §7.3 is out
+// of date rather than wrong about intent. TestAThreadKeyTravelsInTheBody holds
+// where it goes instead.
 func TestASendCarriesItsQueryParameters(t *testing.T) {
 	var got map[string]string
 	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
@@ -70,7 +76,7 @@ func TestASendCarriesItsQueryParameters(t *testing.T) {
 	if _, err := h.client.SendMessage(context.Background(), SendRequest{
 		Message:            Message{Text: "hello"},
 		ThreadKey:          "deploys",
-		MessageReplyOption: "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+		MessageReplyOption: ReplyOrFail,
 		MessageID:          "client-abc",
 		RequestID:          "req-1",
 	}); err != nil {
@@ -78,8 +84,7 @@ func TestASendCarriesItsQueryParameters(t *testing.T) {
 	}
 
 	for name, want := range map[string]string{
-		"threadKey":          "deploys",
-		"messageReplyOption": "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD",
+		"messageReplyOption": ReplyOrFail,
 		"messageId":          "client-abc",
 		"requestId":          "req-1",
 	} {
@@ -87,17 +92,156 @@ func TestASendCarriesItsQueryParameters(t *testing.T) {
 			t.Errorf("query parameter %s = %q, want %q", name, got[name], want)
 		}
 	}
+	if _, ok := got["threadKey"]; ok {
+		t.Errorf("threadKey was sent as a query parameter, which the API deprecated")
+	}
 
-	// An empty field is left out rather than sent empty. threadKey="" is not
-	// the same request as no threadKey at all.
+	// An empty field is left out rather than sent empty. A message with no
+	// thread key is not the same request as one with an empty thread key.
 	h2 := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := r.URL.Query()["threadKey"]; ok {
-			t.Error("an empty threadKey was sent as a parameter")
+		for _, name := range []string{"threadKey", "messageReplyOption", "messageId", "requestId"} {
+			if _, ok := r.URL.Query()[name]; ok {
+				t.Errorf("an empty %s was sent as a parameter", name)
+			}
 		}
 		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
 	})
 	if _, err := sendOne(h2); err != nil {
 		t.Fatalf("SendMessage: %v", err)
+	}
+}
+
+// TestAThreadKeyTravelsInTheBody, as message.thread.threadKey.
+func TestAThreadKeyTravelsInTheBody(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	})
+
+	if _, err := h.client.SendMessage(context.Background(), SendRequest{
+		Message:   Message{Text: "hello"},
+		ThreadKey: "deploys",
+	}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	var sent Message
+	h.mu.Lock()
+	body := h.bodies[0]
+	h.mu.Unlock()
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatalf("the request body is not JSON: %v\n%s", err, body)
+	}
+	if sent.Thread == nil || sent.Thread.ThreadKey != "deploys" {
+		t.Errorf("thread.threadKey did not reach the body: %s", body)
+	}
+}
+
+// TestAThreadKeyAloneStillThreads is the most important assertion in this file.
+//
+// The API's default, MESSAGE_REPLY_OPTION_UNSPECIFIED, is documented as "Starts
+// a new thread. Using this option ignores any thread ID or threadKey that's
+// included". So a caller who asks to group a message into a thread and says
+// nothing else gets a new thread every time, silently, with a 200 and no
+// indication that what they asked for did not happen.
+//
+// That is exactly the failure this tool exists not to have, so supplying a
+// thread key is read as a request to thread, and the option that threads is
+// what gets sent.
+func TestAThreadKeyAloneStillThreads(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		req       SendRequest
+		wantParam string
+	}{
+		{"a key and nothing else", SendRequest{ThreadKey: "deploys"}, ReplyFallbackToNewThread},
+		{"an explicit option wins", SendRequest{ThreadKey: "deploys", MessageReplyOption: ReplyOrFail}, ReplyOrFail},
+		{"no key, no option", SendRequest{}, ""},
+
+		// An option with no key is passed through rather than dropped. It is
+		// the caller's to get wrong, and silently removing it would be this
+		// package deciding what they meant.
+		{"an option with no key", SendRequest{MessageReplyOption: ReplyOrFail}, ReplyOrFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			var present bool
+			h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+				got = r.URL.Query().Get("messageReplyOption")
+				_, present = r.URL.Query()["messageReplyOption"]
+				_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+			})
+
+			tc.req.Message = Message{Text: "hello"}
+			if _, err := h.client.SendMessage(context.Background(), tc.req); err != nil {
+				t.Fatalf("SendMessage: %v", err)
+			}
+			if got != tc.wantParam {
+				t.Errorf("messageReplyOption = %q, want %q", got, tc.wantParam)
+			}
+			if tc.wantParam == "" && present {
+				t.Errorf("messageReplyOption was sent empty")
+			}
+		})
+	}
+}
+
+// TestAThreadKeyDoesNotDiscardAThreadName. A caller who set both has said two
+// things and neither is this package's to drop.
+func TestAThreadKeyDoesNotDiscardAThreadName(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	})
+
+	if _, err := h.client.SendMessage(context.Background(), SendRequest{
+		Message:   Message{Text: "hello", Thread: &Thread{Name: "spaces/AAAATestSpace/threads/CCC"}},
+		ThreadKey: "deploys",
+	}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	var sent Message
+	h.mu.Lock()
+	body := h.bodies[0]
+	h.mu.Unlock()
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatalf("the request body is not JSON: %v", err)
+	}
+	if sent.Thread == nil || sent.Thread.Name != "spaces/AAAATestSpace/threads/CCC" || sent.Thread.ThreadKey != "deploys" {
+		t.Errorf("the thread was overwritten rather than merged: %s", body)
+	}
+}
+
+// TestACardIsCarriedThroughUnchanged.
+//
+// A card is a deep tree with its own schema, so it is passed through as raw
+// JSON rather than modelled: every field of a struct written here would be a
+// guess, and a field this tool had not heard of would be silently dropped from
+// somebody's message.
+func TestACardIsCarriedThroughUnchanged(t *testing.T) {
+	card := `[{"cardId":"deploy","card":{"header":{"title":"Deployed"},"sections":[{"widgets":[{"textParagraph":{"text":"v1.2.3"}}]}]}}]`
+
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	})
+
+	var cards []json.RawMessage
+	if err := json.Unmarshal([]byte(card), &cards); err != nil {
+		t.Fatalf("the fixture is not JSON: %v", err)
+	}
+	if _, err := h.client.SendMessage(context.Background(), SendRequest{
+		Message: Message{CardsV2: cards},
+	}); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+
+	h.mu.Lock()
+	body := h.bodies[0]
+	h.mu.Unlock()
+	if !strings.Contains(body, `"cardsV2":`) {
+		t.Errorf("the card was not sent under cardsV2: %s", body)
+	}
+	if !strings.Contains(body, `"textParagraph"`) || !strings.Contains(body, `"v1.2.3"`) {
+		t.Errorf("a field this tool does not model was dropped: %s", body)
 	}
 }
 

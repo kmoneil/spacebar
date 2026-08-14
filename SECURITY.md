@@ -386,6 +386,13 @@ read. It is gated more tightly than the CLI, on purpose.
 - **Every write tool description ends with the confirmation requirement**, and
   every tool call is logged to stderr as one JSON line for auditability
   **(M5)**.
+- **A webhook posts to one space and there is no version of it that posts
+  anywhere else.** The space is derived from the URL rather than configured
+  beside it, so the two cannot disagree about where a message goes, and a target
+  naming a different space is exit 2 before any request.
+  `TestAnotherSpaceIsRefusedBeforeTheRequest`. Sending anyway would mean
+  somebody who typed the wrong target watched their message arrive in a space
+  full of people, with a success code saying it went where they asked.
 - **A capability the profile does not have is exit code 5, before any request.**
   A write-only webhook profile cannot read, and `spacebar tail` on one fails
   naming both the profile and the fix rather than sending anything (SPEC.md
@@ -417,6 +424,27 @@ read. It is gated more tightly than the CLI, on purpose.
   POST returns the same error as one that arrives before it.
   `TestAPostWithAMessageIDIsReplayed`, `TestA429IsRetriedEvenOnAPost`,
   `TestA403IsNotRetried`, and `TestSafeToReplay` hold the rest of the table.
+
+## Doing what was asked, and only that
+
+- **A thread key that would be silently ignored is not sent silently.** The
+  Chat API's default `messageReplyOption` is documented as "Starts a new thread.
+  Using this option ignores any thread ID or threadKey that's included", so a
+  caller who asks to group a message into a thread and says nothing else gets a
+  new thread every time, with a `200` and no indication that what they asked for
+  did not happen. Supplying a thread key is read as a request to thread, and the
+  option that threads is what gets sent.
+  `TestAThreadKeyAloneStillThreads`. This is in the security document rather
+  than only in the release notes for the same reason truncation is: the failure
+  is silent by nature, and a job that believes it is appending to one thread is
+  making a different decision from one that knows it is not.
+- **A verification message is never sent without being asked for.**
+  `spacebar profile set-webhook --verify` posts to a real space that other
+  people read, so it is off by default and its text is the caller's to choose.
+  `TestWithoutVerifyNothingIsPosted`. The credential is stored before the check
+  rather than after, so a space with Chat apps switched off costs somebody a
+  failed verification and not their configuration:
+  `TestAFailedVerifyStillLeavesTheProfileConfigured`.
 
 ## Truncation is a security property
 

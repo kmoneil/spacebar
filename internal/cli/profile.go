@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"context"
 	"io"
 	"os"
 	"strings"
@@ -22,9 +23,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kmoneil/spacebar/internal/auth"
+	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
+	"github.com/kmoneil/spacebar/internal/transport"
+	"github.com/kmoneil/spacebar/internal/transport/webhook"
 )
 
 // The profile command group is a departure from SPEC.md §10, which lists only
@@ -148,10 +152,26 @@ type webhookResult struct {
 	Reference string `json:"reference"`
 	Transport string `json:"transport"`
 	Default   bool   `json:"default"`
+
+	// Verified says a message was actually posted, and Space says where it
+	// went. Both are absent without --verify rather than reported as false: a
+	// caller has to be able to tell "it did not work" from "nobody checked".
+	Verified bool   `json:"verified,omitempty"`
+	Space    string `json:"space,omitempty"`
 }
 
+// defaultVerifyText is what --verify posts when the caller does not choose.
+//
+// It says what it is, because it arrives in a space full of people who did not
+// run the command and have no idea why a bot just spoke. A test message that
+// reads like a real one is a test message somebody replies to.
+const defaultVerifyText = "Test message from " + meta.AppName + ". This webhook is configured and working."
+
 func newProfileSetWebhookCmd(opts *Options) *cobra.Command {
-	return &cobra.Command{
+	var verify bool
+	var verifyText string
+
+	cmd := &cobra.Command{
 		Use:   "set-webhook NAME",
 		Short: "Give a profile an incoming webhook URL, from stdin",
 		Long: `Give a profile an incoming webhook URL, creating the profile if there is not one.
@@ -171,62 +191,149 @@ used. The configuration file gets a reference to it and never the value.
   pbpaste | ` + meta.AppName + ` profile set-webhook alerts`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name := args[0]
-			r := renderer(cmd, opts)
-
-			rawURL, err := readWebhookURL(cmd.InOrStdin(), r)
-			if err != nil {
-				return err
-			}
-
-			cfg, err := config.Load()
-			if err != nil {
-				return err
-			}
-			store, err := auth.New()
-			if err != nil {
-				return err
-			}
-
-			if err := store.SetWebhook(cfg, name, rawURL); err != nil {
-				r.Warnings(store.Warnings())
-				return err
-			}
-
-			// The first profile becomes the default. Somebody who has exactly
-			// one has no use for choosing it on every command, and the
-			// alternative is a setup that succeeds and then fails at the next
-			// step for a reason nobody explained.
-			madeDefault := cfg.DefaultProfile == ""
-			if madeDefault {
-				cfg.DefaultProfile = name
-			}
-			if err := cfg.Save(); err != nil {
-				r.Warnings(store.Warnings())
-				return err
-			}
-
-			// Printed before the result, and printed at all: this is the moment
-			// a credential lands on disk in plain text, and a warning lost here
-			// is the one that mattered most.
-			r.Warnings(store.Warnings())
-
-			result := webhookResult{
-				Name:      name,
-				Reference: auth.Ref(name, auth.WebhookSecret),
-				Transport: string(config.TransportWebhook),
-				Default:   madeDefault,
-			}
-			if madeDefault {
-				r.Note("%q is now the default profile.", name)
-			}
-			return r.Result(result, output.Fields{
-				{Label: "profile", Value: result.Name},
-				{Label: "transport", Value: result.Transport},
-				{Label: "credential", Value: result.Reference},
-			})
+			return runSetWebhook(cmd, opts, args[0], verifyOptions{on: verify, text: verifyText})
 		},
 	}
+
+	// Off by default, because it posts a real message into a real space that
+	// other people are reading, and a setup command that did that without being
+	// asked would be rude in a way somebody only finds out about afterwards.
+	//
+	// It is worth having because there is no other way to tell. A webhook has no
+	// endpoint that reports whether it works: the only way to find out is to
+	// post, so somebody who cannot tell a mistyped URL from an organizational
+	// unit with Chat apps switched off has no way to learn which they have.
+	cmd.Flags().BoolVar(&verify, "verify", false,
+		"post a message to the space to prove the webhook works")
+	cmd.Flags().StringVar(&verifyText, "verify-text", defaultVerifyText,
+		"what --verify posts")
+
+	return cmd
+}
+
+// verifyOptions is what --verify and --verify-text asked for.
+type verifyOptions struct {
+	on   bool
+	text string
+}
+
+// runSetWebhook stores the URL and, if asked, proves it works.
+//
+// Split out of the command because the command was over the complexity ceiling
+// with it inline, which is the gate doing its job: this is four steps that each
+// have a failure worth handling separately, not one operation.
+func runSetWebhook(cmd *cobra.Command, opts *Options, name string, verify verifyOptions) error {
+	r := renderer(cmd, opts)
+
+	rawURL, err := readWebhookURL(cmd.InOrStdin(), r)
+	if err != nil {
+		return err
+	}
+
+	result, err := storeWebhook(r, name, rawURL)
+	if err != nil {
+		return err
+	}
+	if result.Default {
+		r.Note("%q is now the default profile.", name)
+	}
+
+	fields := output.Fields{
+		{Label: "profile", Value: result.Name},
+		{Label: "transport", Value: result.Transport},
+		{Label: "credential", Value: result.Reference},
+	}
+
+	if verify.on {
+		space, err := verifySend(cmd.Context(), name, rawURL, verify.text, opts, r)
+		if err != nil {
+			return err
+		}
+		result.Verified, result.Space = true, space
+		fields = append(fields, output.Field{Label: "verified", Value: space})
+	}
+
+	return r.Result(result, fields)
+}
+
+// storeWebhook puts the credential where it belongs and records the reference.
+func storeWebhook(r *output.Renderer, name, rawURL string) (webhookResult, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return webhookResult{}, err
+	}
+	store, err := auth.New()
+	if err != nil {
+		return webhookResult{}, err
+	}
+
+	if err := store.SetWebhook(cfg, name, rawURL); err != nil {
+		r.Warnings(store.Warnings())
+		return webhookResult{}, err
+	}
+
+	// The first profile becomes the default. Somebody who has exactly one has
+	// no use for choosing it on every command, and the alternative is a setup
+	// that succeeds and then fails at the next step for a reason nobody
+	// explained.
+	madeDefault := cfg.DefaultProfile == ""
+	if madeDefault {
+		cfg.DefaultProfile = name
+	}
+	if err := cfg.Save(); err != nil {
+		r.Warnings(store.Warnings())
+		return webhookResult{}, err
+	}
+
+	// Printed before anything else: this is the moment a credential lands on
+	// disk in plain text, and a warning lost here is the one that mattered most.
+	r.Warnings(store.Warnings())
+
+	return webhookResult{
+		Name:      name,
+		Reference: auth.Ref(name, auth.WebhookSecret),
+		Transport: string(config.TransportWebhook),
+		Default:   madeDefault,
+	}, nil
+}
+
+// verifySend posts the verification message and returns the space it reached.
+//
+// It goes through the transport rather than through internal/chat, which is not
+// a preference: internal/lint refuses a Chat client anywhere but a transport,
+// so that a capability check cannot be bypassed by a command holding one of its
+// own. This command is the first caller of the webhook transport and gets the
+// same treatment as any other.
+func verifySend(ctx context.Context, profile, rawURL, text string, opts *Options, r *output.Renderer) (string, error) {
+	// The logger is passed only under --verbose, and nil is how the client is
+	// told not to bother formatting lines nobody asked for. Without this the
+	// flag would be accepted and do nothing, which is worse than not having it:
+	// somebody debugging a webhook would conclude no request was made.
+	var log chat.Logger
+	if opts.Verbose {
+		log = r
+	}
+
+	post, err := webhook.New(webhook.Options{
+		Profile: profile,
+		URL:     rawURL,
+		Timeout: opts.Timeout,
+		Log:     log,
+	})
+	if err != nil {
+		return "", err
+	}
+	if err := transport.Require(post, "profile set-webhook --verify", transport.CanSend); err != nil {
+		return "", err
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if _, err := post.Send(ctx, chat.SendRequest{Message: chat.Message{Text: text}}); err != nil {
+		return "", err
+	}
+	return post.Space(), nil
 }
 
 // maxWebhookURL bounds what is read from stdin.

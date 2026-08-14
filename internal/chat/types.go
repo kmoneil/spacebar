@@ -14,6 +14,8 @@
 
 package chat
 
+import "encoding/json"
+
 // The wire structs. They hold what the send path needs and what its response
 // carries, and nothing else: the rest of SPEC.md §7.3 arrives with the
 // milestones that call those endpoints, and a struct written now for an
@@ -52,6 +54,19 @@ type Message struct {
 	// ThreadReply is true when this message is a reply rather than the start of
 	// a thread.
 	ThreadReply bool `json:"threadReply,omitempty"`
+
+	// CardsV2 is carried through rather than modelled.
+	//
+	// A card is a deep tree of widgets with its own schema, and every field of
+	// it would be a guess written here and reviewed as though it were
+	// knowledge. The caller supplies the JSON, so the caller owns its shape,
+	// and this tool does not silently drop a field it had not heard of. Each
+	// element is a CardWithId: {"cardId": "...", "card": {...}}.
+	//
+	// Only a webhook can send one. A user-authenticated create is text-only,
+	// because a card requires app authentication, which is the counter-intuitive
+	// row of the capability matrix.
+	CardsV2 []json.RawMessage `json:"cardsV2,omitempty"`
 }
 
 // User is whoever or whatever sent a message.

@@ -37,7 +37,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -240,7 +239,7 @@ func parseBase(raw string) (*url.URL, error) {
 	if base.Scheme == "https" {
 		return base, nil
 	}
-	if base.Scheme == "http" && isLoopback(base.Hostname()) {
+	if base.Scheme == "http" && auth.IsLoopbackHost(base.Hostname()) {
 		return base, nil
 	}
 	return nil, clientErr("the base URL for this profile is %s, and a credential does not travel over anything but https",
@@ -252,13 +251,6 @@ func schemeOrNone(scheme string) string {
 		return "not a URL with a scheme"
 	}
 	return scheme
-}
-
-// isLoopback reports whether host is a loopback IP literal. A name is not
-// enough: a name is resolved by whatever the machine's resolver says.
-func isLoopback(host string) bool {
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // refuseRedirect stops the client following a 3xx anywhere.

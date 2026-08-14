@@ -1,0 +1,11 @@
+exit 0
+--- stdout
+{
+  "name": "alerts",
+  "reference": "keyring:spacebar/alerts/webhook",
+  "transport": "webhook",
+  "default": true,
+  "verified": true,
+  "space": "spaces/AAAATestSpace"
+}
+--- stderr

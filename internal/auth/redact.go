@@ -14,7 +14,10 @@
 
 package auth
 
-import "net/url"
+import (
+	"net"
+	"net/url"
+)
 
 // Redacted is what replaces a secret. A placeholder rather than an omission,
 // because a missing line reads as "nothing was sent", which is a different and
@@ -35,6 +38,22 @@ var secretParams = map[string]bool{
 	"refresh_token": true,
 	"client_secret": true,
 	"code":          true,
+}
+
+// IsLoopbackHost reports whether host is a loopback IP literal.
+//
+// It decides where the one exception to "a credential travels over https"
+// applies, and it is here rather than in either caller because both
+// internal/chat and this package need it and internal/chat already imports this
+// one. A second copy would be a second chance for the two to disagree about
+// what counts as local.
+//
+// An IP literal and not a name. "localhost" resolves through whatever the
+// machine's resolver says, so it is not necessarily loopback at all, which is
+// the same reason SPEC.md §15.4 refuses it for the OAuth listener.
+func IsLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // SecretParam reports whether a query parameter of this name carries a

@@ -120,7 +120,10 @@ func CheckWebhookURL(raw string) error {
 	}
 
 	switch {
-	case parsed.Scheme != "https":
+	// The loopback exception is the same one internal/chat applies when it
+	// builds a client, for the same reason: a test server is http on 127.0.0.1,
+	// and a rule that could not be tested would be a rule nobody had run.
+	case !isSafeScheme(parsed):
 		return webhookErr("a webhook URL is https, and that one is not.\n" +
 			"It carries a credential in its query string, so it cannot travel in the clear.")
 	case parsed.Host == "":
@@ -139,6 +142,19 @@ func CheckWebhookURL(raw string) error {
 		}
 	}
 	return nil
+}
+
+// isSafeScheme reports whether a credential may travel to this URL.
+//
+// https anywhere, and http only to a loopback IP literal. A name is not enough
+// for the exception: "localhost" resolves through whatever the machine's
+// resolver says, which is the same reason SPEC.md §15.4 refuses it for the
+// OAuth listener.
+func isSafeScheme(u *url.URL) bool {
+	if u.Scheme == "https" {
+		return true
+	}
+	return u.Scheme == "http" && IsLoopbackHost(u.Hostname())
 }
 
 // webhookErr is exit 2. Nothing was sent, and no retry changes the answer: the

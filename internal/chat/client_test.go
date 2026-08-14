@@ -410,7 +410,11 @@ func TestTheBaseQuerySurvivesARequestQuery(t *testing.T) {
 		t.Fatalf("SendMessage: %v", err)
 	}
 
-	for name, want := range map[string]string{"key": testKey, "token": testToken, "threadKey": "deploys"} {
+	for name, want := range map[string]string{
+		"key":                testKey,
+		"token":              testToken,
+		"messageReplyOption": ReplyFallbackToNewThread,
+	} {
 		if got.Get(name) != want {
 			t.Errorf("query parameter %s = %q, want %q", name, got.Get(name), want)
 		}
