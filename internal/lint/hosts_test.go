@@ -47,6 +47,10 @@ var parsedNeverDialled = map[string]string{
 	"www.googleapis.com": "the prefix of an OAuth scope. A scope is a URL-shaped identifier and is " +
 		"never fetched, by us or by Google.",
 
+	"accounts.google.com": "the OAuth authorization host, written out once so that a test can assert " +
+		"the endpoint constant has not drifted. Writing that assertion against the constant itself " +
+		"would prove nothing, and nothing dials the literal.",
+
 	"localhost": "a fixture in the test that asserts it is refused. SPEC.md §15.4 will not accept the " +
 		"name for a loopback address, because it resolves through whatever the machine's resolver " +
 		"says, and the test exists to prove the refusal.",

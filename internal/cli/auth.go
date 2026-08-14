@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ keyring, which says so every time it is used.`,
 	}
 
 	cmd.AddCommand(
+		newAuthSetupCmd(opts),
 		newAuthLoginCmd(opts),
 		newAuthStatusCmd(opts),
 		newAuthLogoutCmd(opts),
@@ -68,7 +70,9 @@ type loginResult struct {
 }
 
 func newAuthLoginCmd(opts *Options) *cobra.Command {
-	return &cobra.Command{
+	var sendOnly bool
+
+	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authorize a profile through a browser",
 		Long: `Authorize a profile through a browser.
@@ -83,12 +87,22 @@ container, the URL is printed for you to open yourself. The flow waits three
 minutes for an answer and then gives up, changing nothing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runAuthLogin(cmd, opts)
+			return runAuthLogin(cmd, opts, sendOnly)
 		},
 	}
+
+	// A real supported mode rather than a curiosity, per SPEC.md §6.4. A
+	// narrower scope materially improves the odds that an administrator
+	// approves the application at all, and somebody who only needs to post
+	// alerts should not have to ask for permission to read everything in every
+	// space they are a member of.
+	cmd.Flags().BoolVar(&sendOnly, "send-only", false,
+		"ask for permission to post and nothing else")
+
+	return cmd
 }
 
-func runAuthLogin(cmd *cobra.Command, opts *Options) error {
+func runAuthLogin(cmd *cobra.Command, opts *Options, sendOnly bool) error {
 	r := renderer(cmd, opts)
 
 	cfg, err := config.Load()
@@ -117,11 +131,10 @@ func runAuthLogin(cmd *cobra.Command, opts *Options) error {
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 
-		// The narrow set, per SPEC.md §6.4. A blanket scope materially reduces
-		// the odds of an administrator approving the application at all, which
-		// for the people this tool is for is the difference between working and
-		// not. Choosing a narrower one still is what --send-only will be.
-		Scopes:     []string{auth.ScopeMessages, auth.ScopeSpacesRO},
+		// The narrow set, per SPEC.md §6.4. A blanket scope is never requested,
+		// and --send-only narrows it further to the one permission that can
+		// still post.
+		Scopes:     scopesFor(sendOnly),
 		Report:     r,
 		HTTPClient: chat.TokenHTTPClient(opts.Timeout),
 	}
@@ -376,6 +389,14 @@ func noClientErr() error {
 		config.Env("CLIENT_ID"), config.Env("CLIENT_SECRET"))
 }
 
+// scopesFor is what this authorization will ask permission for.
+func scopesFor(sendOnly bool) []string {
+	if sendOnly {
+		return auth.SendOnlyScopes
+	}
+	return auth.DefaultScopes
+}
+
 func joinScopes(scopes []string) string {
 	short := make([]string, 0, len(scopes))
 	for _, scope := range scopes {
@@ -394,4 +415,233 @@ func yesNo(ok bool) string {
 
 func formatDays(days float64) string {
 	return strconv.FormatFloat(days, 'f', 1, 64)
+}
+
+// newAuthSetupCmd walks somebody through creating their own OAuth client.
+//
+// The shape of this command is the answer to the question the card left open:
+// what does setup do when it cannot open a browser, or the caller is on a
+// remote shell. The answer is that it must be fully useful in exactly that
+// case, because that is not an edge case here. The people who need their own
+// OAuth client are the ones whose organization blocks third-party
+// applications, and they are disproportionately on managed laptops, jump hosts
+// and CI runners.
+//
+// So it is not a wizard. It prompts for nothing, blocks on nothing, and needs
+// no terminal: it prints what to do and then accepts the file the console gives
+// you. That also happens to be the only honest design, because nothing here can
+// create an OAuth client for you. A desktop client is made in the Cloud console
+// and there is no API and no gcloud command for it, which was checked rather
+// than assumed.
+func newAuthSetupCmd(opts *Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Print how to create your own OAuth client, and store one",
+		Long: `Print how to create your own OAuth client, and store one.
+
+Nothing here creates anything for you: a desktop OAuth client is made in the
+Google Cloud console, and there is no API for it. What this does is tell you
+exactly what to click, and then take the JSON the console gives you.
+
+  ` + meta.AppName + ` auth setup                          # print the walkthrough
+  ` + meta.AppName + ` auth setup < client_secret.json     # store what the console downloaded
+
+The file is read from stdin and never from an argument, because it holds the
+client secret and an argument lands in the shell history and in the process
+list. Only the identifier and the secret are read out of it; the endpoints in
+it are ignored, because a file that could redirect the consent screen would be
+a file that could collect your authorization.
+
+See docs/ADMIN.md for the part an administrator has to do.`,
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runAuthSetup(cmd, opts)
+		},
+	}
+}
+
+func runAuthSetup(cmd *cobra.Command, opts *Options) error {
+	r := renderer(cmd, opts)
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	store, err := auth.New()
+	if err != nil {
+		return err
+	}
+
+	body, err := clientFileFrom(cmd.InOrStdin(), r.IsInteractive())
+	if err != nil {
+		return err
+	}
+
+	// Printing the walkthrough needs no profile, and demanding one would refuse
+	// the exact invocation somebody types when they do not yet know what any of
+	// this is: `auth setup` and nothing else. Storing a client does need one,
+	// because it has to be filed against something.
+	if len(body) == 0 {
+		name := opts.Profile
+		if name == "" {
+			name = cfg.DefaultProfile
+		}
+		state, err := store.Inspect(name, cfg.Profiles[name])
+		r.Warnings(store.Warnings())
+		if err != nil {
+			return err
+		}
+		return printWalkthrough(r, state)
+	}
+
+	name, err := loginProfileName(cfg, opts.Profile)
+	if err != nil {
+		return err
+	}
+	client, err := auth.ParseClient(body)
+	if err != nil {
+		return err
+	}
+	if opts.DryRun {
+		r.Note("nothing was stored.")
+		return reportClient(r, name, client, true)
+	}
+
+	if err := store.SaveClient(cfg, name, client); err != nil {
+		r.Warnings(store.Warnings())
+		return err
+	}
+	if err := cfg.Save(); err != nil {
+		r.Warnings(store.Warnings())
+		return err
+	}
+	r.Warnings(store.Warnings())
+
+	r.Note("now authorize it: %s auth login --profile %s", meta.AppName, name)
+	return reportClient(r, name, client, false)
+}
+
+// maxClientFile bounds what is read from stdin. The console's file is under a
+// kilobyte.
+const maxClientFile = 64 << 10
+
+// clientFileFrom reads the console's file, or reports that there is none.
+//
+// The interactive case returns nothing without touching the reader, and that is
+// the difference between this command and every other one here that takes a
+// credential. Found by running it: `auth setup` with no redirection blocked on
+// stdin forever, so the command whose whole job is to print instructions showed
+// a cursor and nothing else to somebody who typed it because they did not know
+// what to do.
+//
+// `profile set-webhook` and `send -` do block at a terminal and are right to.
+// Receiving a value is the whole of what they do, and both say so before they
+// wait. This one's default is to print.
+func clientFileFrom(in io.Reader, interactive bool) ([]byte, error) {
+	if interactive {
+		return nil, nil
+	}
+	return readClientFile(in)
+}
+
+func readClientFile(in io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(in, maxClientFile+1))
+	if err != nil {
+		return nil, output.Usagef("could not read the client file: %v", err)
+	}
+	if len(body) > maxClientFile {
+		return nil, output.Usagef("what arrived on stdin is over %d bytes, which no client file is.", maxClientFile)
+	}
+	return []byte(strings.TrimSpace(string(body))), nil
+}
+
+func reportClient(r *output.Renderer, name string, client *auth.Client, dryRun bool) error {
+	fields := output.Fields{
+		{Label: "profile", Value: name},
+		{Label: "client-id", Value: client.ID},
+	}
+	if client.Project != "" {
+		fields = append(fields, output.Field{Label: "project", Value: client.Project})
+	}
+	if dryRun {
+		fields = append(fields, output.Field{Label: "dry-run", Value: "nothing was stored"})
+	}
+
+	return r.Result(struct {
+		Profile  string `json:"profile"`
+		ClientID string `json:"client_id"`
+		Project  string `json:"project,omitempty"`
+		DryRun   bool   `json:"dry_run,omitempty"`
+	}{Profile: name, ClientID: client.ID, Project: client.Project, DryRun: dryRun}, fields)
+}
+
+// printWalkthrough is the instructional half.
+//
+// It goes to stderr, all of it, because it is not a result: a caller running
+// this in a script is not parsing prose, and stdout carries data or nothing.
+// The exit code is 0 because printing instructions is what was asked for.
+func printWalkthrough(r *output.Renderer, state auth.SetupState) error {
+	if state.HasClient {
+		source := "this machine's configuration"
+		if state.FromBuild {
+			source = "this build"
+		}
+		r.Note("profile %q already has an OAuth client, from %s: %s",
+			state.Profile, source, state.ClientID)
+		r.Note("")
+	}
+
+	for _, line := range walkthrough(state.Profile) {
+		r.Note("%s", line)
+	}
+	return nil
+}
+
+// walkthrough is the text, kept as data so that a test can assert on it and so
+// that the wrapping is decided here rather than by a terminal.
+//
+// It describes the console in words rather than by screenshot, deliberately.
+// A screenshot is wrong the first time the interface is refreshed and nobody
+// can tell how long it has been wrong; a description of what to look for
+// degrades gracefully.
+func walkthrough(profile string) []string {
+	// A placeholder rather than a guess, when nothing has been named yet. The
+	// commands at the end are meant to be pasted, and one naming a profile the
+	// reader did not choose is one they have to notice and edit.
+	if profile == "" {
+		profile = "NAME"
+	}
+
+	return []string{
+		"Creating your own OAuth client, which takes about five minutes.",
+		"",
+		"Why: an organization that blocks third-party applications will block this one,",
+		"and a client you create in your own Cloud project is not third-party to you. An",
+		"Internal user type also avoids the seven-day refresh-token expiry that an",
+		"External application in testing has.",
+		"",
+		"1. Open the Google Cloud console and choose or create a project.",
+		"",
+		"2. Enable the Google Chat API for it, under APIs & Services.",
+		"   With the gcloud command that is: gcloud services enable chat.googleapis.com",
+		"",
+		"3. Configure the OAuth consent screen, under APIs & Services.",
+		"   Choose Internal if your organization offers it. That is the option that",
+		"   avoids both third-party app access control and the seven-day expiry.",
+		"   External works and puts you in testing mode, where authorizations last",
+		"   seven days and you must list yourself as a test user.",
+		"",
+		"4. Create the client, under APIs & Services then Credentials.",
+		"   Create credentials, OAuth client ID, and choose Desktop app as the type.",
+		"   Desktop is the type that may redirect to 127.0.0.1 on a port chosen when",
+		"   the command runs, which is how the authorization comes back here.",
+		"",
+		"5. Download the JSON and give it to this command:",
+		"     " + meta.AppName + " auth setup --profile " + profile + " < client_secret.json",
+		"     " + meta.AppName + " auth login --profile " + profile,
+		"",
+		"If your organization also blocks you from creating a Cloud project, none of",
+		"this will work and an incoming webhook is the path that needs nothing from an",
+		"administrator: " + meta.AppName + " profile set-webhook NAME",
+	}
 }

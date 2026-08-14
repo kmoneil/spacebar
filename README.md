@@ -222,6 +222,41 @@ That transport arrives in Milestone 3. Until then a webhook is the only way to
 send, which is the point: it is the one that needs nothing from an
 administrator.
 
+## Authorize as yourself
+
+Reading needs an account rather than a webhook, and an account needs an OAuth
+client. If your organization blocks third-party applications, and many do, the
+answer is a client you create in your own Cloud project, which is not
+third-party to you. The tool prints the walkthrough with no browser and no
+network:
+
+```sh
+spacebar auth setup                                        # what to click
+spacebar auth setup --profile work < client_secret.json    # store what you downloaded
+spacebar auth login --profile work                         # consent in a browser
+spacebar auth login --profile work --send-only             # ask to post and nothing else
+spacebar auth status                                       # what it may do, and for how long
+spacebar auth logout                                       # forget it locally
+```
+
+The client secret is read from stdin, never from an argument. Only the
+identifier and the secret are taken out of that file: its endpoints are ignored,
+because a file that could redirect the consent screen would be a file that could
+collect your authorization.
+
+**Scopes are requested narrowly.** `--send-only` asks for
+`chat.messages.create` and nothing else, because a narrower request is one an
+administrator is more likely to approve, and that is often the difference
+between the tool working and not.
+
+**One warning you may see.** An OAuth client that has not been verified by
+Google is in testing mode, where authorizations are revoked seven days after
+consent. Nothing in the API says whether yours is, so the warning is worded as a
+possibility, and it stops for good once a refresh proves the limit does not
+apply to you. A client with an Internal user type is not subject to it at all.
+
+[docs/ADMIN.md](docs/ADMIN.md) is the page to hand an administrator.
+
 ## Development
 
 ```sh

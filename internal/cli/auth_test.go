@@ -16,6 +16,7 @@ package cli
 
 import (
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -302,5 +303,245 @@ func TestNoTokenReachesTheOutputOfAnyAuthCommand(t *testing.T) {
 				t.Errorf("%v printed a credential:\n%s", args, both)
 			}
 		}
+	}
+}
+
+// consoleFile is what the Cloud console downloads for a desktop client, with
+// endpoints that point somewhere they must never be followed to.
+const consoleFile = `{"installed":{"client_id":"1234-abc.apps.googleusercontent.example",` +
+	`"project_id":"a-project","auth_uri":"https://evil.invalid/steal",` +
+	`"token_uri":"https://evil.invalid/collect","client_secret":"GOCSPX-notARealSecret"}}`
+
+// TestSetupWithNothingOnStdinPrintsTheWalkthrough.
+//
+// This is the shape the card's third recon question decided. Setup cannot be a
+// wizard: the people who need their own OAuth client are the ones whose
+// organization blocks third-party applications, and they are on managed
+// laptops, jump hosts and CI runners. So it prompts for nothing, blocks on
+// nothing, needs no terminal, and is fully useful with no browser.
+func TestSetupWithNothingOnStdinPrintsTheWalkthrough(t *testing.T) {
+	isolate(t)
+
+	got := runCLIIn(t, "", "auth", "setup", "--profile", "work")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	// Instructions are not a result. A caller in a script is not parsing prose.
+	if got.stdout != "" {
+		t.Errorf("the walkthrough reached stdout:\n%s", got.stdout)
+	}
+	for _, want := range []string{
+		"Desktop app",         // the type that matters and is easy to get wrong.
+		"Internal",            // the user type that avoids both limits.
+		"chat.googleapis.com", // the API to enable.
+		"seven-day",           // why Internal matters.
+		"client_secret.json",  // what to do next.
+		"profile set-webhook", // the way out for somebody with no Cloud project at all.
+	} {
+		if !strings.Contains(got.stderr, want) {
+			t.Errorf("the walkthrough does not mention %q:\n%s", want, got.stderr)
+		}
+	}
+}
+
+// TestSetupStoresTheConsoleFileAndIgnoresItsEndpoints.
+//
+// The ignoring is the security half. A client file carries auth_uri and
+// token_uri, and a doctored one would send the consent screen and the client
+// secret somewhere else if those were honoured.
+func TestSetupStoresTheConsoleFileAndIgnoresItsEndpoints(t *testing.T) {
+	isolate(t)
+
+	got := runCLIIn(t, consoleFile, "auth", "setup", "--profile", "work")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+	if strings.Contains(got.stdout+got.stderr, "GOCSPX-notARealSecret") {
+		t.Errorf("the client secret was printed:\n%s%s", got.stdout, got.stderr)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	profile := cfg.Profiles["work"]
+	if profile.ClientID != "1234-abc.apps.googleusercontent.example" {
+		t.Errorf("client_id = %q", profile.ClientID)
+	}
+	if !strings.HasPrefix(profile.ClientSecretRef, config.RefScheme) {
+		t.Errorf("client_secret_ref = %q, and a secret never lands in the file", profile.ClientSecretRef)
+	}
+
+	// A later authorization uses the constant endpoint, not the file's.
+	next := runCLIIn(t, "", "--json", "--dry-run", "auth", "login", "--profile", "work")
+	if next.exit != output.ExitOK {
+		t.Fatalf("dry run exit %d\n%s", next.exit, next.stderr)
+	}
+	if strings.Contains(next.stdout, "evil.invalid") {
+		t.Errorf("a doctored endpoint reached the flow:\n%s", next.stdout)
+	}
+	if !strings.Contains(next.stdout, auth.AuthEndpoint) {
+		t.Errorf("the constant endpoint is not what would be used:\n%s", next.stdout)
+	}
+}
+
+// TestSetupDryRunStoresNothing.
+func TestSetupDryRunStoresNothing(t *testing.T) {
+	isolate(t)
+
+	got := runCLIIn(t, consoleFile, "--dry-run", "auth", "setup", "--profile", "work")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if _, ok := cfg.Profiles["work"]; ok {
+		t.Error("a dry run stored a client")
+	}
+}
+
+// TestSendOnlyAsksForExactlyOneScope, which is the card's own claim. A mode
+// that quietly asked for more would defeat the point of having it: the reason
+// it exists is that a narrower scope materially improves the odds of an
+// administrator approving the application at all.
+func TestSendOnlyAsksForExactlyOneScope(t *testing.T) {
+	isolate(t)
+	t.Setenv(config.Env("CLIENT_ID"), "1234.apps.googleusercontent.example")
+
+	got := runCLIIn(t, "", "--json", "--dry-run", "auth", "login", "--profile", "work", "--send-only")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+
+	var result struct {
+		Scopes []string `json:"scopes"`
+	}
+	if err := json.Unmarshal([]byte(got.stdout), &result); err != nil {
+		t.Fatalf("not JSON: %v\n%s", err, got.stdout)
+	}
+	if len(result.Scopes) != 1 || result.Scopes[0] != auth.ScopeSendOnly {
+		t.Errorf("--send-only asked for %v, want exactly the create scope", result.Scopes)
+	}
+
+	// And without it, the default set, which is still narrow.
+	got = runCLIIn(t, "", "--json", "--dry-run", "auth", "login", "--profile", "work")
+	if err := json.Unmarshal([]byte(got.stdout), &result); err != nil {
+		t.Fatalf("not JSON: %v", err)
+	}
+	for _, scope := range result.Scopes {
+		if scope == auth.ScopeSpaces {
+			t.Errorf("the default asks for %q, which nothing uses yet", scope)
+		}
+	}
+}
+
+// TestSetupSaysWhatIsAlreadyConfigured, so that running it twice is informative
+// rather than confusing.
+func TestSetupSaysWhatIsAlreadyConfigured(t *testing.T) {
+	isolate(t)
+
+	if got := runCLIIn(t, consoleFile, "auth", "setup", "--profile", "work"); got.exit != output.ExitOK {
+		t.Fatalf("setup: exit %d\n%s", got.exit, got.stderr)
+	}
+
+	got := runCLIIn(t, "", "auth", "setup", "--profile", "work")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit %d\n%s", got.exit, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "already has an OAuth client") {
+		t.Errorf("a second run did not say one was configured:\n%s", got.stderr)
+	}
+	if !strings.Contains(got.stderr, "1234-abc.apps.googleusercontent.example") {
+		t.Errorf("it did not say which:\n%s", got.stderr)
+	}
+}
+
+// TestSetupRefusesAWebClientWithTheReason, because picking the wrong
+// application type in the console is an easy mistake whose file parses fine.
+func TestSetupRefusesAWebClientWithTheReason(t *testing.T) {
+	isolate(t)
+
+	web := strings.Replace(consoleFile, `"installed"`, `"web"`, 1)
+	got := runCLIIn(t, web, "auth", "setup", "--profile", "work")
+	if got.exit != output.ExitUsage {
+		t.Fatalf("exit = %d, want %d", got.exit, output.ExitUsage)
+	}
+	if !strings.Contains(got.stderr, "Desktop app") {
+		t.Errorf("the refusal does not say which type to pick:\n%s", got.stderr)
+	}
+}
+
+// TestSetupAtATerminalDoesNotWaitForInput.
+//
+// Found by running the command rather than by a test failing, which is the
+// point of running it. `auth setup` with no redirection blocked on stdin
+// forever: the command whose whole job is to print instructions showed a cursor
+// and nothing else, to somebody who typed it because they did not know what to
+// do.
+//
+// The distinction is worth stating, because two other commands here do block
+// and are right to. `profile set-webhook` and `send -` exist to receive a
+// value, so waiting is what was asked for and both say so before they wait.
+// This one's default is to print, so waiting is an answer to a question nobody
+// asked.
+func TestSetupAtATerminalDoesNotWaitForInput(t *testing.T) {
+	// A reader that fails the test if it is touched. Reading it is the bug,
+	// whatever comes back.
+	body, err := clientFileFrom(stdinThatMustNotBeRead{t}, true)
+	if err != nil {
+		t.Fatalf("clientFileFrom: %v", err)
+	}
+	if body != nil {
+		t.Errorf("something was read at a terminal: %q", body)
+	}
+
+	// Piped in, it reads, because that is how the file arrives.
+	body, err = clientFileFrom(strings.NewReader(consoleFile), false)
+	if err != nil {
+		t.Fatalf("clientFileFrom: %v", err)
+	}
+	if len(body) == 0 {
+		t.Error("nothing was read from a pipe")
+	}
+}
+
+type stdinThatMustNotBeRead struct{ t *testing.T }
+
+func (s stdinThatMustNotBeRead) Read([]byte) (int, error) {
+	s.t.Error("auth setup read stdin at a terminal, which blocks until the user gives up")
+	return 0, io.EOF
+}
+
+// TestTheWalkthroughNeedsNoProfile.
+//
+// `spacebar auth setup` and nothing else is what somebody types when they do
+// not yet know what any of this is, and demanding a profile name would refuse
+// exactly that. Storing a client does need one, because it has to be filed
+// against something. Found by running the command with no arguments, which
+// failed at exit 2.
+func TestTheWalkthroughNeedsNoProfile(t *testing.T) {
+	isolate(t)
+
+	got := runCLIIn(t, "", "auth", "setup")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit = %d, want 0\n%s", got.exit, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "Desktop app") {
+		t.Errorf("the walkthrough did not print:\n%s", got.stderr)
+	}
+	// The commands at the end are meant to be pasted, so an unnamed profile
+	// reads as a placeholder rather than as a guess the reader has to notice.
+	if !strings.Contains(got.stderr, "--profile NAME") {
+		t.Errorf("the walkthrough named a profile nobody chose:\n%s", got.stderr)
+	}
+
+	// Storing one still needs a name.
+	stored := runCLIIn(t, consoleFile, "auth", "setup")
+	if stored.exit != output.ExitUsage {
+		t.Errorf("storing a client with no profile exited %d, want %d", stored.exit, output.ExitUsage)
 	}
 }

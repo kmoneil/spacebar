@@ -81,6 +81,7 @@ var readOnlyCommands = map[string]string{
 	// Google's end and on this machine, so a dry run of it opens no browser,
 	// binds no listener, and stores nothing.
 	// TestADryRunOfLoginConsentsToNothing holds that separately.
+	"spacebar auth setup":  "prints instructions and stores a client locally, reaching no network at all",
 	"spacebar auth login":  "authorizes this machine and puts nothing in a space",
 	"spacebar auth status": "reads the stored token and deliberately not the network",
 	"spacebar auth logout": "deletes a local token, and does not tell Google to forget anything",
