@@ -357,7 +357,18 @@ read. It is gated more tightly than the CLI, on purpose.
 - **A capability the profile does not have is exit code 5, before any request.**
   A write-only webhook profile cannot read, and `spacebar tail` on one fails
   naming both the profile and the fix rather than sending anything (SPEC.md
-  §8.2). The code is `output.ExitUnsupported` today.
+  §8.2). `TestARefusalMakesNoNetworkCall` counts requests rather than reading
+  the error, because a refusal that arrives after the POST returns the same
+  exit code and the same message as one that arrives before it, and the
+  difference between them is a message somebody's colleagues can see.
+
+  The check is on the path to the network rather than beside it. Only
+  `internal/chat` may build a request, only a transport may build a client, and
+  a transport refuses before it reaches its own client, so a command cannot
+  bypass the check by forgetting to ask for it.
+  `TestOnlyATransportBuildsAChatClient` holds the middle step, which is the one
+  that is otherwise only a convention: `internal/cli` may import
+  `internal/chat`, and nothing else would stop it sending directly.
 - **Confirmation that cannot be asked for is refused, not skipped.** Exit code
   7, `output.ExitRefused`.
 - **A send is never replayed after an upstream error.** A `POST` that received

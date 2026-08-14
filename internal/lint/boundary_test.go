@@ -199,6 +199,67 @@ func TestOnlyChatImportsNetHTTP(t *testing.T) {
 	}
 }
 
+// clientOwner is the one package tree that may build a Chat client.
+const clientOwner = "internal/transport"
+
+// chatPackage is the import path the client constructor lives behind.
+const chatPackage = "github.com/kmoneil/spacebar/internal/chat"
+
+// TestOnlyATransportBuildsAChatClient is what turns the capability rule from a
+// convention into a structure.
+//
+// A command that needs a capability the profile does not have must fail before
+// the network call, and the way that is guaranteed is that a transport refuses
+// from the inside: it checks its own capabilities before it reaches its client,
+// so no command can bypass the check by forgetting to ask. That argument has
+// one hole, which is a command holding a client of its own. internal/cli may
+// import internal/chat, and does, for a timeout constant; nothing stops it
+// calling chat.New and sending directly, and a send made that way is subject to
+// no capability check at all.
+//
+// So the constructor is the boundary rather than the import. A package that
+// wants to reach Chat goes through a transport, and the transport is where the
+// refusal lives.
+//
+// Test files are exempt. internal/chat's own tests build clients constantly,
+// and that is the package being tested rather than a way around it.
+func TestOnlyATransportBuildsAChatClient(t *testing.T) {
+	fset, files := repoSource(t)
+
+	for _, f := range files {
+		if f.test || f.dir == clientOwner || strings.HasPrefix(f.dir, clientOwner+"/") {
+			continue
+		}
+		if f.dir == httpOwner || strings.HasPrefix(f.dir, httpOwner+"/") {
+			continue
+		}
+		names := importPaths(t, f)
+
+		ast.Inspect(f.syn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "New" {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || names[pkg.Name] != chatPackage {
+				return true
+			}
+
+			t.Errorf("%s:%d builds a Chat client, and only %s may.\n"+
+				"A capability the profile does not have has to fail before the network call, and what "+
+				"guarantees that is a transport refusing before it reaches its client. A client held "+
+				"anywhere else is a send that no capability check saw.\n"+
+				"Go through a transport.",
+				f.rel, fset.Position(call.Pos()).Line, clientOwner)
+			return true
+		})
+	}
+}
+
 // streamOwner is the one package that may name the streams of the process it is
 // running in.
 const streamOwner = "internal/output"

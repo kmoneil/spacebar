@@ -44,6 +44,22 @@ user OAuth does everything but requires a client the org will allow. A command
 that needs a capability the current profile does not have fails _before_ the
 network call, with an exit code that says so and a message naming the fix.
 
+What each one can do:
+
+|                      | webhook                | user OAuth                     |
+| -------------------- | ---------------------- | ------------------------------ |
+| Send text            | yes                    | yes                            |
+| Send cards           | yes                    | **no**, a user send is text-only |
+| Read, list, search   | no                     | yes                            |
+| Edit, delete, react  | no                     | yes                            |
+| Threading            | yes, by `threadKey`    | yes                            |
+| Upload an attachment | no                     | yes                            |
+| Appears as           | a bot                  | you                            |
+
+The cards row is not a typo. A card requires app authentication, and a webhook
+*is* an app; a user-authenticated send is you talking, and that is text only.
+It is the one thing the write-only transport can do and the full one cannot.
+
 **Narrow scopes, and bring-your-own OAuth client as a first-class path.**
 Narrower scopes materially improve the odds of admin approval, so
 `auth login --send-only` is a real mode. An Internal-type client in the org's
