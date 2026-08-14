@@ -124,11 +124,49 @@ func (r *Renderer) Warnings(warnings []string) {
 	}
 }
 
+// Logf writes one diagnostic line to stderr: a request, a response, a retry.
+//
+// This is the sink for --verbose. Whether anything reaches it is the caller's
+// decision, not this method's: internal/chat takes a logger and does nothing
+// when it is nil, so a run without --verbose costs nothing rather than
+// formatting lines that get thrown away.
+//
+// --quiet wins when both are given. The two flags contradict each other, one of
+// them has to lose, and the one asking for less output is the safer loser: a
+// pipeline that set --quiet did so because something downstream is reading.
+//
+// Sanitized like every other line here, because a log line carries values from
+// the far end. A response header is chosen by whoever runs the server, and a
+// terminal is a program that interprets bytes.
+func (r *Renderer) Logf(format string, a ...any) {
+	if r.opts.Quiet {
+		return
+	}
+	message := Sanitize(fmt.Sprintf(format, a...))
+
+	if r.opts.JSON {
+		_ = r.encode(r.errw, logEnvelope{Log: logBody{Message: message}}, false)
+		return
+	}
+
+	// Discarded for the reason Warn discards it: a caller cannot act on being
+	// unable to read a diagnostic, and the command itself has not failed.
+	_, _ = fmt.Fprintln(r.errw, r.paint(ansiDim, message))
+}
+
 type warningEnvelope struct {
 	Warning warningBody `json:"warning"`
 }
 
 type warningBody struct {
+	Message string `json:"message"`
+}
+
+type logEnvelope struct {
+	Log logBody `json:"log"`
+}
+
+type logBody struct {
 	Message string `json:"message"`
 }
 

@@ -37,6 +37,16 @@ var secretParams = map[string]bool{
 	"code":          true,
 }
 
+// SecretParam reports whether a query parameter of this name carries a
+// credential.
+//
+// Exported so that the one list has one reader more: internal/chat refuses to
+// let a request set any of these, because a caller that could set key or token
+// could point an otherwise correct request at a credential of its own choosing.
+// A second copy of the list somewhere else would be a second chance for the two
+// to disagree, and the one that disagrees quietly is the one that leaks.
+func SecretParam(name string) bool { return secretParams[name] }
+
 // RedactURL returns raw with every credential-bearing query parameter replaced.
 //
 // The path survives, because it is the part being checked: an operator reading

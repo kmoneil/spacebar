@@ -193,12 +193,47 @@ command line whatever the code behind it does.
   that space. It is redacted, stored, and refused on the command line exactly
   as a token is. Treating it as an ordinary URL (logging it, printing it in a
   dry run, putting it in an error message) is the most likely way this tool
-  leaks a credential, because it does not look like one **(M2)**.
+  leaks a credential, because it does not look like one.
+  `TestVerboseOutputCarriesNoCredential`,
+  `TestATransportFailureDoesNotQuoteTheURL`,
+  `TestAnErrorMessageFromTheServerIsScrubbed`,
+  `TestAMalformedBaseIsNotQuotedBack`. Dry-run output is `(M2)`, owned by the
+  card that adds the command that has one.
+
+  The failure this is arranged around is not hypothetical.
+  `net/http` wraps every failure in a `*url.Error` whose `Error` method quotes
+  the URL it failed on, query string included, so the default rendering of
+  "the server is down" publishes the credential for the space. It is redacted
+  where the failure is built, and struck out again by a second pass that knows
+  the profile's own secret values by sight, because the first pass can only
+  redact what somebody anticipated the shape of.
 - **Redaction happens where the request is built, not where it is printed**
   (SPEC.md §15.1). No present or future formatter is ever handed a token,
-  including at `--verbose`, and including in `--dry-run` output, which prints
-  the `Authorization` header as `REDACTED` rather than omitting the line
-  **(M2)**.
+  including at `--verbose`, where the `Authorization` header prints as
+  `REDACTED` rather than being omitted: a missing line says a credential was
+  not sent, which is a different answer to the question somebody reading a log
+  is asking. `TestVerboseOutputCarriesNoCredential`. `--dry-run` output is
+  **(M2)**, owned by the card that adds it.
+- **A credential never travels in the clear.** A base URL that is not `https`
+  is refused when the client is built, before anything is sent. The one
+  exception is a loopback IP literal, which is what a test server is; the name
+  `localhost` is not accepted for it, because a name is resolved by whatever
+  the machine's resolver says. `TestAPlaintextBaseIsRefused`.
+- **A redirect is never followed.** `net/http` strips the `Authorization`
+  header across a cross-origin redirect, which protects a bearer token and does
+  nothing at all for a webhook credential, because that one is in the query
+  string and travels with the URL. So no 3xx is followed anywhere: the Chat API
+  does not use them, and one that arrives is reported as the failure it is.
+  `TestARedirectIsNotFollowed`.
+- **A request path is relative, always**, and is joined onto the base rather
+  than substituted for it. An absolute path, a scheme-relative one, or a walk
+  up through `..` in a value the far end chose would move the request to
+  another host and take the credential with it. Refused by a check on the path
+  and again by a check on the built URL, because a parser that accepts what it
+  should not is a bug with a long history. `TestAPathCannotLeaveTheBase`,
+  `TestSameOriginIsCheckedAfterTheJoin`, `TestASpaceCannotRedirectTheRequest`,
+  and `FuzzAPathStaysOnTheBase`, which states it as a property rather than as
+  the list of cases somebody thought of.
 - **Nothing ever blocks on input.** A command that would read from a terminal
   when stdin is not one refuses and exits `7` instead. A CLI that blocks on a
   prompt inside a pipeline hangs whatever is driving it, and a hung agent is
@@ -325,6 +360,20 @@ read. It is gated more tightly than the CLI, on purpose.
   §8.2). The code is `output.ExitUnsupported` today.
 - **Confirmation that cannot be asked for is refused, not skipped.** Exit code
   7, `output.ExitRefused`.
+- **A send is never replayed after an upstream error.** A `POST` that received
+  a 503 may well have been carried out, with only the acknowledgement lost, and
+  nothing in the response distinguishes that from a message that never arrived.
+  Retrying it is how one `send` becomes two messages in a space full of people,
+  which is a message the operator did not ask for. Three cases permit a replay
+  and no others: a 429, which is a refusal issued before the request was
+  processed; a 401, likewise; and a failure at the dial stage, where no request
+  byte reached the server. A caller who supplies a message ID opts back in,
+  because the API will then refuse the duplicate itself.
+  `TestAPostIsNotReplayedAfterAnUpstreamError` asserts it by counting requests
+  rather than by reading the error, because a refusal that arrives after the
+  POST returns the same error as one that arrives before it.
+  `TestAPostWithAMessageIDIsReplayed`, `TestA429IsRetriedEvenOnAPost`,
+  `TestA403IsNotRetried`, and `TestSafeToReplay` hold the rest of the table.
 
 ## Truncation is a security property
 
@@ -341,6 +390,12 @@ it, so a partially written document can never be parsed as a whole one. Held
 today by `internal/cli.TestFailureWritesNothingToStdout`, and by the golden
 files under `internal/cli/testdata/golden/`, which record which stream every
 byte went to.
+
+A response body is bounded, and one that exceeds the bound fails rather than
+being parsed short. A document decoded from a truncated body is the same
+failure as a truncated list: an answer that looks complete and is not. It is
+also how a hostile server makes a send expensive, so the failure is permanent
+rather than retried. `TestAnOversizeResponseIsRefusedRatherThanTruncated`.
 
 ## Supply chain
 
@@ -371,8 +426,12 @@ It can lie about the data: wrong messages, wrong senders, a display name that
 impersonates somebody else, since Chat display names are not unique and this
 tool prints what the API returns. It can withhold messages; a page that claims to be
 the last one is believed, because there is no second source to check it
-against. It can make requests slow or expensive, bounded only by `--timeout`
-and the retry policy. It can serve an attachment whose *contents* are hostile;
+against. It can make requests slow or expensive, bounded by four things and
+nothing else: `--timeout`, which bounds one attempt rather than the command;
+the five-attempt limit; the 32-second cap on a backoff, which also caps how
+long a `Retry-After` will be honoured for before the loop reports instead; and
+the limit on how large a response body may be. It can serve an attachment whose
+*contents* are hostile;
 `spacebar` writes bytes to the path you named and never opens them.
 
 And it can put text in a message that is written to manipulate whatever reads

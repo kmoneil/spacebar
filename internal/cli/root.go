@@ -26,6 +26,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -44,9 +45,9 @@ type Options struct {
 	Yes     bool
 }
 
-// defaultTimeout is the per-request budget from SPEC.md §7.4. Uploads and
-// downloads override it; nothing else should.
-const defaultTimeout = 30 * time.Second
+// The per-attempt budget is chat.DefaultTimeout and is not restated here.
+// Two declarations of the same number are two numbers, and the one that gets
+// changed is never the one that gets read.
 
 // Execute builds the command tree, runs it, and returns the code the process
 // should exit with.
@@ -114,7 +115,11 @@ with, sponsored by, or endorsed by Google.`,
 	f.BoolVar(&opts.JSON, "json", false, "emit structured output on stdout; one object per line for lists")
 	f.BoolVar(&opts.Quiet, "quiet", false, "suppress progress and non-essential messages on stderr")
 	f.BoolVar(&opts.Verbose, "verbose", false, "log requests, retries, and timings to stderr")
-	f.DurationVar(&opts.Timeout, "timeout", defaultTimeout, "per-request timeout")
+	// Named as bounding an attempt rather than the command, because it does,
+	// and because the difference is three minutes of somebody's afternoon. A
+	// request that is retried under the policy in SPEC.md §7.4 makes up to five
+	// attempts, each with this budget, with backoff between them.
+	f.DurationVar(&opts.Timeout, "timeout", chat.DefaultTimeout, "timeout for one attempt; a retried request makes up to five")
 	f.BoolVar(&opts.NoColor, "no-color", false, "never write ANSI colour, even to a terminal")
 	f.BoolVar(&opts.DryRun, "dry-run", false, "print the request that would be sent and exit without sending it")
 	f.BoolVar(&opts.Yes, "yes", false, "answer yes to any confirmation this command would ask for")

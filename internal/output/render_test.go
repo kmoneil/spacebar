@@ -271,3 +271,61 @@ func TestJSONDoesNotAlterAValue(t *testing.T) {
 		t.Errorf("a raw control character reached the JSON output:\n%q", out.String())
 	}
 }
+
+// TestALogLineGoesToStderrAndIsEscaped.
+//
+// This is the sink for --verbose, and what reaches it comes from the far end: a
+// response status, a header value, a reason somebody else's server chose. stdout
+// carries data and nothing else, so a diagnostic that landed there would corrupt
+// the output of whatever is parsing it, and a terminal is a program that
+// interprets bytes, so the line is escaped like every other one here.
+func TestALogLineGoesToStderrAndIsEscaped(t *testing.T) {
+	r, out, errw := render(Options{})
+
+	r.Logf("< %s in %s", "429 Too Many\x1b[2JMuch", "12ms")
+
+	if out.Len() != 0 {
+		t.Errorf("a log line reached stdout: %q", out.String())
+	}
+	if strings.Contains(errw.String(), "\x1b[2J") {
+		t.Errorf("a log line carried an escape sequence to the terminal: %q", errw.String())
+	}
+	if !strings.Contains(errw.String(), "429 Too Many") {
+		t.Errorf("the log line lost its content: %q", errw.String())
+	}
+}
+
+// TestALogLineIsJSONInJSONMode, matching the error and warning envelopes, so
+// that stderr in --json mode is a stream of documents rather than a mixture a
+// consumer has to guess at.
+func TestALogLineIsJSONInJSONMode(t *testing.T) {
+	r, _, errw := render(Options{JSON: true})
+
+	r.Logf("> POST %s", "https://chat.example/v1/spaces/AAAA1111/messages?key=REDACTED")
+
+	var got struct {
+		Log struct {
+			Message string `json:"message"`
+		} `json:"log"`
+	}
+	if err := json.Unmarshal(errw.Bytes(), &got); err != nil {
+		t.Fatalf("not valid JSON: %v\ngot: %s", err, errw.String())
+	}
+	if !strings.HasPrefix(got.Log.Message, "> POST https://chat.example/") {
+		t.Errorf("log message = %q", got.Log.Message)
+	}
+}
+
+// TestQuietSilencesTheLog. The two flags contradict each other, one of them has
+// to lose, and the one asking for less output is the safer loser: a pipeline
+// that set --quiet did so because something downstream is reading.
+func TestQuietSilencesTheLog(t *testing.T) {
+	for _, opts := range []Options{{Quiet: true}, {Quiet: true, JSON: true}} {
+		r, out, errw := render(opts)
+		r.Logf("a diagnostic")
+
+		if errw.Len() != 0 || out.Len() != 0 {
+			t.Errorf("--quiet wrote a log line: stdout %q stderr %q", out.String(), errw.String())
+		}
+	}
+}
