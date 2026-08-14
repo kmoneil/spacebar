@@ -363,10 +363,37 @@ it is pasted rather than as a `400` about an API key days later.
   `invalid_grant` during refresh is reported as "your authorization has expired
   (this is normal for apps in testing mode)", never as a raw OAuth error, so
   that a script can tell it apart from a failure worth investigating.
-  `TestInvalidGrantIsExplainedRatherThanQuoted`, which also asserts the raw
-  library error is not what gets printed. Held on the authorization exchange
-  today; the same mapping on a token refresh belongs to the card that adds
-  refreshing **(M3)**.
+  `TestInvalidGrantIsExplainedRatherThanQuoted` on the authorization exchange
+  and `TestInvalidGrantOnARefreshIsTheExplainedError` on a refresh, which share
+  one mapping rather than keeping two copies of a rule about what not to print.
+  Both assert the raw library error is not what gets printed, and
+  `TestARefreshFailureNeverPrintsAToken` sends a response that carries tokens
+  beside an error code to prove neither reaches the message.
+
+- **The seven-day expiry is warned about as a possibility, and the warning
+  stops on its own.** Nothing in the API says whether an OAuth client is in
+  testing mode, so the boundary is inferred from when consent was given and the
+  warning would otherwise fire for somebody on an Internal client whose token is
+  good for a year. It is worded as a conditional for that reason, and a refresh
+  that succeeds more than seven days after consent is recorded as proof the
+  limit does not apply, after which it never fires again for that
+  authorization. Nobody is asked and nothing is configured.
+  `TestTheWarningWindow`, `TestTheWarningStopsOnceARefreshDisprovesIt`, and
+  `TestARefreshPastTheBoundaryDisprovesTheTestingLimit`.
+
+  The warning is on stderr in both renderings and repeated inside the `--json`
+  result, so that a caller reading only stdout is not the one person who does
+  not get it. `TestTheExpiryWarningIsOnStderrAndStdoutStaysClean`.
+- **A rotated refresh token is written back.** `x/oauth2` has no hook that
+  fires when a token is refreshed, and `reuseTokenSource` holds the new value in
+  memory and nowhere else, so a rotation would live exactly as long as the
+  process. The next command would start from the stale token in the keyring and
+  be told to authorize again, a week later, looking exactly like the seven-day
+  expiry it is not. `TestARotatedRefreshTokenIsPersisted`.
+- **No `auth` command prints a token.** Three of them read one.
+  `TestNoTokenReachesTheOutputOfAnyAuthCommand` runs each in every rendering,
+  including `--verbose`, and `TestAnUnreadableTokenIsNotQuotedBack` covers the
+  failure that is most tempting to quote.
 
 ## Input this tool does not trust
 

@@ -150,6 +150,11 @@ type Token struct {
 	// Testing has refresh tokens that die seven days after consent, and the
 	// expiry of the access token says nothing about that.
 	ObtainedAt time.Time
+
+	// BeyondTestingWindow records that a refresh has succeeded more than seven
+	// days after consent, which proves this client is not in testing mode. See
+	// Assess.
+	BeyondTestingWindow bool
 }
 
 // Login runs the authorization code flow with PKCE and a loopback redirect.

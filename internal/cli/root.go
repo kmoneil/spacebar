@@ -153,6 +153,7 @@ with, sponsored by, or endorsed by Google.`,
 		newLicensesCmd(),
 		newProfileCmd(opts),
 		newSendCmd(opts),
+		newAuthCmd(opts),
 	)
 
 	return root

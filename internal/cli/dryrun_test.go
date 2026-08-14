@@ -72,6 +72,18 @@ var readOnlyCommands = map[string]string{
 
 	// Cobra's own, and not ours to classify.
 	"spacebar help": "cobra's built-in",
+
+	"spacebar auth": "the group prints help",
+
+	// The criterion is whether a command can put something into a space, and
+	// none of these can. auth login does reach the network, and it has a rule of
+	// its own about --dry-run for that reason: consenting is a side effect at
+	// Google's end and on this machine, so a dry run of it opens no browser,
+	// binds no listener, and stores nothing.
+	// TestADryRunOfLoginConsentsToNothing holds that separately.
+	"spacebar auth login":  "authorizes this machine and puts nothing in a space",
+	"spacebar auth status": "reads the stored token and deliberately not the network",
+	"spacebar auth logout": "deletes a local token, and does not tell Google to forget anything",
 }
 
 // TestEveryCommandIsClassifiedAsWritingOrNot is the forcing function.
