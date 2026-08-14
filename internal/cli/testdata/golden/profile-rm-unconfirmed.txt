@@ -1,0 +1,6 @@
+exit 7
+--- stdout
+--- stderr
+error: not confirmed: stdin is not a terminal, so there was nobody to ask.
+The question was: Remove profile "alerts" and the credential behind it?
+Pass --yes to answer it in advance.

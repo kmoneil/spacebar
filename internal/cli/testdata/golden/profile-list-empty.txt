@@ -1,0 +1,4 @@
+exit 0
+--- stdout
+--- stderr
+no profiles are configured. Add one with: spacebar profile set-webhook NAME

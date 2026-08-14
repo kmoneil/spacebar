@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: no webhook URL arrived.
+Pipe it in, or set SPACEBAR_WEBHOOK_URL. It is not an argument on purpose: an argument lands in the shell history and in the process list, and this URL is a credential.
+  spacebar profile set-webhook NAME < webhook.txt

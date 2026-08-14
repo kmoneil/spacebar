@@ -257,8 +257,54 @@ func (c *Config) Names() []string {
 // say where to go and fix something.
 func (c *Config) Source() string { return c.path }
 
+// maxProfileName bounds a name that becomes part of a keyring key and part of
+// a message. Long enough for anything descriptive, short enough that a pasted
+// accident is refused rather than stored.
+const maxProfileName = 64
+
+// CheckProfileName refuses a name that cannot safely be one.
+//
+// A profile name is not only a key in this file. It becomes part of the
+// credential reference keyring:<app>/<profile>/<secret>, which is split on its
+// slashes, so a name containing one produces a reference that parses into
+// something else. A control character in it would reach a terminal through
+// every error message that names the profile. And an empty name is a profile
+// nobody can select.
+//
+// The permitted set is deliberately small rather than a blocklist of what has
+// gone wrong before. It has to survive being a JSON key, a keyring entry, a
+// path element on three operating systems, and a word in a sentence.
+func CheckProfileName(name string) error {
+	if name == "" {
+		return configErr("a profile needs a name.")
+	}
+	if len(name) > maxProfileName {
+		return configErr("a profile name is at most %d characters, and that one is %d.",
+			maxProfileName, len(name))
+	}
+
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			continue
+		case (r == '-' || r == '_' || r == '.') && i > 0:
+			continue
+		}
+		if i == 0 {
+			return configErr("a profile name starts with a letter or a digit, and %q starts with %q.",
+				name, string(r))
+		}
+		return configErr("a profile name holds letters, digits, and %q, %q or %q, and %q has %q in it.",
+			"-", "_", ".", name, string(r))
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	for _, name := range c.Names() {
+		if err := CheckProfileName(name); err != nil {
+			return err
+		}
 		if err := c.Profiles[name].validate(c.path, name); err != nil {
 			return err
 		}

@@ -401,3 +401,52 @@ func TestLineCol(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckProfileName. A profile name is not only a key in this file: it
+// becomes part of the credential reference keyring:<app>/<profile>/<secret>,
+// which is split on its slashes, so a name with one in it produces a reference
+// that parses into something else entirely.
+func TestCheckProfileName(t *testing.T) {
+	for _, name := range []string{"alerts", "a", "A1", "1st", "team-ops", "team_ops", "team.ops"} {
+		if err := CheckProfileName(name); err != nil {
+			t.Errorf("CheckProfileName(%q) = %v, want nil", name, err)
+		}
+	}
+
+	for _, name := range []string{
+		"",
+		"with/slash",
+		"with space",
+		"with\nnewline",
+		"with\x1b[2Jescape",
+		"-leading",
+		"_leading",
+		".leading",
+		"emoji\U0001F600",
+	} {
+		if err := CheckProfileName(name); err == nil {
+			t.Errorf("CheckProfileName(%q) accepted it", name)
+		}
+	}
+
+	if err := CheckProfileName(strings.Repeat("x", 64)); err != nil {
+		t.Errorf("a 64 character name was refused: %v", err)
+	}
+	if err := CheckProfileName(strings.Repeat("x", 65)); err == nil {
+		t.Error("a 65 character name was accepted")
+	}
+}
+
+// TestABadProfileNameIsRefusedOnLoad, so that the rule holds for a file
+// somebody hand-edited as well as for one this tool wrote.
+func TestABadProfileNameIsRefusedOnLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	body := `{"profiles":{"has/slash":{"transport":"webhook"}}}`
+	if err := os.WriteFile(path, []byte(body), FileMode); err != nil {
+		t.Fatalf("writing: %v", err)
+	}
+
+	if _, err := LoadFrom(path); err == nil {
+		t.Error("a profile name with a slash in it loaded")
+	}
+}

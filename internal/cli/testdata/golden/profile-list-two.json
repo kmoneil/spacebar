@@ -1,0 +1,5 @@
+exit 0
+--- stdout
+{"name":"alerts","transport":"webhook","default":true,"configured":true}
+{"name":"releases","transport":"webhook","default":false,"configured":true}
+--- stderr

@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/kmoneil/spacebar/internal/output"
@@ -64,12 +66,29 @@ type result struct {
 // spawns a subprocess: a test that shells out tests the shell as much as the
 // code.
 func runCLI(args ...string) result {
+	return runWith(strings.NewReader(""), args...)
+}
+
+// runCLIIn is the same with something on stdin.
+//
+// A buffer is not a terminal, which is the point rather than a limitation: it
+// is the pipeline case, and the pipeline case is where the rules about
+// prompting and about blocking actually apply. t is taken because a caller
+// here is invariably also setting an environment variable for the same run, and
+// asking for it makes that the obvious thing to do.
+func runCLIIn(t *testing.T, stdin string, args ...string) result {
+	t.Helper()
+	return runWith(strings.NewReader(stdin), args...)
+}
+
+func runWith(stdin io.Reader, args ...string) result {
 	opts := &Options{}
 	root := New(opts)
 
 	var out, errBuf bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errBuf)
+	root.SetIn(stdin)
 	root.SetArgs(args)
 
 	err := root.Execute()
@@ -108,24 +127,70 @@ func TestGoldenOutputContract(t *testing.T) {
 		name string
 		args []string
 		want output.ExitCode
+
+		// stdin is what the invocation reads. isolated gives it an empty
+		// configuration directory and a keyring of its own, which every profile
+		// case needs: a golden that depended on the machine's configuration
+		// would record that machine.
+		stdin    string
+		isolated bool
 	}{
-		{"version.txt", []string{"version"}, output.ExitOK},
-		{"version.json", []string{"version", "--json"}, output.ExitOK},
+		{"version.txt", []string{"version"}, output.ExitOK, "", false},
+		{"version.json", []string{"version", "--json"}, output.ExitOK, "", false},
 
 		// An unknown command has to be a usage failure and not a help screen.
 		// Cobra's own default for a root command with no Run is to print help
 		// and exit 0, which tells a script that asked for something that does
 		// not exist that it succeeded.
-		{"unknown-command.txt", []string{"bogus"}, output.ExitUsage},
-		{"unknown-command.json", []string{"--json", "bogus"}, output.ExitUsage},
+		{"unknown-command.txt", []string{"bogus"}, output.ExitUsage, "", false},
+		{"unknown-command.json", []string{"--json", "bogus"}, output.ExitUsage, "", false},
 
-		{"unknown-flag.txt", []string{"--nope"}, output.ExitUsage},
-		{"unknown-flag.json", []string{"--json", "--nope"}, output.ExitUsage},
+		{"unknown-flag.txt", []string{"--nope"}, output.ExitUsage, "", false},
+		{"unknown-flag.json", []string{"--json", "--nope"}, output.ExitUsage, "", false},
+
+		// The profile group. These are the first commands with output worth
+		// freezing: an empty list has to be exit 0 with an empty stdout, and
+		// the no-URL failure is the message a first-time user meets.
+		{"profile-list-empty.txt", []string{"profile", "list"}, output.ExitOK, "", true},
+		{"profile-list-empty.json", []string{"--json", "profile", "list"}, output.ExitOK, "", true},
+
+		{"profile-set-webhook.txt", []string{"profile", "set-webhook", "alerts"}, output.ExitOK, testWebhook, true},
+		{"profile-set-webhook.json", []string{"--json", "profile", "set-webhook", "alerts"}, output.ExitOK, testWebhook, true},
+
+		{"profile-list-two.txt", []string{"profile", "list"}, output.ExitOK, "", true},
+		{"profile-list-two.json", []string{"--json", "profile", "list"}, output.ExitOK, "", true},
+
+		{"profile-set-webhook-no-url.txt", []string{"profile", "set-webhook", "alerts"}, output.ExitUsage, "", true},
+		{"profile-set-webhook-no-url.json", []string{"--json", "profile", "set-webhook", "alerts"}, output.ExitUsage, "", true},
+
+		// A removal in a pipeline, where there is nobody to answer the
+		// question. Exit 7, and nothing removed.
+		{"profile-rm-unconfirmed.txt", []string{"profile", "rm", "alerts"}, output.ExitRefused, "y\n", true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := runCLI(tc.args...)
+			if tc.isolated {
+				isolate(t)
+			}
+			if strings.HasPrefix(tc.name, "profile-list-two.") {
+				// Two profiles, so that the not-default column is rendered by
+				// something. One row can only ever show the true side of every
+				// marker.
+				for _, name := range []string{"alerts", "releases"} {
+					if setup := runCLIIn(t, testWebhook, "profile", "set-webhook", name); setup.exit != output.ExitOK {
+						t.Fatalf("setup: exit %d\n%s", setup.exit, setup.stderr)
+					}
+				}
+			}
+			if tc.name == "profile-rm-unconfirmed.txt" {
+				// Needs something to remove. Not part of the recorded output.
+				if setup := runCLIIn(t, testWebhook, "profile", "set-webhook", "alerts"); setup.exit != output.ExitOK {
+					t.Fatalf("setup: exit %d\n%s", setup.exit, setup.stderr)
+				}
+			}
+
+			got := runCLIIn(t, tc.stdin, tc.args...)
 			if got.exit != tc.want {
 				t.Errorf("exit code = %d, want %d", got.exit, tc.want)
 			}

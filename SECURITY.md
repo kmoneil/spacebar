@@ -160,6 +160,22 @@ the value goes, because the name is what a user types and what documentation
 tells them to type: a flag called `--webhook-url` invites a credential on the
 command line whatever the code behind it does.
 
+`spacebar profile set-webhook` is the one command that is handed a credential,
+and it reads it from stdin or from `SPACEBAR_WEBHOOK_URL`. It has no flag at
+all for the URL, which is also why the verb carries the word: a boolean
+`--webhook` would have tripped the check above, and the shortest way past a
+gate like that is to name it in the verb rather than to add an exception.
+`TestTheCredentialReachesNoStreamAndNoFile` asserts that the URL appears in
+neither stream and not in the configuration file;
+`TestNoURLAnywhereIsAUsageFailureThatSaysWhatToDo` holds the message that says
+why there is no flag.
+
+A URL that is refused is never quoted back, including by `url.Parse`, whose own
+error repeats what it was given. `TestARejectedURLIsNotQuotedBack`. The refusal
+is deliberately eager: a truncated paste is the common way a webhook URL goes
+wrong, and it produces a credential that looks complete, so it is caught when
+it is pasted rather than as a `400` about an API key days later.
+
 - **`config.json` holds a reference, never a secret** (SPEC.md §5.3). The
   config is meant to be hand-edited and kept in a dotfiles repository. A
   webhook URL is stored as `keyring:spacebar/<profile>/webhook`, and the secret
@@ -238,7 +254,23 @@ command line whatever the code behind it does.
   when stdin is not one refuses and exits `7` instead. A CLI that blocks on a
   prompt inside a pipeline hangs whatever is driving it, and a hung agent is
   strictly worse than a failed one: a failure gets reported, a hang gets a
-  timeout somebody has to go and find. Held today by `output.CanPrompt`.
+  timeout somebody has to go and find.
+  `TestConfirmRefusesWhenThereIsNobodyToAsk` also asserts that stdin is not
+  read at all in that case, because reading it is the bug: even a stream with
+  an answer in it is a pipeline the command stole a line from.
+  `TestRemovingAProfileNeedsAnAnswer` holds it through the command tree, and
+  `TestConfirmDefaultsToNo` holds the other half, that anything which is not an
+  explicit yes is a no.
+
+  The check is applied to the stream the command actually reads from rather
+  than to `os.Stdin`, which is the same file in production and not under test:
+  a prompt rule verified against a stream nothing reads is not verified.
+  One known imprecision, documented at `output.Interactive` rather than fixed:
+  `os.ModeCharDevice`, which SPEC.md §11.3 specifies, is set for `/dev/null` as
+  much as for a terminal, so `command < /dev/null` is treated as interactive.
+  Telling them apart needs a termios call and therefore a dependency, and the
+  outcome is the same either way: the question is asked, nothing answers it,
+  and the command exits `7`.
 
 ## Authentication
 

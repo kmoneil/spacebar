@@ -26,6 +26,16 @@ type Options struct {
 	JSON  bool
 	Quiet bool
 	Color bool
+
+	// Interactive is whether there is a person on the other end of the stream
+	// this command reads from. A field rather than something Confirm works out
+	// for itself, so that the asking path can be tested at all: a test cannot
+	// arrange for a real terminal, and a rule nothing exercises is a rule
+	// nobody has checked.
+	Interactive bool
+
+	// AssumeYes is --yes: every confirmation is answered in advance.
+	AssumeYes bool
 }
 
 // Renderer writes results to stdout and everything else to stderr.

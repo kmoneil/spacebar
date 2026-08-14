@@ -96,6 +96,45 @@ A build from source has no OAuth client baked in, which is deliberate (see
 [SECURITY.md](SECURITY.md)), and `spacebar auth setup` will walk through
 creating one.
 
+## Configure a webhook
+
+This is the path that needs no OAuth, no admin approval, and no Cloud project.
+In the Chat space, open Apps & integrations, then Webhooks, and copy the URL.
+Then, in one command:
+
+```sh
+pbpaste | spacebar profile set-webhook alerts     # macOS
+xclip -o | spacebar profile set-webhook alerts    # Linux
+spacebar profile set-webhook alerts < webhook.txt # from a file
+```
+
+```
+profile     alerts
+transport   webhook
+credential  keyring:spacebar/alerts/webhook
+```
+
+The URL arrives on stdin, or in `SPACEBAR_WEBHOOK_URL`, and never as an
+argument. It carries `key` and `token` query parameters that are the entire
+authentication for that space, so it is a credential rather than an address,
+and an argument lands in the shell history and in the process list. It goes to
+the OS keyring; the configuration file gets the reference above and never the
+value.
+
+The first profile becomes the default, so nothing after this needs `--profile`.
+
+```sh
+spacebar profile list           # what is configured, without reading a credential
+spacebar profile list --json    # one object per line
+spacebar profile rm alerts      # the profile and the credential behind it
+```
+
+On a machine with no keyring, which is every container and most CI runners, the
+credential goes to a mode `0600` file beside the configuration instead, and
+says so every time it is used.
+
+`send` lands with the rest of Milestone 2.
+
 ## Development
 
 ```sh

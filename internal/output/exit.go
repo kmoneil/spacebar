@@ -147,7 +147,13 @@ func Report(w io.Writer, err error, asJSON bool) ExitCode {
 			Message:  err.Error(),
 			ExitCode: int(exit),
 		}}
+		// HTML escaping off, matching the result and warning encoders. Chat
+		// markup writes a link as <url|text> and a mention as <users/all>, so a
+		// failure that quotes a message body would otherwise arrive full of
+		// escapes. Both forms decode to the same string; only one is readable
+		// in a terminal.
 		enc := json.NewEncoder(w)
+		enc.SetEscapeHTML(false)
 		if encErr := enc.Encode(env); encErr != nil {
 			// The original failure is the story. If even reporting it fails,
 			// there is nowhere better to report that to than the stream that

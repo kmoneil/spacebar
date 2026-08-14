@@ -49,6 +49,30 @@ type Options struct {
 // Two declarations of the same number are two numbers, and the one that gets
 // changed is never the one that gets read.
 
+// renderer builds the writer for one command from the global flags.
+//
+// The streams come from cobra, which is how this package is meant to write:
+// only internal/output may name a process stream directly, and a test drives
+// the whole tree against buffers because of it. The two questions cobra cannot
+// answer, whether stdout is a terminal and whether there is anybody on the
+// other end of stdin, are asked of internal/output for the same reason.
+func renderer(cmd *cobra.Command, opts *Options) *output.Renderer {
+	out, in := cmd.OutOrStdout(), cmd.InOrStdin()
+
+	return output.NewRenderer(out, cmd.ErrOrStderr(), output.Options{
+		JSON:  opts.JSON,
+		Quiet: opts.Quiet,
+
+		// Both are asked of the streams this command was given rather than of
+		// the process, so that what a test drives is what the rules are checked
+		// against. internal/output is still the only package that names a
+		// process stream, which is why these two live there.
+		Color:       output.ColorFor(out, opts.NoColor),
+		Interactive: output.Interactive(in),
+		AssumeYes:   opts.Yes,
+	})
+}
+
 // Execute builds the command tree, runs it, and returns the code the process
 // should exit with.
 //
@@ -127,6 +151,7 @@ with, sponsored by, or endorsed by Google.`,
 	root.AddCommand(
 		newVersionCmd(opts),
 		newLicensesCmd(),
+		newProfileCmd(opts),
 	)
 
 	return root
