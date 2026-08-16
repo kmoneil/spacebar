@@ -106,3 +106,32 @@ type Space struct {
 	// mean deciding which one to believe.
 	SpaceType string `json:"spaceType,omitempty"`
 }
+
+// Membership is somebody's place in a space.
+//
+// A direct message and a group chat have no display name of their own, so this
+// is what `spaces list` has to fall back on to say who a conversation is with.
+// That makes it a read path rather than an administrative curiosity.
+type Membership struct {
+	// Name is spaces/AAA/members/BBB.
+	Name string `json:"name,omitempty"`
+
+	// State is JOINED, INVITED, or NOT_A_MEMBER. Worth carrying because an
+	// invited member is not a member yet, and a list that showed both the same
+	// way would answer "who is in this space" wrongly.
+	State string `json:"state,omitempty"`
+
+	// Role is ROLE_MEMBER or ROLE_MANAGER.
+	Role string `json:"role,omitempty"`
+
+	// Member is the person. Absent when this membership is a Google Group,
+	// which arrives as GroupMember instead.
+	Member *User `json:"member,omitempty"`
+
+	// GroupMember is carried through rather than modelled, for the reason
+	// CardsV2 is: nothing in this tool reads inside it yet, and a struct written
+	// now would be a guess reviewed as though it were knowledge.
+	GroupMember json.RawMessage `json:"groupMember,omitempty"`
+
+	CreateTime string `json:"createTime,omitempty"`
+}

@@ -30,6 +30,7 @@
 package profile
 
 import (
+	"context"
 	"time"
 
 	"github.com/kmoneil/spacebar/internal/auth"
@@ -38,6 +39,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/transport"
+	"github.com/kmoneil/spacebar/internal/transport/useroauth"
 	"github.com/kmoneil/spacebar/internal/transport/webhook"
 )
 
@@ -113,14 +115,7 @@ func open(name string, profile config.Profile, store *auth.Store, opts Options) 
 		return openWebhook(name, profile, store, opts)
 
 	case config.TransportUserOAuth:
-		// Named rather than falling through to "unknown transport", because
-		// this one is configured, correct, and simply not built yet. Somebody
-		// who set it up deserves to be told that rather than to be told their
-		// configuration is wrong.
-		return nil, output.Errorf("UNSUPPORTED", output.ExitUnsupported,
-			"profile %q uses %s, which this build does not have yet.\n"+
-				"Milestone 3 adds it. Until then, a profile with %s is the way to send.",
-			name, config.TransportUserOAuth, config.TransportWebhook)
+		return openUserOAuth(name, profile, store, opts)
 	}
 
 	return nil, output.Errorf("CONFIG", output.ExitUsage,
@@ -146,4 +141,71 @@ func openWebhook(name string, profile config.Profile, store *auth.Store, opts Op
 		Log:     opts.Log,
 		DryRun:  opts.DryRun,
 	})
+}
+
+// openUserOAuth assembles the transport that acts as the authorized user.
+//
+// This is the composition the package exists for, and it is three packages
+// deep. internal/config says the profile is a user-OAuth one and which OAuth
+// client it uses; internal/auth turns the reference into the stored token and
+// wraps it in a source that refreshes and writes rotations back;
+// internal/chat supplies the HTTP client the refresh goes out through, because
+// it is the only package permitted to name net/http. None of the three can do
+// it alone and none of them should try.
+//
+// The token is loaded here rather than lazily inside the transport so that an
+// unauthorized profile fails before a command starts work. The alternative is a
+// command that prints a header, opens a stream, and then discovers there is no
+// credential.
+func openUserOAuth(name string, profile config.Profile, store *auth.Store, opts Options) (transport.Transport, error) {
+	token, err := store.LoadToken(name)
+	if err != nil {
+		return nil, err
+	}
+
+	clientID, clientSecret, err := store.ClientCredentials(profile)
+	if err != nil {
+		return nil, err
+	}
+	if clientID == "" {
+		// A build from source has no linked client, by design: an OAuth client
+		// committed to an open repository is a client every fork shares. So this
+		// is the ordinary state for anybody who cloned this, not an edge case,
+		// and it names the command that fixes it.
+		return nil, output.Errorf("NO_CLIENT", output.ExitAuthRequired,
+			"profile %q has no OAuth client, so there is nothing to authorize against.\n"+
+				"Create one and store it with: %s auth setup --profile %s < client_secret.json\n"+
+				"Run '%s auth setup' with nothing on stdin to see how to create it.",
+			name, meta.AppName, name, meta.AppName)
+	}
+
+	// The context here bounds the refresh that x/oauth2 may do on the first
+	// request, and it is deliberately context.Background rather than a request
+	// context: the source outlives any one call and is reused for every request
+	// this command makes.
+	source := auth.NewSource(context.Background(), store, name, token,
+		clientID, clientSecret, chat.TokenHTTPClient(opts.Timeout))
+
+	built, err := useroauth.New(useroauth.Options{
+		Profile: name,
+		Auth:    source,
+		Timeout: opts.Timeout,
+		Log:     opts.Log,
+		DryRun:  opts.DryRun,
+
+		// From the stored token rather than from auth.DefaultScopes, which is
+		// what this build would ask for today and says nothing about what the
+		// person consented to when this token was issued. A binary that grew a
+		// scope would otherwise believe every existing token had it.
+		Scopes: token.Scopes,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The seven-day warning rides out with the credential warnings, through the
+	// same channel, because both are things about this machine's authorization
+	// that the caller has to be told exactly once.
+	store.AddWarnings(source.Warnings())
+	return built, nil
 }

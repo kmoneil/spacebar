@@ -1,4 +1,4 @@
 exit 5
 --- stdout
 --- stderr
-{"error":{"code":"UNSUPPORTED","message":"\"send --file\" needs attachment upload, and profile \"alerts\" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.\nUse a profile whose transport is useroauth.","exit_code":5}}
+{"error":{"code":"UNSUPPORTED","message":"\"send --file\" needs attachment upload, and profile \"alerts\" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.\nUse a profile whose transport is useroauth:\n  spacebar auth setup --profile NAME < client_secret.json\n  spacebar auth login --profile NAME\nRun 'spacebar auth setup' on its own to see how to create the client.","exit_code":5}}

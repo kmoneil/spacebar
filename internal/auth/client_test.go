@@ -249,12 +249,34 @@ func TestSendOnlyIsExactlyOneScope(t *testing.T) {
 	// which permits creating spaces and looking up direct messages. Neither is
 	// something this tool does yet, and a scope requested before it is needed
 	// is a scope an administrator has to approve for no reason.
+	//
+	// The narrowness is a floor and not a target. A scope that a shipped command
+	// needs belongs here whatever it costs in approval, which is the lesson of
+	// chat.memberships.readonly: `spaces members` shipped without it and answered
+	// 403 on every profile this tool could create.
+	// TestTheDefaultGrantCoversWhatTheMatrixClaims in internal/transport is what
+	// holds that, because the comparison it makes needs the capability matrix.
 	for _, scope := range DefaultScopes {
 		if scope == ScopeSpaces {
 			t.Errorf("the default set asks for %q, which nothing uses yet", scope)
 		}
+		if scope == ScopeMemberships {
+			t.Errorf("the default set asks for %q, which permits adding and removing people. "+
+				"Reading a membership list is %q.", scope, ScopeMembers)
+		}
 	}
-	if len(DefaultScopes) != 2 {
-		t.Errorf("DefaultScopes = %v", DefaultScopes)
+
+	// Stated one by one rather than counted, because a count tells somebody a
+	// number changed and not which scope arrived. A scope added to this set is
+	// a scope every user re-consents to and an administrator may have to approve
+	// again, so it is worth being a deliberate edit here.
+	want := []string{ScopeMessages, ScopeSpacesRO, ScopeMembers}
+	if len(DefaultScopes) != len(want) {
+		t.Fatalf("DefaultScopes = %v, want %v", DefaultScopes, want)
+	}
+	for i, scope := range want {
+		if DefaultScopes[i] != scope {
+			t.Errorf("DefaultScopes[%d] = %q, want %q", i, DefaultScopes[i], scope)
+		}
 	}
 }

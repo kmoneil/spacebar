@@ -98,14 +98,21 @@ does what the user is actually doing, because a narrower request is one you are
 more likely to approve, and that is the difference between the tool working and
 not.
 
-| What the user is doing        | Scope requested                                       |
-| ----------------------------- | ------------------------------------------------------ |
-| Posting only (`--send-only`)  | `https://www.googleapis.com/auth/chat.messages.create`  |
-| Posting, editing, deleting    | `https://www.googleapis.com/auth/chat.messages`         |
-| Finding a space by name       | `https://www.googleapis.com/auth/chat.spaces.readonly`  |
+| What the user is doing        | Scope requested                                            |
+| ----------------------------- | ---------------------------------------------------------- |
+| Posting only (`--send-only`)  | `https://www.googleapis.com/auth/chat.messages.create`      |
+| Posting, editing, deleting    | `https://www.googleapis.com/auth/chat.messages`             |
+| Finding a space by name       | `https://www.googleapis.com/auth/chat.spaces.readonly`      |
+| Reading who is in a space     | `https://www.googleapis.com/auth/chat.memberships.readonly` |
 
-`chat.spaces`, which permits creating spaces and looking up direct messages, is
-**not** requested, because nothing in the tool needs it yet.
+Two scopes are deliberately **not** requested, and both of them are the writable
+half of one that is:
+
+- `chat.spaces` permits creating spaces and looking up direct messages. Nothing
+  in the tool needs it yet.
+- `chat.memberships` permits adding and removing people from a space. Reading a
+  membership list is the `.readonly` scope in the table above, and this tool
+  never changes who is in a space.
 
 ## What a user can do that you may care about
 

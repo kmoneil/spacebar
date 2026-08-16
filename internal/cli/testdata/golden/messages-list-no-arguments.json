@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+{"error":{"code":"USAGE","message":"messages list needs a space.\n  spacebar messages list spaces/AAAAAAA","exit_code":2}}

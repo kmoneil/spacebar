@@ -329,3 +329,67 @@ func TestQuietSilencesTheLog(t *testing.T) {
 		}
 	}
 }
+
+// TestABlockEndsAtALineBoundary.
+//
+// `messages get` writes a message body through Block, and a body does not end
+// with a newline. Without one the shell prompt lands in the middle of somebody's
+// message, `wc -l` is short by one, and a redirect produces a file whose last
+// line is not a line. Block was written for --dry-run, whose text already ends
+// with one, so nothing noticed until a real message came back from the API.
+func TestABlockEndsAtALineBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{"a message body", "deploy done", "deploy done\n"},
+		{"a body of several lines", "one\ntwo", "one\ntwo\n"},
+
+		// Already terminated, as a dry run is. Exactly one newline, because a
+		// second would be a blank line in output somebody is comparing against
+		// the API documentation.
+		{"a dry run", "GET /v1/spaces\nAuthorization: REDACTED\n", "GET /v1/spaces\nAuthorization: REDACTED\n"},
+
+		// A message can be empty: a card-only message has no text at all. A
+		// blank line is the right answer, because zero bytes on stdout is what
+		// a failure looks like.
+		{"an empty body", "", "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, out, _ := render(Options{})
+			if err := r.Block(nil, tc.text); err != nil {
+				t.Fatalf("Block: %v", err)
+			}
+			if out.String() != tc.want {
+				t.Errorf("Block wrote %q, want %q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+// TestBlockAddsNoSecondNewlineInJSONMode.
+//
+// The encoder terminates its own document, so the line-boundary rule above must
+// not reach this branch and append another. A blank line after a JSON document
+// is legal and harmless to a parser, which is exactly why it would go unnoticed
+// while quietly making every golden file disagree with what a program sees.
+func TestBlockAddsNoSecondNewlineInJSONMode(t *testing.T) {
+	r, out, _ := render(Options{JSON: true})
+	if err := r.Block(message{Name: "spaces/AAA/messages/BBB", Text: "deploy done"}, "deploy done"); err != nil {
+		t.Fatalf("Block: %v", err)
+	}
+
+	if !json.Valid(bytes.TrimSpace(out.Bytes())) {
+		t.Errorf("a JSON block is not valid JSON:\n%q", out.String())
+	}
+	if !strings.HasSuffix(out.String(), "}\n") {
+		t.Errorf("a JSON block does not end at its closing brace and one newline:\n%q", out.String())
+	}
+
+	// The text half is ignored in JSON mode rather than appended to the
+	// document, which is the other way this could go wrong.
+	if strings.Count(out.String(), "deploy done") != 1 {
+		t.Errorf("the body appears more than once, so the text half leaked into JSON mode:\n%q", out.String())
+	}
+}

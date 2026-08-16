@@ -63,6 +63,12 @@ const (
 	ScopeSpaces    = "https://www.googleapis.com/auth/chat.spaces"
 	ScopeReactions = "https://www.googleapis.com/auth/chat.messages.reactions.create"
 	ScopeMembers   = "https://www.googleapis.com/auth/chat.memberships.readonly"
+
+	// ScopeMemberships permits adding and removing people from a space, which is
+	// a different order of trust from reading who is in one and is not something
+	// this tool does. Declared rather than omitted so that the exclusion is a
+	// named decision a test can hold, instead of a scope nobody thought about.
+	ScopeMemberships = "https://www.googleapis.com/auth/chat.memberships"
 )
 
 // DefaultFlowTimeout bounds how long the flow waits for a person.

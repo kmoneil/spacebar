@@ -90,6 +90,21 @@ func New() (*Store, error) {
 // place that writes to a terminal.
 func (s *Store) Warnings() []string { return s.warnings }
 
+// AddWarnings folds warnings from elsewhere into this store's list.
+//
+// It exists because the seven-day expiry warning is produced by a Source rather
+// than by the store, and a caller collecting warnings from two places is a
+// caller who will one day collect from one. Deduplication is the same as for a
+// warning raised here, so a Source and a fallback file both reporting the same
+// sentence still say it once.
+func (s *Store) AddWarnings(warnings []string) {
+	for _, warning := range warnings {
+		if warning != "" {
+			s.warn("%s", warning)
+		}
+	}
+}
+
 func (s *Store) warn(format string, a ...any) {
 	msg := fmt.Sprintf(format, a...)
 	if !strings.Contains(strings.Join(s.warnings, "\n"), msg) {

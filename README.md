@@ -17,17 +17,30 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestone 2 of 6 is done.** `spacebar send` works over an incoming webhook,
-with no OAuth, no administrator approval, and no Cloud project: give a profile a
-webhook URL and send. `version`, `licenses` and `completion` work. What is not
-here yet is reading anything: no `tail`, no `messages list`, no `spaces list`,
-and no MCP server.
+**Milestone 2 of 6 is done, and Milestone 3 is most of the way there.**
+`spacebar send` works over an incoming webhook, with no OAuth, no administrator
+approval, and no Cloud project: give a profile a webhook URL and send. On a
+profile authorized as you, `spaces list`, `spaces get`, `spaces members`,
+`messages list` and `messages get` work as well. `auth`, `version`, `licenses`
+and `completion` work. Still missing: `tail`, `watch`, editing, reacting,
+attachments, aliases, and the MCP server.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
-API does, and none of it has yet been run against a real Google Chat space,
-because building it did not require one. The parts that are guesses rather than
-observations are marked as such in the source where they occur.
+API does. Beyond that, the webhook path has been run end to end against a real
+Google Chat space, and the Chat markup rules were measured there rather than
+read from documentation. Authorizing with your own OAuth client has been run for
+real too, through a browser, against a client in a Workspace organization.
+
+Reading has been run against the real API too. `spaces list`, `spaces get`,
+`spaces members`, `messages list` and `messages get` have each fetched from
+Google rather than from a test server, which settled three things that had been
+decoded from the API reference and never watched work: the response shapes,
+that `orderBy` accepts `createTime DESC`, and that `pageSize` is honoured
+exactly. The live run is also what found the one bug in the set, which is worth
+saying plainly because it is the argument for doing it: `spaces members` asked
+for a scope no authorization requested, so it failed on every profile the tool
+could create, and no test in the tree could have seen it.
 
 The plan, in six milestones:
 
@@ -191,7 +204,8 @@ as CommonMark is italic, so a body that has already been through `--md` must not
 go through it again. The output of a dry run is not an input.
 
 `--dry-run` prints the exact request and sends nothing. It works on every
-command that can write, and the credential is redacted before it is printed:
+command that reaches the network, reads included, and the credential is redacted
+before it is printed:
 
 ```
 $ spacebar send --dry-run 'deploy done'
@@ -215,12 +229,14 @@ capability and the profile rather than pretending the flag does not exist:
 $ spacebar send --file report.pdf 'here it is'
 error: "send --file" needs attachment upload, and profile "alerts" is an
 incoming webhook, which is fixed to one space, write-only, and posts as a bot.
-Use a profile whose transport is useroauth.
+Use a profile whose transport is useroauth:
+  spacebar auth setup --profile NAME < client_secret.json
+  spacebar auth login --profile NAME
+Run 'spacebar auth setup' on its own to see how to create the client.
 ```
 
-That transport arrives in Milestone 3. Until then a webhook is the only way to
-send, which is the point: it is the one that needs nothing from an
-administrator.
+A webhook is still the only path that needs nothing from an administrator, which
+is the point of it. Attachments are Milestone 4 even on a profile that can read.
 
 ## Authorize as yourself
 
@@ -249,6 +265,21 @@ collect your authorization.
 administrator is more likely to approve, and that is often the difference
 between the tool working and not.
 
+**A command a scope does not cover fails at exit 5 before the request**, naming
+the profile and the command that widens the grant, rather than coming back as a
+`403` about your account. So an upgrade that adds a scope tells you to authorize
+again on the profile you are already using:
+
+```
+$ spacebar spaces members spaces/AAAAAAA
+error: "spaces members" needs the ability to read who is in a space, and profile "work" was not granted it.
+Consent to the scope it needs by authorizing again:
+  spacebar auth login --profile work
+The scopes this build asks for have grown since that token was issued.
+```
+
+`spacebar auth status` prints the scopes a profile actually holds.
+
 **One warning you may see.** An OAuth client that has not been verified by
 Google is in testing mode, where authorizations are revoked seven days after
 consent. Nothing in the API says whether yours is, so the warning is worded as a
@@ -256,6 +287,55 @@ possibility, and it stops for good once a refresh proves the limit does not
 apply to you. A client with an Internal user type is not subject to it at all.
 
 [docs/ADMIN.md](docs/ADMIN.md) is the page to hand an administrator.
+
+## Read a space
+
+On a profile authorized as you, rather than a webhook:
+
+```sh
+spacebar spaces list                                  # name, type, display name
+spacebar spaces list --limit 0                        # every one
+spacebar spaces get spaces/AAAAAAA
+spacebar spaces members spaces/AAAAAAA
+
+spacebar messages list spaces/AAAAAAA                 # newest 25
+spacebar messages list spaces/AAAAAAA --limit 100
+spacebar messages list spaces/AAAAAAA --order oldest
+spacebar messages get spaces/AAAAAAA/messages/BBBBBBB
+```
+
+**Newest first**, so that the default limit returns the latest messages rather
+than the oldest ones in a space's history. Reading a conversation in the order
+it happened is what `tail` will be for.
+
+**A list streams.** Pages are fetched as you consume them, so `--json` is NDJSON
+and the first object arrives before the last page has been requested:
+
+```sh
+spacebar spaces list --json | jq -r '.name + "\t" + .display_name'
+spacebar messages list spaces/AAAAAAA --limit 5 --json | jq -r .text
+```
+
+`--limit` is honoured exactly. Asking for five fetches five, rather than
+fetching a page of a thousand and discarding the rest, which matters because the
+per-space quota is shared with every other app acting in that space.
+
+**A list that fails part way through keeps the rows it already wrote** and exits
+non-zero. Every line is a complete object, so a caller that checks the exit code
+is never handed a truncated answer that looks whole. This is the one place the
+"a failing command writes nothing to stdout" rule is narrower than it sounds,
+and it is the price of streaming rather than an oversight.
+
+`--dry-run` works on a read too, printing the request without spending a call
+against the quota:
+
+```
+$ spacebar spaces list --dry-run
+GET https://chat.googleapis.com/v1/spaces?pageSize=25
+Accept: application/json
+Authorization: REDACTED
+User-Agent: spacebar/1.0.0 (+https://github.com/kmoneil/spacebar)
+```
 
 ## Development
 

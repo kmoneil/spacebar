@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -239,8 +240,13 @@ func TestATransportThatReachesManySpacesNeedsATarget(t *testing.T) {
 	}
 }
 
-// roaming is a transport that reaches more than one space, which is what
-// Milestone 3 brings and what this build does not have.
+// roaming is a transport that reaches more than one space.
+//
+// It stands in for a user-OAuth profile in the argument-splitting tests, whose
+// only question is whether the transport has one fixed space or not: a webhook
+// knows its space, so `send 'text'` is complete, and this one does not, so the
+// first of two arguments is a target. Nothing here reaches a network, and the
+// methods return nothing for that reason rather than by omission.
 type roaming struct{}
 
 func (roaming) Kind() config.Transport { return config.TransportUserOAuth }
@@ -253,6 +259,22 @@ func (roaming) Capabilities() transport.Capabilities {
 func (roaming) Send(context.Context, chat.SendRequest) (*chat.Message, error) {
 	return nil, nil
 }
+
+func (roaming) Spaces(context.Context, chat.ListSpacesRequest) iter.Seq2[chat.Space, error] {
+	return func(func(chat.Space, error) bool) {}
+}
+
+func (roaming) GetSpace(context.Context, string) (*chat.Space, error) { return nil, nil }
+
+func (roaming) Members(context.Context, chat.ListMembersRequest) iter.Seq2[chat.Membership, error] {
+	return func(func(chat.Membership, error) bool) {}
+}
+
+func (roaming) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
+	return func(func(chat.Message, error) bool) {}
+}
+
+func (roaming) GetMessage(context.Context, string) (*chat.Message, error) { return nil, nil }
 
 // TestWithoutMdTheBodyIsSentByteForByte.
 //

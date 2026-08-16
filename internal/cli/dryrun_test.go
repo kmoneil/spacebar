@@ -51,9 +51,17 @@ var writeCommands = map[string]struct {
 	"spacebar profile set-webhook": {args: []string{"profile", "set-webhook", "alerts", "--verify"}, needsURL: true},
 }
 
-// readOnlyCommands reach no network at all, so --dry-run has nothing to show
-// and nothing to stop. Each is listed with the reason, because "this one is
-// fine" is the sentence that stops being true without anybody noticing.
+// readOnlyCommands cannot put anything into a space, so --dry-run has nothing
+// to stop. Each is listed with the reason, because "this one is fine" is the
+// sentence that stops being true without anybody noticing.
+//
+// Until m3-04 every entry here also reached no network at all, and the comment
+// said so. The read commands broke that: `spaces list` makes a real request to
+// a real API and is still read-only, because the criterion is whether a command
+// can change something at the far end rather than whether it makes a request.
+// The distinction is worth keeping straight, because a future command that
+// reaches the network and does change something belongs in the other map even
+// if it feels like an inspection.
 var readOnlyCommands = map[string]string{
 	"spacebar":            "the root prints help",
 	"spacebar version":    "reports the binary",
@@ -85,6 +93,18 @@ var readOnlyCommands = map[string]string{
 	"spacebar auth login":  "authorizes this machine and puts nothing in a space",
 	"spacebar auth status": "reads the stored token and deliberately not the network",
 	"spacebar auth logout": "deletes a local token, and does not tell Google to forget anything",
+
+	// The read commands. Every one of these does reach the network, and none of
+	// them can change anything there: they are GETs, and the transport that
+	// carries them refuses a write it has no capability for before the request
+	// is built.
+	"spacebar spaces":         "the group prints help",
+	"spacebar spaces list":    "a GET; it reads what the account can already see",
+	"spacebar spaces get":     "a GET for one space",
+	"spacebar spaces members": "a GET for a space's memberships",
+	"spacebar messages":       "the group prints help",
+	"spacebar messages list":  "a GET; reading a space changes nothing in it",
+	"spacebar messages get":   "a GET for one message",
 }
 
 // TestEveryCommandIsClassifiedAsWritingOrNot is the forcing function.

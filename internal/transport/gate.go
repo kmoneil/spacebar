@@ -17,8 +17,10 @@ package transport
 import (
 	"errors"
 	"fmt"
+	"iter"
 
 	"github.com/kmoneil/spacebar/internal/config"
+	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 )
 
@@ -47,6 +49,7 @@ const (
 	CanUpload
 	CanListSpaces
 	CanResolveDM
+	CanReadMembers
 
 	// numCapabilities is the count, and it is last so that adding a capability
 	// above it moves it. capabilityTable is held to it by a test, so a
@@ -63,22 +66,73 @@ type capability struct {
 
 	// has reads the field out of a Capabilities.
 	has func(Capabilities) bool
+
+	// clear turns the field off, for ScopedCapabilities, which narrows a
+	// transport kind's ceiling to what its credential was granted. Paired with
+	// has in the same row so that the reader and the writer cannot name
+	// different fields, which is the whole failure mode of two parallel tables.
+	clear func(*Capabilities)
 }
 
 // capabilityTable is indexed by Capability. A slice rather than a map so that
 // the compiler's own bounds are part of the check, and so that the order here
 // has to match the order above.
 var capabilityTable = [numCapabilities]capability{
-	CanSend:       {"the ability to send", func(c Capabilities) bool { return c.CanSend }},
-	CanSendCards:  {"card support", func(c Capabilities) bool { return c.CanSendCards }},
-	CanRead:       {"read access", func(c Capabilities) bool { return c.CanRead }},
-	CanEdit:       {"the ability to edit a message", func(c Capabilities) bool { return c.CanEdit }},
-	CanDelete:     {"the ability to delete a message", func(c Capabilities) bool { return c.CanDelete }},
-	CanReact:      {"the ability to react to a message", func(c Capabilities) bool { return c.CanReact }},
-	CanThread:     {"threading", func(c Capabilities) bool { return c.CanThread }},
-	CanUpload:     {"attachment upload", func(c Capabilities) bool { return c.CanUpload }},
-	CanListSpaces: {"the ability to list spaces", func(c Capabilities) bool { return c.CanListSpaces }},
-	CanResolveDM:  {"the ability to find a direct message", func(c Capabilities) bool { return c.CanResolveDM }},
+	CanSend: {
+		"the ability to send",
+		func(c Capabilities) bool { return c.CanSend },
+		func(c *Capabilities) { c.CanSend = false },
+	},
+	CanSendCards: {
+		"card support",
+		func(c Capabilities) bool { return c.CanSendCards },
+		func(c *Capabilities) { c.CanSendCards = false },
+	},
+	CanRead: {
+		"read access",
+		func(c Capabilities) bool { return c.CanRead },
+		func(c *Capabilities) { c.CanRead = false },
+	},
+	CanEdit: {
+		"the ability to edit a message",
+		func(c Capabilities) bool { return c.CanEdit },
+		func(c *Capabilities) { c.CanEdit = false },
+	},
+	CanDelete: {
+		"the ability to delete a message",
+		func(c Capabilities) bool { return c.CanDelete },
+		func(c *Capabilities) { c.CanDelete = false },
+	},
+	CanReact: {
+		"the ability to react to a message",
+		func(c Capabilities) bool { return c.CanReact },
+		func(c *Capabilities) { c.CanReact = false },
+	},
+	CanThread: {
+		"threading",
+		func(c Capabilities) bool { return c.CanThread },
+		func(c *Capabilities) { c.CanThread = false },
+	},
+	CanUpload: {
+		"attachment upload",
+		func(c Capabilities) bool { return c.CanUpload },
+		func(c *Capabilities) { c.CanUpload = false },
+	},
+	CanListSpaces: {
+		"the ability to list spaces",
+		func(c Capabilities) bool { return c.CanListSpaces },
+		func(c *Capabilities) { c.CanListSpaces = false },
+	},
+	CanResolveDM: {
+		"the ability to find a direct message",
+		func(c Capabilities) bool { return c.CanResolveDM },
+		func(c *Capabilities) { c.CanResolveDM = false },
+	},
+	CanReadMembers: {
+		"the ability to read who is in a space",
+		func(c Capabilities) bool { return c.CanReadMembers },
+		func(c *Capabilities) { c.CanReadMembers = false },
+	},
 }
 
 // String is what this capability is called in a sentence, so that a %s or a %v
@@ -96,6 +150,16 @@ func (c Capabilities) Has(want Capability) bool {
 		return false
 	}
 	return capabilityTable[want].has(c)
+}
+
+// clear turns one capability off. Unexported: narrowing happens in
+// ScopedCapabilities and nowhere else, because a capability a caller could
+// switch off is a gate a caller could switch off.
+func (c *Capabilities) clear(want Capability) {
+	if want < 0 || want >= numCapabilities {
+		return
+	}
+	capabilityTable[want].clear(c)
 }
 
 // Require refuses, before anything is built or sent, when this profile's
@@ -121,9 +185,44 @@ func Require(t Transport, command string, needed ...Capability) error {
 	return nil
 }
 
+// Unsupported is the refusal a transport returns from inside a capability it
+// does not have.
+//
+// Exported because the implementations live in their own packages and have to
+// refuse in the same words as Require does, from the same table. A webhook that
+// wrote its own sentence for "cannot read" would be a second wording of one
+// fact, and the two would drift the first time either was improved.
+func Unsupported(t Transport, command string, want Capability) error {
+	return unsupported(t, command, want)
+}
+
+// Refused is Unsupported for a read path that returns an iterator.
+//
+// The refusal arrives through the same channel as any other failure, as the
+// error half of the first pair, so a caller that ranges over the result handles
+// it in the place it already handles a 403. The alternative, a second return
+// value on every list method, is one every caller has to check before starting
+// the range and one of them eventually would not.
+func Refused[T any](t Transport, command string, want Capability) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
+		yield(zero, Unsupported(t, command, want))
+	}
+}
+
 func unsupported(t Transport, command string, want Capability) error {
 	message := fmt.Sprintf("%q needs %s, and profile %q %s\n%s",
 		command, describe(want), t.Profile(), explainKind(t.Kind()), fix(t.Kind(), want))
+
+	// A capability the transport kind has but this profile does not is a grant
+	// that was never asked for, not a limit of the transport. Saying "a webhook
+	// is write-only" to somebody holding a user-OAuth token would be false, and
+	// saying "use a profile whose transport is useroauth" to somebody already on
+	// one is the kind of advice that reads as a bug in the tool.
+	if CapabilitiesFor(t.Kind()).Has(want) {
+		message = fmt.Sprintf("%q needs %s, and profile %q was not granted it.\n%s",
+			command, describe(want), t.Profile(), reauthorize(t.Profile()))
+	}
 
 	return &output.Error{
 		Code:    "UNSUPPORTED",
@@ -131,6 +230,18 @@ func unsupported(t Transport, command string, want Capability) error {
 		Message: message,
 		Err:     ErrUnsupported,
 	}
+}
+
+// reauthorize names the command that widens a grant.
+//
+// The scopes are not listed. What somebody has to do about it is identical
+// whichever one is missing, and a scope URL in an error message is forty
+// characters that answer a question nobody asked: `auth status` prints the
+// granted scopes for anybody who wants them.
+func reauthorize(profile string) string {
+	return "Consent to the scope it needs by authorizing again:\n" +
+		"  " + meta.AppName + " auth login --profile " + profile + "\n" +
+		"The scopes this build asks for have grown since that token was issued."
 }
 
 func describe(want Capability) string {
@@ -164,13 +275,19 @@ func explainKind(kind config.Transport) string {
 // what setting up the alternative involves rather than only naming it.
 func fix(kind config.Transport, want Capability) string {
 	if kind == config.TransportWebhook {
-		// Deliberately does not name the command that sets one up. `auth login`
-		// arrives with the milestone that adds the transport, and a refusal
-		// that sends somebody to a command this binary does not have is a
-		// second dead end on top of the first. internal/profile is where a
-		// caller who configures the transport anyway gets told what is missing,
-		// because that is the package that knows which transports are built.
-		return "Use a profile whose transport is " + string(config.TransportUserOAuth) + "."
+		// This named no command until m3-04, on the grounds that sending
+		// somebody to `auth login` before the binary had it would be a second
+		// dead end on top of the first. The transport exists now, so the
+		// refusal can name the whole path instead of only the destination.
+		//
+		// Both commands, in order, because the first is the one that fails
+		// otherwise. A build from source has no OAuth client linked into it by
+		// design, so `auth login` on a fresh checkout has nothing to authorize
+		// against, and being sent straight to it would be the third dead end.
+		return "Use a profile whose transport is " + string(config.TransportUserOAuth) + ":\n" +
+			"  " + meta.AppName + " auth setup --profile NAME < client_secret.json\n" +
+			"  " + meta.AppName + " auth login --profile NAME\n" +
+			"Run '" + meta.AppName + " auth setup' on its own to see how to create the client."
 	}
 
 	if kind == config.TransportUserOAuth && want == CanSendCards {

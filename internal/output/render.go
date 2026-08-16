@@ -91,11 +91,25 @@ func (r *Renderer) Result(data any, fields Fields) error {
 // mode it has to be parseable by whatever the caller pipes it into. Putting it
 // on stderr would mean every consumer of a dry run needed 2>&1, mixing it with
 // the warnings it is not.
+// The text always ends at a line boundary, and one is added when the value does
+// not have one. Not an alteration of the value, which is why it is here rather
+// than left to each caller: it is the line terminator every line-oriented stream
+// ends with, the same one Item writes, and stdout is read by `wc -l`, by a shell
+// substitution that strips it anyway, and by a terminal that would otherwise put
+// the next prompt in the middle of somebody's message. A dry run already ends
+// with one and is unchanged; a message body does not, which is how this was
+// found.
 func (r *Renderer) Block(data any, text string) error {
 	if r.opts.JSON {
 		return r.encode(r.out, data, true)
 	}
-	_, err := fmt.Fprint(r.out, Sanitize(text))
+
+	safe := Sanitize(text)
+	if !strings.HasSuffix(safe, "\n") {
+		safe += "\n"
+	}
+
+	_, err := fmt.Fprint(r.out, safe)
 	return err
 }
 

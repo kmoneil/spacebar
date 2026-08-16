@@ -1,0 +1,4 @@
+exit 2
+--- stdout
+--- stderr
+error: --order takes "newest" or "oldest", and "sideways" is neither.

@@ -154,6 +154,8 @@ with, sponsored by, or endorsed by Google.`,
 		newProfileCmd(opts),
 		newSendCmd(opts),
 		newAuthCmd(opts),
+		newSpacesCmd(opts),
+		newMessagesCmd(opts),
 	)
 
 	return root

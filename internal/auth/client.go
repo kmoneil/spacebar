@@ -189,12 +189,18 @@ var SendOnlyScopes = []string{ScopeSendOnly}
 
 // DefaultScopes are what an unqualified authorization asks for.
 //
-// Send, edit and delete messages, and list spaces so that a target can be
-// resolved by name. Deliberately not chat.spaces, which permits creating spaces
-// and looking up direct messages, because neither is something this tool does
-// yet and a scope requested before it is needed is a scope an administrator has
-// to approve for no reason.
-var DefaultScopes = []string{ScopeMessages, ScopeSpacesRO}
+// Send, edit and delete messages, list spaces so that a target can be resolved
+// by name, and read who is in one. Deliberately not chat.spaces, which permits
+// creating spaces and looking up direct messages, because neither is something
+// this tool does yet and a scope requested before it is needed is a scope an
+// administrator has to approve for no reason.
+//
+// chat.memberships.readonly is here because `spaces members` needs it and was
+// shipped without it: the command 403'd on every profile this tool could
+// create, and the scope-before-it-is-needed rule does not cover a scope that is
+// needed. It is the readonly one rather than chat.memberships, which permits
+// adding and removing people from a space and is a different order of trust.
+var DefaultScopes = []string{ScopeMessages, ScopeSpacesRO, ScopeMembers}
 
 // ScopeNames shortens scopes for display. The prefix is the same on every one
 // of them and says nothing.

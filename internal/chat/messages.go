@@ -206,6 +206,17 @@ func DeriveMessageID(space, text, threadKey string) string {
 // spaceName is what the API calls a space: spaces/ and an opaque identifier.
 var spaceName = regexp.MustCompile(`^spaces/[A-Za-z0-9_-]+$`)
 
+// messageName is a message resource name: a space, then messages/, then an
+// identifier.
+//
+// The identifier half admits a dot, which the space half does not, because the
+// API's own generated message IDs contain one: a message reads as
+// spaces/AAA/messages/nMs6.nMs6 rather than as a single opaque run. A
+// caller-supplied ID is the other shape it takes, and those begin with the
+// client- prefix and are hex from DeriveMessageID. Neither admits a slash, which
+// is the character that would add a path segment.
+var messageName = regexp.MustCompile(`^spaces/[A-Za-z0-9_-]+/messages/[A-Za-z0-9_.-]+$`)
+
 // CheckSpaceName refuses anything that is not a space resource name
 // (SPEC.md §15.8).
 //
@@ -225,6 +236,25 @@ func CheckSpaceName(space string) error {
 	if !spaceName.MatchString(space) {
 		return clientErr("%q is not a space name.\nA space is %q followed by its identifier, as in %q.",
 			space, "spaces/", "spaces/AAAAAAAAAAA")
+	}
+	return nil
+}
+
+// CheckMessageName refuses anything that is not a message resource name.
+//
+// The same rule as CheckSpaceName and for the same reason: this value becomes a
+// URL path, so what the pattern accepts has to be safe there unescaped, and
+// escaping stays the second layer rather than the only one. It is a separate
+// function rather than a flag on the first because the two names admit
+// different characters, and a single function taking a boolean would be one
+// call site away from checking a message against the space rule.
+func CheckMessageName(message string) error {
+	if message == "" {
+		return clientErr("no message was given.")
+	}
+	if !messageName.MatchString(message) {
+		return clientErr("%q is not a message name.\nA message is a space, then %q, then its identifier, as in %q.",
+			message, "messages/", "spaces/AAAAAAAAAAA/messages/BBBBBBBBBBB")
 	}
 	return nil
 }

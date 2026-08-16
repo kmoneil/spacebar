@@ -18,12 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/kmoneil/spacebar/internal/auth"
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
@@ -59,6 +61,7 @@ func TestTheCapabilityMatrix(t *testing.T) {
 		{CanUpload, "upload", false, true},
 		{CanListSpaces, "list spaces", false, true},
 		{CanResolveDM, "resolve a DM", false, true},
+		{CanReadMembers, "read members", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := CapabilitiesFor(config.TransportWebhook).Has(tc.capability); got != tc.webhook {
@@ -116,10 +119,11 @@ func TestEveryCapabilityHasADescription(t *testing.T) {
 // script across four profiles needs to know which one could not do the work,
 // and what to do instead.
 //
-// It deliberately does not name `auth login`. That command arrives with the
-// milestone that adds the transport, and a refusal sending somebody to a
-// command this binary does not have is a second dead end on top of the first.
-// The milestone that adds it puts the pointer back.
+// It names `auth setup` before `auth login`, in that order, because a build
+// from source has no OAuth client linked into it and being sent straight to
+// `auth login` would be the next dead end. Until the milestone that added the
+// transport, it named neither: a refusal pointing at a command the binary did
+// not have was worse than one that named none.
 func TestARefusalNamesTheProfileAndTheFix(t *testing.T) {
 	err := Require(stub{kind: config.TransportWebhook, profile: "alerts"}, "tail", CanRead)
 	if err == nil {
@@ -256,20 +260,61 @@ func TestARefusalMakesNoNetworkCall(t *testing.T) {
 	}
 }
 
-// stub is a Transport whose capabilities come from the matrix, standing in for
-// the implementations that arrive in m2-08 and m3-04.
+// stub is a Transport whose capabilities come from the matrix.
+//
+// It is not either real implementation and is not meant to be. What the tests
+// here exercise is the gate itself: that Require reads the matrix, that a
+// refusal names the profile and a fix, and that an unrecognized transport still
+// produces a sentence. A stub that consulted its own capabilities before acting,
+// as both real transports do, would be testing the stub.
+//
+// Every method reaches the client unconditionally for exactly that reason. A
+// test that wants to prove a refusal happened before the network counts requests
+// against a server that fails the test when it is reached, which is a claim
+// about the gate rather than about politeness inside the stub.
 type stub struct {
 	kind    config.Transport
 	profile string
 	client  *chat.Client
+
+	// caps overrides the kind's ceiling, for a test about a credential that was
+	// granted less than its transport could do. Nil means the ceiling, which is
+	// what a webhook always is: it has no scopes to be narrowed by.
+	caps *Capabilities
 }
 
-func (s stub) Kind() config.Transport     { return s.kind }
-func (s stub) Profile() string            { return s.profile }
-func (s stub) Capabilities() Capabilities { return CapabilitiesFor(s.kind) }
+func (s stub) Kind() config.Transport { return s.kind }
+func (s stub) Profile() string        { return s.profile }
+
+func (s stub) Capabilities() Capabilities {
+	if s.caps != nil {
+		return *s.caps
+	}
+	return CapabilitiesFor(s.kind)
+}
 
 func (s stub) Send(ctx context.Context, req chat.SendRequest) (*chat.Message, error) {
 	return s.client.SendMessage(ctx, req)
+}
+
+func (s stub) Spaces(ctx context.Context, req chat.ListSpacesRequest) iter.Seq2[chat.Space, error] {
+	return s.client.Spaces(ctx, req)
+}
+
+func (s stub) GetSpace(ctx context.Context, space string) (*chat.Space, error) {
+	return s.client.GetSpace(ctx, space)
+}
+
+func (s stub) Members(ctx context.Context, req chat.ListMembersRequest) iter.Seq2[chat.Membership, error] {
+	return s.client.Members(ctx, req)
+}
+
+func (s stub) Messages(ctx context.Context, req chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
+	return s.client.Messages(ctx, req)
+}
+
+func (s stub) GetMessage(ctx context.Context, message string) (*chat.Message, error) {
+	return s.client.GetMessage(ctx, message)
 }
 
 // TestARefusalForAnUnrecognizedTransportStillReadsAsASentence.
@@ -293,5 +338,130 @@ func TestARefusalForAnUnrecognizedTransportStillReadsAsASentence(t *testing.T) {
 	}
 	if strings.Contains(message, "  ") || strings.Contains(message, " \n") {
 		t.Errorf("the refusal has a gap where a phrase should be:\n%q", message)
+	}
+}
+
+// notYetGranted are capabilities the useroauth matrix claims that an ordinary
+// authorization does not ask the scope for, each with the reason and the
+// milestone that settles it.
+//
+// This is a to-do list that fails when it is ignored rather than one that rots
+// in a document. A capability arrives here when the matrix says a transport
+// could do it and no default scope permits it, which is a safe state only for
+// as long as no command requires it: the moment one does, the command 403s on
+// every profile this tool can create.
+var notYetGranted = map[Capability]string{
+	// chat.spaces is what grants spaces:findDirectMessage, and it also permits
+	// creating spaces, so it is not asked for until a command needs it.
+	// Milestone 4 adds the resolver, and it has to widen DefaultScopes in the
+	// same change or this stops being a to-do and becomes the members bug
+	// again.
+	CanResolveDM: "M4 adds the resolver; DefaultScopes must gain chat.spaces with it",
+}
+
+// TestTheDefaultGrantCoversWhatTheMatrixClaims is the test that was missing.
+//
+// `spaces members` shipped gated on a capability the matrix granted and no
+// scope did: chat.memberships.readonly was in auth.DefaultScopes nowhere, so
+// every profile this tool could create answered 403 PERMISSION_DENIED, with a
+// message about the account rather than about the grant. Nothing in the tree
+// could have caught it, because the matrix and the scope list had never been
+// compared to each other.
+//
+// The comparison is the whole test. A capability the matrix claims and no
+// default scope permits is either a bug or a carded to-do, and the difference
+// is whether it is written down in notYetGranted.
+func TestTheDefaultGrantCoversWhatTheMatrixClaims(t *testing.T) {
+	granted := ScopedCapabilities(config.TransportUserOAuth, auth.DefaultScopes)
+	ceiling := CapabilitiesFor(config.TransportUserOAuth)
+
+	for want := range numCapabilities {
+		if !ceiling.Has(want) || granted.Has(want) {
+			continue
+		}
+		if reason, known := notYetGranted[want]; known {
+			t.Logf("%v is claimed but not granted, deliberately: %s", want, reason)
+			continue
+		}
+		t.Errorf("the matrix claims %v and no scope in auth.DefaultScopes grants it,\n"+
+			"so every profile this tool creates would fail at the API rather than at the gate.\n"+
+			"Add the scope to auth.DefaultScopes, or record the capability in notYetGranted with the milestone that will.", want)
+	}
+}
+
+// TestNothingIsWaitingOnAGrantItAlreadyHas keeps the list above honest in the
+// other direction. An entry that has been satisfied is a comment claiming a
+// limitation that no longer exists, which is how a to-do list becomes fiction.
+func TestNothingIsWaitingOnAGrantItAlreadyHas(t *testing.T) {
+	granted := ScopedCapabilities(config.TransportUserOAuth, auth.DefaultScopes)
+
+	for want, reason := range notYetGranted {
+		if granted.Has(want) {
+			t.Errorf("notYetGranted says %v is waiting on a scope (%s), but the default set grants it. Remove the entry.", want, reason)
+		}
+	}
+}
+
+// TestEveryCapabilitySaysWhatGrantsIt.
+//
+// A capability absent from the grants table is one ScopedCapabilities leaves
+// alone, which means a new capability is granted by default to any token that
+// holds any scope at all. Failing here is how somebody finds that out at the
+// moment they add one rather than the moment it is exploited.
+//
+// CanSendCards is the deliberate absence: no scope grants it, because what it
+// needs is app authentication rather than a permission the user can consent to.
+func TestEveryCapabilitySaysWhatGrantsIt(t *testing.T) {
+	for want := range numCapabilities {
+		if want == CanSendCards {
+			continue
+		}
+		if len(grants[want]) == 0 {
+			t.Errorf("no scope is recorded as granting %v, so it would survive any narrowing", want)
+		}
+	}
+}
+
+// TestARefusalForAMissingScopeNamesAuthLoginRatherThanTheTransport.
+//
+// Two refusals wear the same exit code and mean different things. "This profile
+// is a webhook" is answered by using another profile; "this token was never
+// granted that" is answered by authorizing again on the profile in hand. Being
+// told to switch transports while already on the right one is the kind of
+// advice that reads as a bug in the tool.
+func TestARefusalForAMissingScopeNamesAuthLoginRatherThanTheTransport(t *testing.T) {
+	narrowed := ScopedCapabilities(config.TransportUserOAuth, []string{auth.ScopeMessages})
+	scoped := stub{kind: config.TransportUserOAuth, profile: "work", caps: &narrowed}
+
+	err := Require(scoped, "spaces members", CanReadMembers)
+	if err == nil {
+		t.Fatal("a capability no scope granted was permitted")
+	}
+	if got := output.ExitCodeOf(err); got != output.ExitUnsupported {
+		t.Errorf("exit = %d, want %d", got, output.ExitUnsupported)
+	}
+	if !strings.Contains(err.Error(), meta.AppName+" auth login --profile work") {
+		t.Errorf("the refusal does not name the command that widens the grant:\n%v", err)
+	}
+	if strings.Contains(err.Error(), "transport is useroauth") {
+		t.Errorf("the refusal sends somebody to the transport they are already on:\n%v", err)
+	}
+
+	// The transport-level refusal keeps its own wording, which is the half this
+	// change must not have broken.
+	hook := stub{kind: config.TransportWebhook, profile: "alerts"}
+	hookErr := Require(hook, "spaces members", CanReadMembers)
+	if hookErr == nil {
+		t.Fatal("a webhook was permitted to read a membership list")
+	}
+	if !strings.Contains(hookErr.Error(), "incoming webhook") {
+		t.Errorf("a webhook refusal stopped explaining the transport:\n%v", hookErr)
+	}
+
+	// It does name `auth login`, as the second step of setting up a profile that
+	// can. What it must not do is name this profile: re-authorizing a webhook is
+	// not a thing, because a webhook is a URL and holds no token to widen.
+	if strings.Contains(hookErr.Error(), "auth login --profile alerts") {
+		t.Errorf("a webhook refusal offers to re-authorize a profile that holds no token:\n%v", hookErr)
 	}
 }

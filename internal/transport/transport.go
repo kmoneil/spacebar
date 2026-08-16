@@ -33,7 +33,9 @@ package transport
 
 import (
 	"context"
+	"iter"
 
+	"github.com/kmoneil/spacebar/internal/auth"
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
 )
@@ -55,6 +57,13 @@ type Capabilities struct {
 	CanUpload     bool
 	CanListSpaces bool
 	CanResolveDM  bool
+
+	// CanReadMembers is separate from CanRead because Chat scopes them
+	// separately: reading messages is chat.messages.readonly and reading a
+	// membership list is chat.memberships.readonly. Folding the two together is
+	// what made `spaces members` answer 403 on every profile this tool could
+	// create, since the capability said yes and the grant said no.
+	CanReadMembers bool
 }
 
 // Transport is one way of reaching Chat.
@@ -84,6 +93,32 @@ type Transport interface {
 
 	// Send posts a message.
 	Send(ctx context.Context, req chat.SendRequest) (*chat.Message, error)
+
+	// The read paths. Every one of them returns a refusal on a transport whose
+	// Capabilities say it cannot read, per SPEC.md §8, rather than being absent
+	// from that implementation.
+	//
+	// Present on the interface rather than behind a second optional one like
+	// Fixed, and the difference is deliberate. Fixed answers a question only one
+	// transport has an answer to, so putting Space() here would force the other
+	// to invent one. Reading is not like that: both transports have a real
+	// answer, and for the webhook the answer is no. Making that a compile-time
+	// obligation is what stops a third transport from quietly having no opinion.
+
+	// Spaces lists the spaces this profile can reach.
+	Spaces(ctx context.Context, req chat.ListSpacesRequest) iter.Seq2[chat.Space, error]
+
+	// GetSpace reads one space.
+	GetSpace(ctx context.Context, space string) (*chat.Space, error)
+
+	// Members lists who is in a space.
+	Members(ctx context.Context, req chat.ListMembersRequest) iter.Seq2[chat.Membership, error]
+
+	// Messages lists messages in a space.
+	Messages(ctx context.Context, req chat.ListMessagesRequest) iter.Seq2[chat.Message, error]
+
+	// GetMessage reads one message by resource name.
+	GetMessage(ctx context.Context, message string) (*chat.Message, error)
 }
 
 // CapabilitiesFor is the matrix in SPEC.md §8.1, in one place.
@@ -92,6 +127,14 @@ type Transport interface {
 // matrix cannot disagree with itself. An unrecognized transport can do nothing:
 // internal/config already refuses one on load, and if it ever arrives here the
 // safe answer is to refuse everything rather than to guess a capability.
+//
+// This is a ceiling and not an answer. It says what the transport kind could do
+// if it were granted everything, which for a webhook is the whole story and for
+// user OAuth is half of it: the other half is which scopes the person actually
+// consented to. Ask ScopedCapabilities for what a particular profile can do.
+// The distinction is what a live check found: this row claimed CanReadMembers
+// while no token this tool issues had the scope for it, so the gate passed and
+// the API refused, with a message blaming the account rather than the grant.
 func CapabilitiesFor(kind config.Transport) Capabilities {
 	switch kind {
 	case config.TransportWebhook:
@@ -122,17 +165,86 @@ func CapabilitiesFor(kind config.Transport) Capabilities {
 			// the person rather than as an app.
 			CanSendCards: false,
 
-			CanRead:       true,
-			CanEdit:       true,
-			CanDelete:     true,
-			CanReact:      true,
-			CanThread:     true,
-			CanUpload:     true,
-			CanListSpaces: true,
-			CanResolveDM:  true,
+			CanRead:        true,
+			CanEdit:        true,
+			CanDelete:      true,
+			CanReact:       true,
+			CanThread:      true,
+			CanUpload:      true,
+			CanListSpaces:  true,
+			CanResolveDM:   true,
+			CanReadMembers: true,
 		}
 	}
 	return Capabilities{}
+}
+
+// grants maps one capability to the scopes that permit it, any one of which is
+// enough.
+//
+// A table rather than a chain of conditions, so that adding a capability
+// without saying what grants it is visible here as a missing row rather than
+// invisible as a condition nobody wrote. A capability absent from this table is
+// one no scope gates, which is the honest answer for CanSendCards: no scope
+// grants it, because what it needs is app authentication rather than permission.
+var grants = map[Capability][]string{
+	CanSend:        {auth.ScopeSendOnly, auth.ScopeMessages},
+	CanRead:        {auth.ScopeReadOnly, auth.ScopeMessages},
+	CanEdit:        {auth.ScopeMessages},
+	CanDelete:      {auth.ScopeMessages},
+	CanReact:       {auth.ScopeReactions, auth.ScopeMessages},
+	CanThread:      {auth.ScopeSendOnly, auth.ScopeMessages},
+	CanUpload:      {auth.ScopeSendOnly, auth.ScopeMessages},
+	CanListSpaces:  {auth.ScopeSpacesRO, auth.ScopeSpaces},
+	CanResolveDM:   {auth.ScopeSpaces},
+	CanReadMembers: {auth.ScopeMembers},
+}
+
+// ScopedCapabilities is what a profile can actually do: the transport kind's
+// ceiling, narrowed to what its credential was granted.
+//
+// The narrowing only applies where a scope is what stands in the way. A webhook
+// has no scopes at all, because it is a URL rather than a token, so its row
+// passes through untouched; asking whether a webhook was granted
+// chat.memberships.readonly is a category error, not a refusal.
+//
+// The point of doing this before the network rather than after it is the
+// message. A capability missing here is refused at exit 5 naming the command
+// that re-authorizes, and the same capability missing at the far end is a 403
+// that says the account is not allowed, which sends somebody to an
+// administrator to fix something that `auth login` fixes.
+func ScopedCapabilities(kind config.Transport, scopes []string) Capabilities {
+	caps := CapabilitiesFor(kind)
+	if kind != config.TransportUserOAuth {
+		return caps
+	}
+
+	held := make(map[string]bool, len(scopes))
+	for _, scope := range scopes {
+		held[scope] = true
+	}
+
+	for want, permitting := range grants {
+		if !caps.Has(want) {
+			continue
+		}
+		if !anyHeld(held, permitting) {
+			caps.clear(want)
+		}
+	}
+	return caps
+}
+
+// anyHeld reports whether the grant holds any one of the scopes that permit a
+// capability. Any rather than all: chat.messages subsumes the narrow write
+// scopes, and requiring both would refuse a profile that holds the broader one.
+func anyHeld(held map[string]bool, permitting []string) bool {
+	for _, scope := range permitting {
+		if held[scope] {
+			return true
+		}
+	}
+	return false
 }
 
 // Fixed is a transport that can reach exactly one space.

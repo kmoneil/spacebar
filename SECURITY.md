@@ -272,6 +272,19 @@ it is pasted rather than as a `400` about an API key days later.
   `TestSameOriginIsCheckedAfterTheJoin`, `TestASpaceCannotRedirectTheRequest`,
   and `FuzzAPathStaysOnTheBase`, which states it as a property rather than as
   the list of cases somebody thought of.
+- **A page token is the only value the far end chooses that goes back into a
+  request**, and it cannot change one. Every other part of a request comes from
+  the operator or from this repository; a `nextPageToken` comes from the server
+  and is sent back to ask for the following page. It is set as a query value
+  rather than written into a URL, so the encoder escapes it, and the path is
+  fixed before the query is built. A token of `x&key=stolen` adds no parameter
+  and a token full of `..` moves no path.
+  `TestAPageTokenChosenByTheServerCannotChangeTheRequest`.
+- **A server cannot hold a list open forever.** A page token identical to the
+  one just used ends the walk rather than being followed, so a far end that kept
+  reissuing the same token would stop rather than becoming a command that never
+  returns while spending a shared per-space quota.
+  `TestANonAdvancingPageTokenStopsTheWalk`.
 - **Nothing ever blocks on input.** A command that would read from a terminal
   when stdin is not one refuses and exits `7` instead. A CLI that blocks on a
   prompt inside a pipeline hangs whatever is driving it, and a hung agent is
@@ -535,6 +548,29 @@ read. It is gated more tightly than the CLI, on purpose.
   `TestOnlyATransportBuildsAChatClient` holds the middle step, which is the one
   that is otherwise only a convention: `internal/cli` may import
   `internal/chat`, and nothing else would stop it sending directly.
+- **A capability is the transport's ceiling narrowed by the granted scopes**,
+  and a scope the token lacks is the same exit 5 before the same network call.
+  `TestAScopeTheTokenLacksIsRefusedBeforeTheNetwork`.
+
+  This is a claim about honesty rather than about containment: the token's
+  scopes are enforced by Google whatever this tool believes, so nothing is
+  gained by checking them and nothing is breached by not. What is gained is the
+  message. A capability the tool claims and the grant does not is a `403
+  PERMISSION_DENIED`, which says the account is not allowed and sends somebody
+  to an administrator to fix something `auth login` fixes. `spaces members`
+  shipped in exactly that state and is why the narrowing exists.
+
+  The scopes come from the stored token rather than from the constant this
+  build would ask for, because a binary that grew a scope must not assume every
+  token issued before it has one. A token record with no scopes recorded grants
+  nothing. `TestATokenRecordWithNoScopesGrantsNothing`.
+
+  `TestTheDefaultGrantCoversWhatTheMatrixClaims` is the other half, and it
+  points the opposite way: a capability the matrix claims that no default scope
+  permits fails the build unless it is recorded as owed by a named milestone. A
+  command shipped against a capability nobody can be granted is the failure this
+  pair exists to prevent, and it is invisible to every other test in the tree,
+  because the matrix and the scope list had never been compared to each other.
 - **Confirmation that cannot be asked for is refused, not skipped.** Exit code
   7, `output.ExitRefused`.
 - **A send is never replayed after an upstream error.** A `POST` that received
@@ -655,8 +691,15 @@ message was sanitised.
 
 What a hostile space cannot do is get the credential sent anywhere else, get a
 file written outside the directory you named, get an escape sequence onto your
-terminal, get a process started, or get a result that was cut short reported as
-complete.
+terminal, get a process started, or get a walk that *failed* reported as one
+that finished.
+
+That last one is worth separating from withholding, because the two look alike
+and only one is defended. A page that fails is an error and a non-zero exit: a
+list that dies on page four does not return three pages and exit 0. A page that
+*lies*, claiming to be the last when it is not, is believed, because there is no
+second source to check it against. So the guarantee is that this tool will not
+invent completeness, not that the far end cannot.
 
 ## Keeping this current
 

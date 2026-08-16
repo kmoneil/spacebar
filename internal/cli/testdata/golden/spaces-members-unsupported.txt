@@ -1,7 +1,7 @@
 exit 5
 --- stdout
 --- stderr
-error: "send --file" needs attachment upload, and profile "alerts" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.
+error: "spaces members" needs the ability to read who is in a space, and profile "alerts" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.
 Use a profile whose transport is useroauth:
   spacebar auth setup --profile NAME < client_secret.json
   spacebar auth login --profile NAME

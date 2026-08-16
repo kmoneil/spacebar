@@ -30,6 +30,7 @@ package webhook
 
 import (
 	"context"
+	"iter"
 	"net/url"
 	"strings"
 	"time"
@@ -146,6 +147,40 @@ func (t *Transport) Send(ctx context.Context, req chat.SendRequest) (*chat.Messa
 	// appended to a URL that ends in /messages.
 	req.Space = ""
 	return t.client.SendMessage(ctx, req)
+}
+
+// The read paths, which this transport does not have.
+//
+// Every one of them refuses without touching its client, so no request leaves
+// the process. That is the same guarantee transport.Require gives a command
+// before it starts, and having it in both places is not redundancy: Require
+// depends on the command remembering to call it, and this does not depend on
+// anything. A command added later that forgets the gate still cannot read
+// through a webhook.
+//
+// The command name passed to each refusal is the command a person would have
+// run to get here, because it is what the message quotes back to them. A
+// transport cannot know that for certain, and the closest true thing beats a
+// blank.
+
+func (t *Transport) Spaces(context.Context, chat.ListSpacesRequest) iter.Seq2[chat.Space, error] {
+	return transport.Refused[chat.Space](t, "spaces list", transport.CanListSpaces)
+}
+
+func (t *Transport) GetSpace(context.Context, string) (*chat.Space, error) {
+	return nil, transport.Unsupported(t, "spaces get", transport.CanRead)
+}
+
+func (t *Transport) Members(context.Context, chat.ListMembersRequest) iter.Seq2[chat.Membership, error] {
+	return transport.Refused[chat.Membership](t, "spaces members", transport.CanRead)
+}
+
+func (t *Transport) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
+	return transport.Refused[chat.Message](t, "messages list", transport.CanRead)
+}
+
+func (t *Transport) GetMessage(context.Context, string) (*chat.Message, error) {
+	return nil, transport.Unsupported(t, "messages get", transport.CanRead)
 }
 
 func (t *Transport) checkSpace(space string) error {

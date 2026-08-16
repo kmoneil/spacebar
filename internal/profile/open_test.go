@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/zalando/go-keyring"
 
@@ -83,6 +84,86 @@ func TestAWebhookProfileOpensAWebhookTransport(t *testing.T) {
 	}
 }
 
+// TestAUserOAuthProfileOpensATransportThatCanRead, which is the whole of m3-04.
+//
+// The assertion that matters is the capability, not the type. A profile with a
+// stored token and a stored client has to come back able to read, because that
+// is the thing this milestone exists to make possible and the thing every read
+// command checks before it does anything.
+func TestAUserOAuthProfileOpensATransportThatCanRead(t *testing.T) {
+	isolate(t, `{"default_profile":"work","profiles":{"work":{"transport":"useroauth","client_id":"test.apps.googleusercontent.com"}}}`)
+
+	store, err := auth.New()
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	if err := store.SaveToken("work", &auth.Token{
+		AccessToken:  "test-access",
+		RefreshToken: "test-refresh",
+		TokenType:    "Bearer",
+		Scopes:       auth.DefaultScopes,
+
+		// Far enough out that nothing here tries to refresh, which would be a
+		// network call. Opening a transport must not make one.
+		Expiry:     time.Now().Add(time.Hour),
+		ObtainedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("storing the token: %v", err)
+	}
+
+	opened, err := For(Options{})
+	if err != nil {
+		t.Fatalf("For: %v", err)
+	}
+	if opened.Transport.Kind() != config.TransportUserOAuth {
+		t.Errorf("kind = %q", opened.Transport.Kind())
+	}
+	if !opened.Transport.Capabilities().Has(transport.CanRead) {
+		t.Error("a user-OAuth profile opened without the ability to read, which is the point of the transport")
+	}
+
+	// It reaches every space the account can, so there is no fixed one and
+	// `send` needs a target. This is the half of the webhook's behaviour that
+	// must not be inherited.
+	if space, fixed := transport.SpaceOf(opened.Transport); fixed {
+		t.Errorf("SpaceOf = %q, %v, but this transport is not fixed to one space", space, fixed)
+	}
+}
+
+// TestOpeningAUserOAuthProfileWithNoClientSaysHowToGetOne.
+//
+// A build from source has no linked OAuth client on purpose, so this is the
+// ordinary state for anybody who cloned the repository rather than an edge case.
+// The failure has to name the command that fixes it, because the alternative is
+// somebody concluding the tool is broken.
+func TestOpeningAUserOAuthProfileWithNoClientSaysHowToGetOne(t *testing.T) {
+	isolate(t, `{"default_profile":"work","profiles":{"work":{"transport":"useroauth"}}}`)
+
+	store, err := auth.New()
+	if err != nil {
+		t.Fatalf("auth.New: %v", err)
+	}
+	if err := store.SaveToken("work", &auth.Token{
+		AccessToken: "test-access",
+		TokenType:   "Bearer",
+		Expiry:      time.Now().Add(time.Hour),
+		ObtainedAt:  time.Now(),
+	}); err != nil {
+		t.Fatalf("storing the token: %v", err)
+	}
+
+	_, err = For(Options{})
+	if err == nil {
+		t.Fatal("a profile with no OAuth client opened anyway")
+	}
+	if got := output.ExitCodeOf(err); got != output.ExitAuthRequired {
+		t.Errorf("exit code = %d, want %d: %v", got, output.ExitAuthRequired, err)
+	}
+	if !strings.Contains(err.Error(), meta.AppName+" auth setup --profile work") {
+		t.Errorf("the failure does not name the command that stores a client:\n%v", err)
+	}
+}
+
 // TestEveryFailurePathStillReturnsAnOpen.
 //
 // Callers read the warnings off the result before deciding what to do with the
@@ -116,10 +197,15 @@ func TestEveryFailurePathStillReturnsAnOpen(t *testing.T) {
 			exit: output.ExitAuthRequired,
 		},
 		{
-			name: "a transport this build does not have yet",
+			// Until m3-04 this case asserted a stub that said "Milestone 3 adds
+			// it". The transport exists now, so the failure moved: a useroauth
+			// profile that was never authorized has no token, which is exit 4
+			// and a different fix. Kept rather than deleted because the path is
+			// still a failure path and still has to return a usable Open.
+			name: "a useroauth profile nobody has authorized",
 			file: `{"default_profile":"work","profiles":{"work":{"transport":"useroauth"}}}`,
-			says: "Milestone 3",
-			exit: output.ExitUnsupported,
+			says: "no credential is stored",
+			exit: output.ExitAuthRequired,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

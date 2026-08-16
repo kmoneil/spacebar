@@ -213,6 +213,40 @@ func TestGoldenOutputContract(t *testing.T) {
 		// network half of it.
 		{"profile-set-webhook-dry-run.txt", []string{"--dry-run", "profile", "set-webhook", "alerts"}, output.ExitOK, "", true, true},
 		{"profile-set-webhook-verify-dry-run.txt", []string{"--dry-run", "profile", "set-webhook", "alerts", "--verify"}, output.ExitOK, "", true, true},
+
+		// The read commands on a webhook profile. This is the shape m3-04's
+		// first claim is about: a read on a write-only transport is exit 5, and
+		// what is frozen here is that the message names the profile, says what a
+		// webhook is, and points at the transport that can.
+		//
+		// It is the failure most users of this tool will actually meet, because
+		// the population the project is built for is the one an incoming webhook
+		// is all they get.
+		{"spaces-list-unsupported.txt", []string{"spaces", "list"}, output.ExitUnsupported, "", true, true},
+		{"spaces-list-unsupported.json", []string{"--json", "spaces", "list"}, output.ExitUnsupported, "", true, true},
+
+		{"messages-list-unsupported.txt", []string{"messages", "list", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
+		{"messages-list-unsupported.json", []string{"--json", "messages", "list", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
+
+		{"spaces-members-unsupported.txt", []string{"spaces", "members", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
+		{"messages-get-unsupported.txt", []string{"messages", "get", "spaces/AAAATestSpace/messages/BBB"}, output.ExitUnsupported, "", true, true},
+
+		// Usage failures. A profile is configured for these the way it is for
+		// send-no-arguments, so that what the golden records is the usage failure
+		// rather than the missing-profile one that would come first.
+		{"messages-list-no-arguments.txt", []string{"messages", "list"}, output.ExitUsage, "", true, true},
+		{"messages-list-no-arguments.json", []string{"--json", "messages", "list"}, output.ExitUsage, "", true, true},
+
+		{"messages-list-bad-order.txt", []string{"messages", "list", "spaces/AAAATestSpace", "--order", "sideways"}, output.ExitUsage, "", true, true},
+
+		{"spaces-get-no-arguments.txt", []string{"spaces", "get"}, output.ExitUsage, "", true, true},
+
+		// A malformed space name is deliberately not recorded here. On the only
+		// profile these goldens can configure, a webhook, the capability gate
+		// fires first and the output is byte-identical to the case above, so a
+		// golden for it would freeze the wrong claim under a name that suggests
+		// otherwise. chat.CheckSpaceName is held where it can actually be
+		// observed, in TestAReadRefusesABadSpaceNameWithoutAskingTheAPI.
 	}
 
 	for _, tc := range cases {
@@ -238,8 +272,8 @@ func TestGoldenOutputContract(t *testing.T) {
 				// Reads the URL from stdin like any other set-webhook, and
 				// deliberately has no profile configured first: a dry run of
 				// setup has to work before there is anything set up.
-			} else if strings.HasPrefix(tc.name, "send") {
-				// send needs a profile that already exists. Configuring it is
+			} else if needsAProfile(tc.name) {
+				// These need a profile that already exists. Configuring it is
 				// setup rather than part of the recorded output.
 				if setup := runCLIIn(t, stdin, "profile", "set-webhook", "alerts"); setup.exit != output.ExitOK {
 					t.Fatalf("setup: exit %d\n%s", setup.exit, setup.stderr)
@@ -269,6 +303,20 @@ func TestGoldenOutputContract(t *testing.T) {
 			golden(t, tc.name, b.String())
 		})
 	}
+}
+
+// needsAProfile reports whether a golden case has to have one configured first.
+//
+// By name prefix rather than by inspecting the arguments, because the arguments
+// are the thing being recorded and a helper that parsed them would be a second
+// implementation of the command tree.
+func needsAProfile(name string) bool {
+	for _, prefix := range []string{"send", "spaces-", "messages-"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestFailureWritesNothingToStdout holds the rule that makes --json safe to
