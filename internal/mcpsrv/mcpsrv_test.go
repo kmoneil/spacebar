@@ -93,6 +93,14 @@ func (f *fake) Watch(context.Context, chat.WatchRequest) iter.Seq2[chat.SpaceEve
 	return func(func(chat.SpaceEvent, error) bool) {}
 }
 
+func (f *fake) Upload(context.Context, chat.UploadRequest) (*chat.AttachmentDataRef, error) {
+	return nil, errors.New("the fake does not upload")
+}
+
+func (f *fake) Download(context.Context, string) ([]byte, error) {
+	return nil, errors.New("the fake does not download")
+}
+
 func (f *fake) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
 	return nil, errors.New("the fake does not edit")
 }

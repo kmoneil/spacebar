@@ -262,6 +262,9 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"messages-edit-unsupported.txt", []string{"messages", "edit", "spaces/AAAATestSpace/messages/BBBB", "text"}, output.ExitUnsupported, "", true, true},
 		{"messages-delete-no-arguments.txt", []string{"messages", "delete"}, output.ExitUsage, "", true, true},
 		{"messages-delete-unsupported.txt", []string{"messages", "delete", "spaces/AAAATestSpace/messages/BBBB", "--yes"}, output.ExitUnsupported, "", true, true},
+		{"messages-download-no-arguments.txt", []string{"messages", "download"}, output.ExitUsage, "", true, true},
+		{"messages-download-unsupported.txt", []string{"messages", "download", "spaces/AAAATestSpace/messages/BBBB"}, output.ExitUnsupported, "", true, true},
+		{"send-file-unsupported.txt", []string{"send", "hello", "--file", "/etc/hosts"}, output.ExitUnsupported, "", true, true},
 
 		// The confirmation is deliberately not recorded here. On the only
 		// profile these goldens can configure, a webhook, the capability gate

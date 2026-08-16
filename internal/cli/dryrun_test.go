@@ -118,6 +118,13 @@ var readOnlyCommands = map[string]string{
 	// has nothing to stop, and Ctrl-C is how it ends.
 	"spacebar tail": "polls for messages and writes nothing, ending on a signal rather than on its own",
 
+	// Writes files on this machine and nothing in a space. The interesting
+	// question about it is not --dry-run, which has no request to stop that
+	// matters, but where the bytes land: the name comes from whoever posted the
+	// message, and TestAServerSuppliedFilenameCannotLeaveTheDirectory is what
+	// holds that.
+	"spacebar messages download": "fetches bytes and writes them locally, changing nothing at the far end",
+
 	// Polls spaceEvents forever and puts nothing anywhere. The same shape as
 	// tail: --dry-run has nothing to stop and Ctrl-C is how it ends. What it
 	// sees that tail cannot is edits, deletions and reactions, and seeing a

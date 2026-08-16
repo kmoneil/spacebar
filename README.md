@@ -23,8 +23,9 @@ profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
 well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
 `messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
-work. `spacebar mcp` serves the read paths to a model over MCP. Still missing:
-attachments, watching more than one space at a time, and writing over MCP.
+work, as do `send --file` and `messages download`. `spacebar mcp` serves the
+read paths to a model over MCP. Still missing: watching more than one space at
+a time, and writing over MCP.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -450,6 +451,32 @@ a minute, and any message resets it.
 
 **Ctrl-C exits 0.** It is how the command is meant to end, so it is not a
 failure, and a script wrapping it does not have to special-case the code.
+
+### Attachments
+
+```sh
+spacebar send spaces/AAAAAAA 'the report' --file report.pdf
+spacebar messages download spaces/AAAAAAA/messages/BBBBBBB --out ~/Downloads
+```
+
+Sending a file is two requests, because that is the API's shape: the bytes are
+exchanged for a token, and the token is what a message can carry. The upload
+goes first, so a file that fails to upload does not become a message with the
+text and no file.
+
+**A downloaded file lands inside `--out` and nowhere else.** The name comes
+from whoever posted the message, so an attachment called
+`../../.ssh/authorized_keys` is written as `.._.._.ssh_authorized_keys` in the
+directory you asked for. Nothing is overwritten without `--force`, because the
+name is not yours.
+
+**The API's own download URL is never printed.** It carries an access token in
+its query, which makes it a credential rather than a link, so `--json` gives you
+the attachment's `resource_name` and this tool fetches the bytes with your own
+credential.
+
+A Drive attachment is listed and skipped: Chat returns a reference rather than
+the bytes, and fetching it is Drive's API rather than this one.
 
 ### Watching, which is not tailing
 

@@ -280,6 +280,12 @@ func (roaming) Watch(context.Context, chat.WatchRequest) iter.Seq2[chat.SpaceEve
 	return func(func(chat.SpaceEvent, error) bool) {}
 }
 
+func (roaming) Upload(context.Context, chat.UploadRequest) (*chat.AttachmentDataRef, error) {
+	return nil, nil
+}
+
+func (roaming) Download(context.Context, string) ([]byte, error) { return nil, nil }
+
 func (roaming) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
 	return nil, nil
 }

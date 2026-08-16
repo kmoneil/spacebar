@@ -82,6 +82,12 @@ type SendRequest struct {
 	// RequestID is the API's other de-duplication mechanism, kept distinct
 	// because it does not become part of the message's resource name.
 	RequestID string
+
+	// Attach is an upload token from Upload, turned into the message's
+	// attachment field on the way out. A token rather than a resource name,
+	// because that is what the create endpoint takes for something just
+	// uploaded.
+	Attach string
 }
 
 // SendMessage posts a message (SPEC.md §7.3).
@@ -92,6 +98,11 @@ func (c *Client) SendMessage(ctx context.Context, req SendRequest) (*Message, er
 	setIf(query, "requestId", req.RequestID)
 
 	body := req.Message
+	if req.Attach != "" {
+		body.Attachment = append(body.Attachment, Attachment{
+			AttachmentDataRef: &AttachmentDataRef{AttachmentUploadToken: req.Attach},
+		})
+	}
 	if req.ThreadKey != "" {
 		// Merged rather than overwritten, so that a caller who set a thread by
 		// name keeps it. The key is what a webhook has instead of a name.
@@ -399,6 +410,38 @@ func CheckEmoji(emoji string) error {
 		return clientErr("%q is a shortcode, and this endpoint takes the emoji itself.\n"+
 			"Paste the character: %s react MESSAGE '👍'",
 			emoji, meta.AppName)
+	}
+	return nil
+}
+
+// mediaName is what the download endpoint takes.
+//
+// Not a resource path, which is what this was first written for and what the
+// name suggests. Measured against a real upload on 2026-08-16, the value is
+// base64url with padding, and it decodes to the path:
+//
+//	ClpzcGFjZXMvQUFBQUV4YW1wbGVPbmUvbWVzc2FnZXMv.....
+//	-> spaces/AAAAExampleOne/messages/mmmmExampleMsg.mmmmExampleMsg/attachments/AAAAExampleAttach...
+//
+// So the first version of this pattern would have refused every attachment
+// there is. That is the failure mode a too-narrow validator has, and it was
+// caught by uploading a file rather than by reading a reference.
+//
+// The alphabet is base64url, which is deliberately not base64: `+` and `/` are
+// refused rather than escaped, because a `/` would add a path segment and this
+// value is chosen by the server. What the pattern accepts is safe in a path
+// unescaped, which is the same promise CheckSpaceName and CheckMessageName
+// make, and escaping is the layer below rather than the only one.
+var mediaName = regexp.MustCompile(`^[A-Za-z0-9_-]+=*$`)
+
+// CheckMediaName refuses an attachment resource name that is not one.
+func CheckMediaName(name string) error {
+	if name == "" {
+		return clientErr("no attachment was given.")
+	}
+	if !mediaName.MatchString(name) {
+		return clientErr("%q is not an attachment resource name.\n"+
+			"It is the resourceName inside an attachment's attachmentDataRef, which is base64.", name)
 	}
 	return nil
 }

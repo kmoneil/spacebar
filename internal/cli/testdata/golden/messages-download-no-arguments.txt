@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: messages download needs a message.
+  spacebar messages download spaces/AAAAAAA/messages/BBBBBBB

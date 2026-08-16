@@ -163,6 +163,29 @@ type Message struct {
 	ThreadReply bool   `json:"thread_reply,omitempty"`
 
 	Text string `json:"text,omitempty"`
+
+	// Attachments is what came with the message, if anything. The download URI
+	// the API returns beside each one is deliberately absent: it carries an
+	// access token in its query, so publishing it would put a credential in
+	// --json.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment is the published shape of one file on a message.
+type Attachment struct {
+	Name        string `json:"name"`
+	ContentName string `json:"content_name,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+
+	// ResourceName is the handle the download endpoint takes. Base64, and
+	// opaque: it is not a path, whatever it looks like when decoded.
+	ResourceName string `json:"resource_name,omitempty"`
+
+	// Source is UPLOADED_CONTENT or DRIVE_FILE. A Drive file has no resource
+	// name here and is fetched with Drive's API rather than this one, which is
+	// worth knowing before writing a loop that assumes every attachment can be
+	// downloaded.
+	Source string `json:"source,omitempty"`
 }
 
 // ForMessage projects one message onto what is published about it.
@@ -181,6 +204,18 @@ func ForMessage(m chat.Message) (Message, []string) {
 	}
 	if m.Thread != nil {
 		row.Thread = m.Thread.Name
+	}
+	for _, file := range m.Attachment {
+		attachment := Attachment{
+			Name:        file.Name,
+			ContentName: file.ContentName,
+			ContentType: file.ContentType,
+			Source:      file.Source,
+		}
+		if file.AttachmentDataRef != nil {
+			attachment.ResourceName = file.AttachmentDataRef.ResourceName
+		}
+		row.Attachments = append(row.Attachments, attachment)
 	}
 
 	// The display name is preferred in the text column and the resource name is

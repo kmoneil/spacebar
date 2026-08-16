@@ -83,7 +83,11 @@ var _ transport.Transport = (*Transport)(nil)
 type Transport struct {
 	profile string
 	client  *chat.Client
-	caps    transport.Capabilities
+
+	// uploader is the same credential pointed at the media base. See Upload.
+	uploader *chat.Client
+
+	caps transport.Capabilities
 }
 
 // New builds the transport for one authorized profile.
@@ -111,10 +115,24 @@ func New(opts Options) (*Transport, error) {
 		return nil, err
 	}
 
+	uploader, err := chat.New(chat.Options{
+		BaseURL:   chat.UploadBaseURL,
+		Transport: config.TransportUserOAuth,
+		Profile:   opts.Profile,
+		Timeout:   opts.Timeout,
+		Auth:      opts.Auth,
+		Log:       opts.Log,
+		DryRun:    opts.DryRun,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &Transport{
-		profile: opts.Profile,
-		client:  client,
-		caps:    transport.ScopedCapabilities(config.TransportUserOAuth, opts.Scopes),
+		profile:  opts.Profile,
+		client:   client,
+		uploader: uploader,
+		caps:     transport.ScopedCapabilities(config.TransportUserOAuth, opts.Scopes),
 	}, nil
 }
 
@@ -212,6 +230,29 @@ func (t *Transport) Watch(ctx context.Context, req chat.WatchRequest) iter.Seq2[
 		return transport.Refused[chat.SpaceEvent](t, "watch", transport.CanRead)
 	}
 	return t.client.Watch(ctx, req)
+}
+
+// Upload sends an attachment's bytes, through the second client.
+//
+// A second client rather than a second base on this one, because the upload
+// endpoint lives under /upload/v1 and a request path in this tool is joined
+// onto a base rather than substituted for it. Two bases means two clients and
+// nothing to substitute.
+func (t *Transport) Upload(ctx context.Context, req chat.UploadRequest) (*chat.AttachmentDataRef, error) {
+	if !t.caps.Has(transport.CanUpload) {
+		return nil, transport.Unsupported(t, "send --file", transport.CanUpload)
+	}
+	return t.uploader.Upload(ctx, req)
+}
+
+// Download fetches an attachment's bytes, through the ordinary client: the
+// download endpoint is under /v1 like everything else, and only the upload is
+// somewhere different.
+func (t *Transport) Download(ctx context.Context, resourceName string) ([]byte, error) {
+	if !t.caps.Has(transport.CanRead) {
+		return nil, transport.Unsupported(t, "messages download", transport.CanRead)
+	}
+	return t.client.Download(ctx, resourceName)
 }
 
 // EditMessage replaces a message's text.

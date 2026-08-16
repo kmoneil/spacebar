@@ -46,6 +46,7 @@ before making a request.`,
 		newMessagesGetCmd(opts),
 		newMessagesEditCmd(opts),
 		newMessagesDeleteCmd(opts),
+		newMessagesDownloadCmd(opts),
 	)
 	return cmd
 }

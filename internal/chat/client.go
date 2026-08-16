@@ -56,6 +56,11 @@ const (
 	// UploadBaseURL is where a media upload goes. A different base path rather
 	// than a different endpoint under the same one, which is easy to miss and
 	// answers a 404 that otherwise makes no sense.
+	//
+	// A transport builds a second client for it rather than this package
+	// growing a way to swap a base per request. A request path is joined onto a
+	// base and never substituted for it, and the cheapest way to keep that true
+	// is for there to be nothing to substitute.
 	UploadBaseURL = "https://chat.googleapis.com/upload/v1"
 )
 
@@ -319,6 +324,14 @@ type Request struct {
 	// Body is marshalled as JSON when it is not nil.
 	Body any
 
+	// RawBody is sent as it is, for the one request that is not JSON. Set with
+	// ContentType, and never with Body: two bodies is a request whose meaning
+	// depends on which field somebody read first.
+	RawBody []byte
+
+	// ContentType overrides the JSON default. Only a media upload sets it.
+	ContentType string
+
 	// Idempotent says a replay of this request cannot produce a second side
 	// effect, which for a POST means the caller supplied a message ID. See
 	// safeToReplay: getting this wrong is how one send becomes two messages in
@@ -357,6 +370,15 @@ func (c *Client) do(ctx context.Context, req Request) ([]byte, error) {
 	body, err := encodeBody(req.Body)
 	if err != nil {
 		return nil, err
+	}
+	if req.RawBody != nil {
+		if body != nil {
+			// Unreachable unless somebody sets both, and asserted rather than
+			// resolved by precedence: which body went would then depend on
+			// which field the reader noticed first.
+			return nil, clientErr("this request carries two bodies, which is a bug in this tool.")
+		}
+		body = req.RawBody
 	}
 
 	refreshed := false
@@ -457,7 +479,11 @@ func (c *Client) build(ctx context.Context, req Request, target *url.URL, body [
 	httpReq.Header.Set("User-Agent", meta.UserAgent())
 	httpReq.Header.Set("Accept", "application/json")
 	if body != nil {
-		httpReq.Header.Set("Content-Type", "application/json; charset=UTF-8")
+		contentType := req.ContentType
+		if contentType == "" {
+			contentType = "application/json; charset=UTF-8"
+		}
+		httpReq.Header.Set("Content-Type", contentType)
 	}
 
 	if c.auth == nil {

@@ -58,6 +58,13 @@ type Message struct {
 	// a thread.
 	ThreadReply bool `json:"threadReply,omitempty"`
 
+	// Attachment is what came with the message.
+	//
+	// The field is singular and the value is a list, which is the API's own
+	// naming and is kept rather than corrected: a caller comparing this against
+	// Google's documentation should find the same word.
+	Attachment []Attachment `json:"attachment,omitempty"`
+
 	// CardsV2 is carried through rather than modelled.
 	//
 	// A card is a deep tree of widgets with its own schema, and every field of

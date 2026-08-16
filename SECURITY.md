@@ -565,6 +565,34 @@ did not happen. `TestACacheThatCannotBeRemovedIsAWarningRatherThanAFailure`.
   refused, not replaced with U+FFFD. A message that is not what was sent is a
   wrong answer that looks like a right one. `TestInvalidUTF8IsRefused`, exit 2,
   naming the byte offset.
+- **A filename that came from a message cannot leave the directory you named.**
+  `TestAServerSuppliedFilenameCannotLeaveTheDirectory` and
+  `FuzzASafeFilenameIsAlwaysOneNameInTheDirectory`, which states it over
+  arbitrary input rather than over the separators somebody thought of.
+
+  An attachment's `contentName` is chosen by whoever posted the message, and
+  `messages download` joins it onto a directory the operator named. So
+  `../../.ssh/authorized_keys` is a filename as far as the API is concerned and
+  a write outside the tree as far as the operator is concerned. Both separators
+  are flattened rather than the name being reduced to its last element: the
+  file lands as `.._.._.ssh_authorized_keys`, which is safe and says what
+  arrived, where `authorized_keys` would be safe and look like something
+  somebody meant to send. It is also the same answer on every platform, since a
+  backslash is a separator on Windows and an ordinary character on Unix.
+
+  An existing file is never overwritten without `--force`, because the name is
+  not the operator's and a download should not be able to replace something
+  they have.
+
+- **An attachment's download URL is a credential and is dropped.** The API
+  returns `downloadUri` and `thumbnailUri` beside every attachment, and each is
+  a `chat.google.com` URL with an `attachment_token` in its query that is what
+  grants access to the bytes. They are the same kind of thing as an incoming
+  webhook URL: a credential wearing the costume of a link. `internal/chat` does
+  not decode either field, so neither can reach `--json`, a log, or whatever an
+  agent does with the result. Download uses the profile's own credential
+  instead.
+
 - **Cache and state paths stay under their roots.**
   `TestACachePathCannotLeaveItsRoot` and `FuzzACachePathStaysUnderItsRoot`,
   which states it as a property rather than as the separators somebody thought

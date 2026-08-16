@@ -18,6 +18,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -208,11 +209,23 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 		return err
 	}
 
+	// The upload goes first and is a request of its own, so a send with an
+	// attachment is two calls rather than one. That is the API's shape and not
+	// a choice: the bytes are exchanged for a token, and the token is what a
+	// message can carry. A failure here means nothing was posted, which is the
+	// right order for it: an attachment that failed to upload should not become
+	// a message with the text and no file.
+	token, err := uploadAttachment(cmd, r, opened, target, flags.file)
+	if err != nil {
+		return err
+	}
+
 	req := chat.SendRequest{
 		Space:     target,
 		Message:   message,
 		ThreadKey: flags.threadKey,
 		MessageID: messageID(flags, target, message.Text),
+		Attach:    token,
 	}
 
 	return send(cmd, r, opened, req)
@@ -420,4 +433,46 @@ func verboseLog(opts *Options, r *output.Renderer) chat.Logger {
 		return nil
 	}
 	return r
+}
+
+// uploadAttachment sends --file's bytes and returns the token a message
+// attaches by, or nothing when there is no file.
+//
+// The file is opened before the upload and its size is taken from the handle
+// rather than from a second stat, so the number checked against the limit is
+// the number that will be read.
+func uploadAttachment(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, space, path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", output.Usagef("cannot read the file to attach: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
+	if err != nil {
+		return "", output.Usagef("cannot read the file to attach: %v", err)
+	}
+	if info.IsDir() {
+		return "", output.Usagef("%q is a directory, and an attachment is a file.", path)
+	}
+
+	ref, err := opened.Transport.Upload(cmd.Context(), chat.UploadRequest{
+		Space:    space,
+		Filename: filepath.Base(path),
+		Body:     file,
+		Size:     info.Size(),
+	})
+	if err != nil {
+		return "", err
+	}
+
+	// The token, not the resource name. A just-uploaded attachment is attached
+	// by the token the upload returned; the resource name is what a download
+	// takes later, off a message that already carries it.
+	r.Note("uploaded %s (%d bytes)", filepath.Base(path), info.Size())
+	return ref.AttachmentUploadToken, nil
 }
