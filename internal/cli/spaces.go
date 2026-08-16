@@ -135,16 +135,20 @@ the last column rather than filled in with a guess about who is in them.`,
 }
 
 func newSpacesGetCmd(opts *Options) *cobra.Command {
-	return &cobra.Command{
+	var refresh bool
+
+	cmd := &cobra.Command{
 		Use:   "get SPACE",
 		Short: "Read one space",
 		Long: `Read one space.
 
   ` + meta.AppName + ` spaces get spaces/AAAAAAA
+  ` + meta.AppName + ` spaces get eng-alerts        # an alias
+  ` + meta.AppName + ` spaces get 'Ops'             # a display name
 
-The argument is a space resource name. Resolving a display name or an alias to
-one is Milestone 4; until then the name is what this takes, and ` +
-			meta.AppName + ` spaces list is where to find it.`,
+The argument is a space resource name, an alias, a display name, or an address.
+A display name matches whole or as a substring, ignoring case, and two spaces
+matching is refused rather than guessed at.`,
 
 		Args: exactlyOne("spaces get needs a space.\n  %s spaces get spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -158,7 +162,12 @@ one is Milestone 4; until then the name is what this takes, and ` +
 				return err
 			}
 
-			space, err := opened.Transport.GetSpace(cmd.Context(), args[0])
+			target, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			if err != nil {
+				return err
+			}
+
+			space, err := opened.Transport.GetSpace(cmd.Context(), target)
 			if err != nil {
 				return finish(r, opened, err)
 			}
@@ -171,10 +180,16 @@ one is Milestone 4; until then the name is what this takes, and ` +
 			})
 		},
 	}
+
+	addRefreshFlag(cmd, &refresh)
+	return cmd
 }
 
 func newSpacesMembersCmd(opts *Options) *cobra.Command {
-	var limit int
+	var (
+		limit   int
+		refresh bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "members SPACE",
@@ -209,14 +224,20 @@ it reaches a terminal.`,
 				return err
 			}
 
+			target, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			if err != nil {
+				return err
+			}
+
 			return finish(r, opened, stream(r, opened.Transport.Members(cmd.Context(), chat.ListMembersRequest{
-				Space: args[0],
+				Space: target,
 				Limit: limit,
 			}), rowForMember))
 		},
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", defaultLimit, limitHelp)
+	addRefreshFlag(cmd, &refresh)
 	return cmd
 }
 

@@ -76,6 +76,12 @@ type Open struct {
 	Transport transport.Transport
 	Name      string
 	Warnings  []string
+
+	// Aliases is this profile's own map of name to spaces/XXXX, carried so that
+	// resolution does not have to load the configuration a second time. Read
+	// only: internal/resolve substitutes from it and checks what comes out,
+	// because config.json is a file somebody may have been handed.
+	Aliases map[string]string
 }
 
 // For resolves the active profile and opens its transport.
@@ -106,7 +112,7 @@ func For(opts Options) (*Open, error) {
 	if err != nil {
 		return &Open{Name: name, Warnings: store.Warnings()}, err
 	}
-	return &Open{Transport: built, Name: name, Warnings: store.Warnings()}, nil
+	return &Open{Transport: built, Name: name, Warnings: store.Warnings(), Aliases: profile.Aliases}, nil
 }
 
 func open(name string, profile config.Profile, store *auth.Store, opts Options) (transport.Transport, error) {

@@ -174,7 +174,20 @@ func (c *Capabilities) clear(want Capability) {
 // The first missing capability is reported rather than all of them. Somebody
 // whose profile cannot read also cannot edit, delete, or react, and listing
 // four consequences of one fact reads as four problems.
-func Require(t Transport, command string, needed ...Capability) error {
+// Profiled is the part of a Transport a refusal needs: what kind it is, which
+// profile it belongs to, and what it can do.
+//
+// Smaller than Transport so that a caller which only resolves a name can be
+// gated without also being handed the ability to send. internal/resolve is the
+// first such caller, and a resolver that could send would be one bug away from
+// sending.
+type Profiled interface {
+	Kind() config.Transport
+	Profile() string
+	Capabilities() Capabilities
+}
+
+func Require(t Profiled, command string, needed ...Capability) error {
 	caps := t.Capabilities()
 	for _, want := range needed {
 		if caps.Has(want) {
@@ -192,7 +205,7 @@ func Require(t Transport, command string, needed ...Capability) error {
 // refuse in the same words as Require does, from the same table. A webhook that
 // wrote its own sentence for "cannot read" would be a second wording of one
 // fact, and the two would drift the first time either was improved.
-func Unsupported(t Transport, command string, want Capability) error {
+func Unsupported(t Profiled, command string, want Capability) error {
 	return unsupported(t, command, want)
 }
 
@@ -203,14 +216,14 @@ func Unsupported(t Transport, command string, want Capability) error {
 // it in the place it already handles a 403. The alternative, a second return
 // value on every list method, is one every caller has to check before starting
 // the range and one of them eventually would not.
-func Refused[T any](t Transport, command string, want Capability) iter.Seq2[T, error] {
+func Refused[T any](t Profiled, command string, want Capability) iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		var zero T
 		yield(zero, Unsupported(t, command, want))
 	}
 }
 
-func unsupported(t Transport, command string, want Capability) error {
+func unsupported(t Profiled, command string, want Capability) error {
 	message := fmt.Sprintf("%q needs %s, and profile %q %s\n%s",
 		command, describe(want), t.Profile(), explainKind(t.Kind()), fix(t.Kind(), want))
 

@@ -113,6 +113,7 @@ func newMessagesListCmd(opts *Options) *cobra.Command {
 		order       string
 		filter      string
 		showDeleted bool
+		refresh     bool
 	)
 
 	cmd := &cobra.Command{
@@ -121,7 +122,8 @@ func newMessagesListCmd(opts *Options) *cobra.Command {
 		Long: `List messages in a space.
 
   ` + meta.AppName + ` messages list spaces/AAAAAAA
-  ` + meta.AppName + ` messages list spaces/AAAAAAA --limit 100
+  ` + meta.AppName + ` messages list eng-alerts                 # an alias
+  ` + meta.AppName + ` messages list 'Ops'                      # a display name
   ` + meta.AppName + ` messages list spaces/AAAAAAA --json | jq -r .text
 
 Newest first, so that the default limit returns the latest messages rather than
@@ -148,8 +150,13 @@ in it are escaped before they reach a terminal.`,
 				return err
 			}
 
+			space, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			if err != nil {
+				return err
+			}
+
 			return finish(r, opened, stream(r, opened.Transport.Messages(cmd.Context(), chat.ListMessagesRequest{
-				Space:       args[0],
+				Space:       space,
 				OrderBy:     orderBy,
 				Filter:      filter,
 				ShowDeleted: showDeleted,
@@ -163,6 +170,7 @@ in it are escaped before they reach a terminal.`,
 	f.StringVar(&order, "order", orderNewest, "newest or oldest first")
 	f.StringVar(&filter, "filter", "", "the API's own filter expression, passed through unaltered")
 	f.BoolVar(&showDeleted, "show-deleted", false, "include tombstones for deleted messages")
+	addRefreshFlag(cmd, &refresh)
 	return cmd
 }
 

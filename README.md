@@ -298,6 +298,7 @@ On a profile authorized as you, rather than a webhook:
 spacebar spaces list                                  # name, type, display name
 spacebar spaces list --limit 0                        # every one
 spacebar spaces get spaces/AAAAAAA
+spacebar spaces get 'Ops'                             # or by display name
 spacebar spaces members spaces/AAAAAAA                # who, state, role
 
 spacebar messages list spaces/AAAAAAA                 # newest 25
@@ -309,6 +310,50 @@ spacebar messages get spaces/AAAAAAA/messages/BBBBBBB
 **Newest first**, so that the default limit returns the latest messages rather
 than the oldest ones in a space's history. Reading a conversation in the order
 it happened is what `tail` will be for.
+
+## Name a space without its ID
+
+Every command that takes a `SPACE` also takes a display name or an address, and
+resolves it before making the request:
+
+```sh
+spacebar spaces get 'Ops'                     # a display name, matched loosely
+spacebar messages list 'ops' --limit 20       # case does not matter
+spacebar send 'Ops' 'deploy done'
+spacebar spaces get someone@example.com       # the direct message with them
+```
+
+**Four steps, in order, and the last one never guesses.** A literal
+`spaces/XXXX` passes straight through and costs nothing. Then a profile alias.
+Then anything containing `@`, which is a person and becomes a direct message
+lookup. Then the display names of the spaces you can reach: an exact match
+wins, otherwise a substring match, both ignoring case.
+
+**Two matches is a question, not a tie.** If more than one space matches, it
+lists them and exits 2 rather than picking one. The cost of picking wrong is a
+message in front of people who were not meant to see it.
+
+```
+$ spacebar send 'ops' 'deploy done'
+error: 2 spaces match "ops", and this tool does not guess which one you meant:
+  spaces/AAAAAAA	Ops
+  spaces/BBBBBBB	Ops Escalation
+Name the one you want directly, as in: spacebar spaces/AAAAAAA
+```
+
+An exact match beats a substring, so with those two spaces `'Ops'` reaches the
+one actually called Ops rather than being ambiguous forever.
+
+**The space list is cached for 24 hours**, per profile, under
+`$XDG_CACHE_HOME/spacebar`. Listing spaces costs quota shared with every other
+app in those spaces, so a resolver that listed on every command would degrade
+the space for everybody. `--refresh` fetches it again. A resource name or an
+alias never touches the cache at all.
+
+Aliases resolve today and nothing writes one yet: the `alias` command is still
+to come, so an alias means an `aliases` entry added to the configuration file by
+hand. A webhook profile can use one, because an alias is a local map and needs
+no permission, but the last two steps need to read and are refused on one.
 
 **`spaces members` identifies people by resource name, not by display name.**
 The Chat API returns a member as `users/NNN` and a type, with no name attached,

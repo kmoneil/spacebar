@@ -57,6 +57,9 @@ type sendFlags struct {
 	// requireCapabilities.
 	replyTo string
 	file    string
+
+	// refresh busts the resolver's cached space list for this one invocation.
+	refresh bool
 }
 
 // sendResult is the --json shape of a successful send.
@@ -129,6 +132,7 @@ again.`,
 	// says this profile cannot, and that is both true and actionable.
 	f.StringVar(&flags.file, "file", "", "attach a file (requires a profile that can upload)")
 	f.StringVar(&flags.replyTo, "reply-to", "", "reply to a message by name (requires a profile that can read)")
+	addRefreshFlag(cmd, &flags.refresh)
 
 	return cmd
 }
@@ -183,6 +187,15 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 		return err
 	}
 	if err := requireCapabilities(opened.Transport, flags); err != nil {
+		return err
+	}
+
+	// Resolution runs after the capability check and before anything is built.
+	// After, because "this profile cannot send" is a better first answer than
+	// "no space is called that"; before, because a webhook compares the target
+	// against its own space and an alias has to be a space name by then.
+	target, err = resolveTarget(cmd.Context(), opened, target, flags.refresh)
+	if err != nil {
 		return err
 	}
 

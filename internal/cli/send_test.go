@@ -276,6 +276,8 @@ func (roaming) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[cha
 
 func (roaming) GetMessage(context.Context, string) (*chat.Message, error) { return nil, nil }
 
+func (roaming) FindDirectMessage(context.Context, string) (*chat.Space, error) { return nil, nil }
+
 // TestWithoutMdTheBodyIsSentByteForByte.
 //
 // The claim on the card, and the reason --md is opt-in. Chat markup is not

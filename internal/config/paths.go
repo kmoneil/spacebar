@@ -85,3 +85,45 @@ func Path() (string, error) {
 	}
 	return filepath.Join(dir, FileName), nil
 }
+
+// CacheDir returns the directory this tool keeps derived, discardable data in.
+//
+// $XDG_CACHE_HOME, then ~/.cache, then %LocalAppData% on Windows, by the same
+// rules Dir uses and for the same reasons: a relative XDG value is refused
+// rather than ignored, and the fallback is the path the documentation names.
+//
+// Separate from Dir because the two have different guarantees. Everything under
+// Dir was written by a person and losing it costs them something. Everything
+// here can be deleted at any moment and will be rebuilt from the API, which is
+// what makes it safe to keep a space list in.
+//
+// Nothing secret is written here. A cached space name is data the account can
+// already read, and it lands at 0600 anyway, because file modes are cheaper to
+// set than to reason about.
+func CacheDir() (string, error) {
+	if v, ok := os.LookupEnv("XDG_CACHE_HOME"); ok && v != "" {
+		if !filepath.IsAbs(v) {
+			return "", configErr("XDG_CACHE_HOME is not an absolute path, so there is no directory to use.\n"+
+				"Set it to an absolute path, or unset it to use ~/.cache/%s.", meta.AppName)
+		}
+		return filepath.Join(v, meta.AppName), nil
+	}
+
+	if runtime.GOOS == "windows" {
+		// os.UserCacheDir is %LocalAppData% here, which is where Windows keeps
+		// exactly this kind of file, and unlike the config case it does not
+		// disagree with where a person would look.
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", configErr("cannot locate %%LocalAppData%%: %v", err)
+		}
+		return filepath.Join(base, meta.AppName), nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", configErr("cannot locate the home directory: %v\n"+
+			"Set XDG_CACHE_HOME to an absolute path.", err)
+	}
+	return filepath.Join(home, ".cache", meta.AppName), nil
+}

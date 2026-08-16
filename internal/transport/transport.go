@@ -119,6 +119,9 @@ type Transport interface {
 
 	// GetMessage reads one message by resource name.
 	GetMessage(ctx context.Context, message string) (*chat.Message, error)
+
+	// FindDirectMessage returns the direct message space shared with one user.
+	FindDirectMessage(ctx context.Context, user string) (*chat.Space, error)
 }
 
 // CapabilitiesFor is the matrix in SPEC.md §8.1, in one place.

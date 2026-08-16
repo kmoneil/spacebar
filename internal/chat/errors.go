@@ -37,6 +37,18 @@ var (
 	ErrPermission  = errors.New("not permitted")
 	ErrRateLimited = errors.New("rate limited")
 	ErrAuthExpired = errors.New("authorization expired")
+
+	// ErrInvalidRequest is a 400: the API could not make sense of what was
+	// asked, as opposed to understanding it and having nothing to return.
+	//
+	// A fifth sentinel beyond SPEC.md §7.5's four, added because the difference
+	// between it and ErrNotFound is a difference a person acts on. Measured on
+	// spaces:findDirectMessage, which answers 400 for a user reference it cannot
+	// resolve to anybody and 404 for a real person with no direct message: one
+	// means check the spelling and the other means open the conversation once.
+	// A caller with only a status code would have to import net/http to tell
+	// them apart, and only internal/chat may.
+	ErrInvalidRequest = errors.New("the request was not understood")
 )
 
 // APIError is a request that came back wrong (SPEC.md §7.5).
@@ -315,6 +327,8 @@ func wrapFor(status int, apiStatus string) error {
 		sentinel = ErrPermission
 	case http.StatusNotFound:
 		sentinel = ErrNotFound
+	case http.StatusBadRequest:
+		sentinel = ErrInvalidRequest
 	}
 
 	return &output.Error{Code: code, Exit: exit, Message: code, Err: sentinel}

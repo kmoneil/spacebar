@@ -203,3 +203,16 @@ func (t *Transport) GetMessage(ctx context.Context, message string) (*chat.Messa
 	}
 	return t.client.GetMessage(ctx, message)
 }
+
+// FindDirectMessage returns the direct message space shared with one user.
+//
+// Gated on CanResolveDM, which chat.spaces.readonly grants. It was gated on
+// chat.spaces until the m4-01 recon probed the live endpoint, which would have
+// refused this on every profile this tool creates for want of a scope the
+// operation does not need.
+func (t *Transport) FindDirectMessage(ctx context.Context, user string) (*chat.Space, error) {
+	if !t.caps.Has(transport.CanResolveDM) {
+		return nil, transport.Unsupported(t, "resolving a direct message", transport.CanResolveDM)
+	}
+	return t.client.FindDirectMessage(ctx, user)
+}

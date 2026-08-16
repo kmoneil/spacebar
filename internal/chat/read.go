@@ -22,6 +22,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 )
 
@@ -329,4 +330,71 @@ func failed[T any](err error) iter.Seq2[T, error] {
 		var zero T
 		yield(zero, err)
 	}
+}
+
+// userName is a user reference: users/ and either a numeric ID or an email.
+//
+// The email half is measured rather than assumed. Probed against the live API
+// on 2026-08-16, spaces:findDirectMessage answers 404 NOT_FOUND for
+// users/someone@example.com and 400 INVALID_ARGUMENT for users/garbage, so an
+// address is parsed as a user reference and a 404 means "understood, no direct
+// message" rather than "could not read that".
+//
+// The character set is what an address can contain, minus what would change a
+// request path. No slash, so a second path segment cannot be added; no percent,
+// so no encoding of one can be either. An address that needs a character
+// outside this set is refused rather than escaped, which is the same rule the
+// space and message names follow.
+var userName = regexp.MustCompile(`^users/[A-Za-z0-9][A-Za-z0-9_.+=~-]*(@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+)?$`)
+
+// CheckUserName refuses anything that is not a user resource name.
+//
+// The same rule and the same reason as CheckSpaceName: this value becomes a
+// query value on a request path, and what the pattern accepts has to be safe
+// there. It is a query value rather than a path segment, so the encoder would
+// escape it, and that is the second layer rather than the only one.
+func CheckUserName(user string) error {
+	if user == "" {
+		return clientErr("no user was given.")
+	}
+	if !userName.MatchString(user) {
+		return clientErr("%q is not a user name.\nA user is %q followed by an address or a numeric ID, as in %q.",
+			user, "users/", "users/someone@example.com")
+	}
+	return nil
+}
+
+// FindDirectMessage returns the direct message space shared with one user
+// (SPEC.md §7.3).
+//
+// The user is a resource name rather than a bare address, because that is what
+// the API takes and translating here would mean a second place that knows the
+// shape. internal/resolve is what turns "someone@example.com" into
+// "users/someone@example.com".
+//
+// A 404 is left as a 404 rather than turned into an empty result. "There is no
+// direct message with this person yet" and "this lookup failed" are different
+// answers, and a caller that got nil for both would have to guess which.
+func (c *Client) FindDirectMessage(ctx context.Context, user string) (*Space, error) {
+	if err := CheckUserName(user); err != nil {
+		return nil, err
+	}
+
+	query := url.Values{}
+	query.Set("name", user)
+
+	payload, err := c.do(ctx, Request{
+		Method: http.MethodGet,
+		Path:   "spaces:findDirectMessage",
+		Query:  query,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var space Space
+	if err := json.Unmarshal(payload, &space); err != nil {
+		return nil, c.wrapTransport(fmt.Errorf("the response for a direct message lookup could not be read: %w", err))
+	}
+	return &space, nil
 }

@@ -183,6 +183,10 @@ func (t *Transport) GetMessage(context.Context, string) (*chat.Message, error) {
 	return nil, transport.Unsupported(t, "messages get", transport.CanRead)
 }
 
+func (t *Transport) FindDirectMessage(context.Context, string) (*chat.Space, error) {
+	return nil, transport.Unsupported(t, "resolving a direct message", transport.CanResolveDM)
+}
+
 func (t *Transport) checkSpace(space string) error {
 	if space == "" || space == t.space {
 		return nil

@@ -103,11 +103,30 @@ made of nothing but dots. `TestAMessageIDMayBeginWithAnythingButDots`.
 That is a check on the value and not the only defence. Anything reaching a
 request path also goes through the relative-path rule below, which refuses a
 path that would leave the base at all, and `FuzzAPathStaysOnTheBase` states it
-as a property rather than as a list of cases. What is still owed is the third
-path: a resolver turning an alias or an email into a space, whose output has to
-go through the same function rather than a second copy of it **(M4)**. That
-path is also the only one on which a NUL can arrive, because argv is
-NUL-terminated and a command-line argument cannot carry one.
+as a property rather than as a list of cases.
+
+**The third path is the resolver, and its output goes through the same
+function.** `internal/resolve` turns an alias, a display name, or an address
+into a space, and every one of those is a value from somewhere else: an alias
+came from a file somebody may have been sent, and a display name and a direct
+message space both came back from a server this tool does not control. The
+check runs on the way out rather than on the way in, because resolution is
+where a value changes.
+
+Stated as a property over every path rather than as a list:
+`FuzzWhateverItReturnsIsASpaceName` fuzzes the target, the display name the API
+returns, and the space name the API returns, and requires that what comes back
+either fails or passes `chat.CheckSpaceName`.
+`TestEverythingItReturnsIsASpaceName` walks the four steps with a hostile value
+in each.
+
+An address is checked too, by `chat.CheckUserName`, because it becomes a query
+value on a request path. That is the layer the encoder is the second of.
+
+This is also the only path on which a NUL can arrive in a name, because argv is
+NUL-terminated and a command-line argument cannot carry one. A NUL in an alias
+or in an API response is refused by the same patterns, which admit no control
+character at all.
 
 **Assumed trusted: the caller.** Flags, arguments, the config file, and the
 profile are the operator's own instructions. `spacebar send "shipping now"`
