@@ -819,3 +819,34 @@ func TestACallerThatStopsRangingIsNotATruncation(t *testing.T) {
 		t.Errorf("made %d requests after the caller stopped, want 1", r.count())
 	}
 }
+
+// TestOrderOnlyTakesWhatItDocuments.
+//
+// A value passed straight through would reach the API as an orderBy it does not
+// know, coming back as an INVALID_ARGUMENT naming a field the caller never
+// typed. Worse, a value the API ignores would return the opposite order with a
+// success code.
+func TestOrderOnlyTakesWhatItDocuments(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"newest", OrderNewestFirst},
+		{"oldest", OrderOldestFirst},
+		{"NEWEST", OrderNewestFirst},
+	} {
+		got, err := OrderBy(tc.in)
+		if err != nil {
+			t.Errorf("OrderBy(%q) = %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Errorf("OrderBy(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	for _, bad := range []string{"sideways", "createTime DESC", "", "desc"} {
+		if _, err := OrderBy(bad); err == nil {
+			t.Errorf("OrderBy(%q) was accepted", bad)
+		}
+	}
+}

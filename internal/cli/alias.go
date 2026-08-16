@@ -113,7 +113,7 @@ func runAliasSet(cmd *cobra.Command, opts *Options, name, target string, refresh
 		return err
 	}
 
-	space, err := resolveTarget(cmd.Context(), opened, target, refresh)
+	space, err := opened.Resolve(cmd.Context(), target, refresh)
 	if err != nil {
 		return err
 	}

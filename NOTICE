@@ -59,18 +59,58 @@ list spelled out.
                                           (indirect, reached through
                                           go-keyring, and linked only in a
                                           Windows build)
-    golang.org/x/sys/windows              BSD-3-Clause
+    golang.org/x/sys                      BSD-3-Clause
                                           Copyright (c) 2009 The Go Authors
-                                          (indirect, reached through wincred,
-                                          and linked only in a Windows build)
+                                          (indirect, reached through wincred on
+                                          Windows and through segmentio/asm
+                                          everywhere)
+    golang.org/x/sys/cpu                  BSD-3-Clause
+                                          Copyright (c) 2009 The Go Authors
+                                          (indirect, reached through
+                                          segmentio/asm)
     github.com/inconshreveable/mousetrap  Apache-2.0
                                           (indirect, reached through cobra, and
                                           linked only in a Windows build)
+    github.com/modelcontextprotocol/go-sdk
+                                          Apache-2.0
+                                          Copyright (c) 2025 Anthropic, PBC and
+                                          the MCP project authors
+                                          (the LICENSE says the project is
+                                          moving from MIT to Apache-2.0 and that
+                                          contributions whose authors have not
+                                          consented remain MIT, so both apply)
+    github.com/google/jsonschema-go/jsonschema
+                                          MIT
+                                          Copyright (c) 2025 JSON Schema Go
+                                          Project Authors
+                                          (indirect, reached through the MCP
+                                          SDK, which infers a tool's schema from
+                                          its Go type)
+    github.com/segmentio/encoding         MIT
+                                          Copyright (c) 2019 Segment.io, Inc.
+                                          (indirect, reached through the MCP
+                                          SDK)
+    github.com/segmentio/asm              MIT
+                                          Copyright (c) 2021 Segment.io, Inc.
+                                          (indirect, reached through
+                                          segmentio/encoding)
+    github.com/yosida95/uritemplate/v3    BSD-3-Clause
+                                          Copyright (C) 2016, Kohei YOSHIDA
+                                          (indirect, reached through the MCP
+                                          SDK, for resource templates)
+    golang.org/x/sync/errgroup            BSD-3-Clause
+                                          Copyright (c) 2009 The Go Authors
+                                          (indirect, reached through the MCP
+                                          SDK)
+    golang.org/x/time/rate                BSD-3-Clause
+                                          Copyright (c) 2009 The Go Authors
+                                          (indirect, reached through the MCP
+                                          SDK)
 
-Four direct requirements and four indirect, and nine rows above, because two
-of them are reported at a finer grain than a module: `go-licenses` sees the
-shellescape copy vendored inside go-keyring and the Windows subtree of
-`golang.org/x/sys` as units of their own, since each carries its own licence
+Five direct requirements and twelve indirect, and seventeen rows above, because
+some are reported at a finer grain than a module: `go-licenses` sees the
+shellescape copy vendored inside go-keyring, and the `cpu` and `errgroup` and
+`rate` subtrees, as units of their own, since each carries its own licence
 file. Each licence text is in the module's own source, which `go mod download`
 fetches and `go.sum` pins, and the full text of all of them is in
 THIRD_PARTY_LICENSES so that it travels with a distribution that is one
@@ -82,12 +122,19 @@ cobra's own flag package and was already linked; it moved out of the indirect
 block when a test began importing it to walk the flag tree, and `go.mod` says
 what is imported.
 
-SPEC.md §3.1 permits two more, each named with the reason it earns its place,
-and no others. `golang.org/x/oauth2` arrived with Milestone 3 and is the root
-package only: §3.2 forbids `golang.org/x/oauth2/google`, which drags in
+SPEC.md §3.1 permits one more, named with the reason it earns its place, and no
+others. `golang.org/x/oauth2` arrived with Milestone 3 and is the root package
+only: §3.2 forbids `golang.org/x/oauth2/google`, which drags in
 `cloud.google.com/go/compute/metadata` for Application Default Credentials this
-tool never uses. It brings no transitive requirement of its own. A pull request that would add another has to argue for it. This
-list grows as the milestones land; it does not grow otherwise.
+tool never uses. It brings no transitive requirement of its own.
+
+`github.com/modelcontextprotocol/go-sdk` arrived with Milestone 5 and is the
+fifth and last direct requirement the budget allows. It is worth saying plainly
+that it is the expensive one: it links six modules rather than one, which is
+half of this list, and it earns that by owning MCP spec-version negotiation, a
+thing that churns and that nobody here would rather maintain. A pull request
+that would add another has to argue for it. This list grows as the milestones
+land; it does not grow otherwise.
 
 This list is asserted rather than maintained by hand:
 internal/lint/notice_test.go holds it to THIRD_PARTY_LICENSES, which is

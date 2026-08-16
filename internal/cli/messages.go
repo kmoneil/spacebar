@@ -15,24 +15,18 @@
 package cli
 
 import (
-	"strings"
-
 	"github.com/spf13/cobra"
 
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/meta"
-	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
-// The values --order takes. Short words rather than the API's own strings,
-// because "createTime DESC" is a shell-quoting problem and an implementation
-// detail of an endpoint this tool exists to hide.
-const (
-	orderNewest = "newest"
-	orderOldest = "oldest"
-)
+// The values --order takes are chat.OrderNewest and chat.OrderOldest, and the
+// translation to the API's own strings is there rather than here: the MCP
+// server takes the same argument, and a second copy of a two-case switch is how
+// two adapters end up disagreeing about what "oldest" means.
 
 func newMessagesCmd(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
@@ -91,7 +85,7 @@ in it are escaped before they reach a terminal.`,
 
 		Args: exactlyOne("messages list needs a space.\n  %s messages list spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			orderBy, err := orderByFor(order)
+			orderBy, err := chat.OrderBy(order)
 			if err != nil {
 				return err
 			}
@@ -116,7 +110,7 @@ in it are escaped before they reach a terminal.`,
 				return err
 			}
 
-			space, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			space, err := opened.Resolve(cmd.Context(), args[0], refresh)
 			if err != nil {
 				return err
 			}
@@ -135,7 +129,7 @@ in it are escaped before they reach a terminal.`,
 
 	f := cmd.Flags()
 	f.IntVar(&limit, "limit", defaultLimit, limitHelp)
-	f.StringVar(&order, "order", orderNewest, "newest or oldest first")
+	f.StringVar(&order, "order", chat.OrderNewest, "newest or oldest first")
 	f.StringVar(&filter, "filter", "", "the API's own filter expression, passed through unaltered")
 	f.StringVar(&since, "since", "", sinceHelp)
 	f.StringVar(&until, "until", "", untilHelp)
@@ -176,19 +170,4 @@ reports and what the name column of ` + meta.AppName + ` messages list --json ho
 			return r.Block(row, row.Text)
 		},
 	}
-}
-
-// orderByFor turns the flag into the API's ordering, refusing anything else.
-//
-// Refused rather than passed through, because a typo that reached the API would
-// come back as an INVALID_ARGUMENT naming a field the caller never typed, and a
-// value silently ignored would return the opposite order with a success code.
-func orderByFor(order string) (string, error) {
-	switch strings.ToLower(order) {
-	case orderNewest:
-		return chat.OrderNewestFirst, nil
-	case orderOldest:
-		return chat.OrderOldestFirst, nil
-	}
-	return "", output.Usagef("--order takes %q or %q, and %q is neither.", orderNewest, orderOldest, order)
 }

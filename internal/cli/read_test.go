@@ -188,34 +188,3 @@ func TestAnOrdinaryFailurePassesThroughTheDryRunHandler(t *testing.T) {
 		t.Errorf("a failure wrote to stdout:\n%s", out.String())
 	}
 }
-
-// TestOrderOnlyTakesWhatItDocuments.
-//
-// A value passed straight through would reach the API as an orderBy it does not
-// know, coming back as an INVALID_ARGUMENT naming a field the caller never
-// typed. Worse, a value the API ignores would return the opposite order with a
-// success code.
-func TestOrderOnlyTakesWhatItDocuments(t *testing.T) {
-	for _, tc := range []struct {
-		in   string
-		want string
-	}{
-		{"newest", chat.OrderNewestFirst},
-		{"oldest", chat.OrderOldestFirst},
-		{"NEWEST", chat.OrderNewestFirst},
-	} {
-		got, err := orderByFor(tc.in)
-		if err != nil {
-			t.Errorf("orderByFor(%q) = %v", tc.in, err)
-		}
-		if got != tc.want {
-			t.Errorf("orderByFor(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-
-	for _, bad := range []string{"sideways", "createTime DESC", "", "desc"} {
-		if _, err := orderByFor(bad); err == nil {
-			t.Errorf("orderByFor(%q) was accepted", bad)
-		}
-	}
-}

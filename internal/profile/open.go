@@ -38,6 +38,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
+	"github.com/kmoneil/spacebar/internal/resolve"
 	"github.com/kmoneil/spacebar/internal/transport"
 	"github.com/kmoneil/spacebar/internal/transport/useroauth"
 	"github.com/kmoneil/spacebar/internal/transport/webhook"
@@ -214,4 +215,30 @@ func openUserOAuth(name string, profile config.Profile, store *auth.Store, opts 
 	// that the caller has to be told exactly once.
 	store.AddWarnings(source.Warnings())
 	return built, nil
+}
+
+// Resolve turns what somebody typed into a space resource name.
+//
+// On Open rather than in an adapter, because both adapters need it and the one
+// that had it was internal/cli. The four steps, the matching, and the refusals
+// live in internal/resolve; what is here is the wiring that knows a profile has
+// a name, an alias map, and a transport that may or may not be able to read.
+//
+// The cache is per profile. Two profiles authorized as different accounts reach
+// different spaces, and one shared file would let one account's space list
+// answer the other's lookup.
+func (o *Open) Resolve(ctx context.Context, target string, refresh bool) (string, error) {
+	reader, ok := o.Transport.(resolve.Reader)
+	if !ok {
+		// Unreachable while every transport implements the full interface, and
+		// asserted rather than assumed because that is a claim about today's
+		// interface and not about tomorrow's.
+		return target, nil
+	}
+
+	return resolve.Resolve(ctx, reader, target, resolve.Options{
+		Aliases: o.Aliases,
+		Cache:   resolve.NewCache(o.Name),
+		Refresh: refresh,
+	})
 }

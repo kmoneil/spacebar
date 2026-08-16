@@ -15,12 +15,9 @@
 package cli
 
 import (
-	"context"
-
 	"github.com/spf13/cobra"
 
 	"github.com/kmoneil/spacebar/internal/output"
-	"github.com/kmoneil/spacebar/internal/profile"
 	"github.com/kmoneil/spacebar/internal/resolve"
 )
 
@@ -35,31 +32,6 @@ const refreshHelp = "list spaces again instead of using the cached names"
 // is a flag offering to do something it will not do.
 func addRefreshFlag(cmd *cobra.Command, refresh *bool) {
 	cmd.Flags().BoolVar(refresh, "refresh", false, refreshHelp)
-}
-
-// resolveTarget turns what somebody typed into a space resource name.
-//
-// A thin adapter, per the rule that no decision is made in this package: the
-// four steps, the matching, and the refusals all live in internal/resolve, so
-// that the MCP server gets the same behaviour without reimplementing it.
-//
-// The cache is per profile. Two profiles authorized as different accounts reach
-// different spaces, and one shared file would let one account's space list
-// answer the other's lookup.
-func resolveTarget(ctx context.Context, opened *profile.Open, target string, refresh bool) (string, error) {
-	reader, ok := opened.Transport.(resolve.Reader)
-	if !ok {
-		// Unreachable while every transport implements the full interface, and
-		// asserted rather than assumed because that is a claim about today's
-		// interface and not about tomorrow's.
-		return target, nil
-	}
-
-	return resolve.Resolve(ctx, reader, target, resolve.Options{
-		Aliases: opened.Aliases,
-		Cache:   resolve.NewCache(opened.Name),
-		Refresh: refresh,
-	})
 }
 
 // forgetSpaces drops a profile's cached space list, for the two commands that

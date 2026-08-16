@@ -158,6 +158,7 @@ with, sponsored by, or endorsed by Google.`,
 		newMessagesCmd(opts),
 		newAliasCmd(opts),
 		newTailCmd(opts),
+		newMCPCmd(opts),
 	)
 
 	return root

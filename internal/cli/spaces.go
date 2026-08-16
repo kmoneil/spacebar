@@ -121,7 +121,7 @@ matching is refused rather than guessed at.`,
 				return err
 			}
 
-			target, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			target, err := opened.Resolve(cmd.Context(), args[0], refresh)
 			if err != nil {
 				return err
 			}
@@ -205,7 +205,7 @@ no flag for it yet.`,
 				return err
 			}
 
-			target, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			target, err := opened.Resolve(cmd.Context(), args[0], refresh)
 			if err != nil {
 				return err
 			}

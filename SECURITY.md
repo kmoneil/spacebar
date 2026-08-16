@@ -598,7 +598,16 @@ read. It is gated more tightly than the CLI, on purpose.
   see a tool cannot argue itself into calling it, and a model that can see one
   will eventually try. This is also why the capability check happens before the
   network call rather than after: a refusal that arrives after the POST carries
-  the same error code as one that arrives before it **(M5)**.
+  the same error code as one that arrives before it.
+
+  `TestOnlyToolsThisProfileCanServeAreRegistered` asserts the exact set for
+  three shapes of profile, read back off a connected client rather than off
+  this repository's own idea of what it built, and
+  `TestAToolThatIsNotRegisteredCannotBeCalled` holds the other half, because
+  absent from a list and absent from the dispatch are different things and only
+  the second is a defence. A profile that can serve no tool at all, which today
+  is any webhook, is refused before the session starts rather than connected
+  and empty: `TestAProfileThatCanServeNothingIsRefusedRatherThanEmpty`.
 - **`--allow-space` restricts writes to an allowlist** of spaces, so that an
   agent with write access to a scratch space does not have write access to the
   company-wide announcements space **(M5)**.

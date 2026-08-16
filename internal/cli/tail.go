@@ -92,7 +92,7 @@ message posted at exactly that moment is not replayed. It cannot be given with
 				return err
 			}
 
-			space, err := resolveTarget(cmd.Context(), opened, args[0], refresh)
+			space, err := opened.Resolve(cmd.Context(), args[0], refresh)
 			if err != nil {
 				return err
 			}

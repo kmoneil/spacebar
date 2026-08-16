@@ -22,8 +22,8 @@ webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
 well, as do `tail` and the `alias` group. `auth`, `version`, `licenses` and
-`completion` work. Still missing: `watch`, editing, reacting, attachments, and
-the MCP server.
+`completion` work. `spacebar mcp` serves the read paths to a model over MCP.
+Still missing: `watch`, editing, reacting, attachments, and writing over MCP.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -494,6 +494,35 @@ Accept: application/json
 Authorization: REDACTED
 User-Agent: spacebar/1.0.0 (+https://github.com/kmoneil/spacebar)
 ```
+
+## Serve it to a model
+
+`spacebar mcp` speaks MCP on stdin and stdout. It is not a command to run by
+hand: an MCP client starts it, and in that client's configuration it is the
+command with the profile as an argument.
+
+```json
+{"command": "spacebar", "args": ["mcp", "--profile", "work"]}
+```
+
+Five tools today, all reads: `list_spaces`, `get_space`, `list_members`,
+`list_messages`, `get_message`. They return the same shapes `--json` does,
+because both come from one place.
+
+**A tool this profile cannot serve is not registered at all.** A model that
+cannot see a tool cannot argue itself into calling it; one that can see a broken
+tool will call it, be refused, try again differently, and tell you the tool is
+broken. So a profile whose token lacks `chat.memberships.readonly` offers four
+tools rather than five, and a webhook profile, which is write-only, is refused
+before the session starts rather than connected with nothing to offer. This is
+deliberately the opposite of how flags work in the CLI, where a person reading
+`--help` is served by knowing that `--file` exists.
+
+**Writes are not here yet.** Every tool in this build reads.
+
+**Message text is untrusted input.** It reaches a model as data, and a message
+that asks the model to do something is still a message. That is why writing over
+MCP will arrive with a confirmation requirement rather than as another tool.
 
 ## Development
 

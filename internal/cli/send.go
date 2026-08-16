@@ -194,7 +194,7 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 	// After, because "this profile cannot send" is a better first answer than
 	// "no space is called that"; before, because a webhook compares the target
 	// against its own space and an alias has to be a space name by then.
-	target, err = resolveTarget(cmd.Context(), opened, target, flags.refresh)
+	target, err = opened.Resolve(cmd.Context(), target, flags.refresh)
 	if err != nil {
 		return err
 	}

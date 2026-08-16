@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kmoneil/spacebar/internal/output"
@@ -464,4 +465,32 @@ func (c *Client) FindDirectMessage(ctx context.Context, user string) (*Space, er
 		return nil, c.wrapTransport(fmt.Errorf("the response for a direct message lookup could not be read: %w", err))
 	}
 	return &space, nil
+}
+
+// The values a caller may ask for, as words rather than as the API's own
+// strings: "createTime DESC" is a shell-quoting problem and an implementation
+// detail of an endpoint this tool exists to hide.
+const (
+	OrderNewest = "newest"
+	OrderOldest = "oldest"
+)
+
+// OrderBy turns what a caller asked for into the API's ordering, refusing
+// anything else.
+//
+// Here rather than in an adapter because both adapters take the argument, and a
+// second copy of a two-case switch is how two of them end up disagreeing about
+// what "oldest" means.
+//
+// Refused rather than passed through, because a typo that reached the API would
+// come back as an INVALID_ARGUMENT naming a field the caller never typed, and a
+// value silently ignored would return the opposite order with a success code.
+func OrderBy(order string) (string, error) {
+	switch strings.ToLower(order) {
+	case OrderNewest:
+		return OrderNewestFirst, nil
+	case OrderOldest:
+		return OrderOldestFirst, nil
+	}
+	return "", clientErr("the order is %q, and it takes %q or %q.", order, OrderNewest, OrderOldest)
 }
