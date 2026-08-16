@@ -494,3 +494,113 @@ func OrderBy(order string) (string, error) {
 	}
 	return "", clientErr("the order is %q, and it takes %q or %q.", order, OrderNewest, OrderOldest)
 }
+
+// The event types spaceEvents.list accepts, as the API spells them.
+//
+// Written out rather than built from parts, because a name assembled from a
+// prefix and a verb is a name nobody can grep for, and because the set is not
+// regular: a space has updated and nothing else, a membership has three.
+const (
+	EventMessageCreated    = "google.workspace.chat.message.v1.created"
+	EventMessageUpdated    = "google.workspace.chat.message.v1.updated"
+	EventMessageDeleted    = "google.workspace.chat.message.v1.deleted"
+	EventReactionCreated   = "google.workspace.chat.reaction.v1.created"
+	EventReactionDeleted   = "google.workspace.chat.reaction.v1.deleted"
+	EventMembershipCreated = "google.workspace.chat.membership.v1.created"
+	EventMembershipUpdated = "google.workspace.chat.membership.v1.updated"
+	EventMembershipDeleted = "google.workspace.chat.membership.v1.deleted"
+	EventSpaceUpdated      = "google.workspace.chat.space.v1.updated"
+)
+
+// SpaceEventsRequest asks what has happened in one space.
+type SpaceEventsRequest struct {
+	Space string
+
+	// Types is the event_types the filter asks for. Empty is refused rather
+	// than defaulted here: what a caller who said nothing wants is a decision
+	// for the command, and a default invented in the client would be one the
+	// command could not see.
+	Types []string
+
+	// Filter replaces the built one entirely, for a caller who wants a filter
+	// this tool does not build. It carries its own event_types, because the
+	// endpoint requires them and this does not add to what somebody wrote.
+	Filter string
+
+	// Since bounds the window. The API takes start_time in the same filter and
+	// requires it to be in the past.
+	Since time.Time
+
+	Limit int
+}
+
+// SpaceEvents lists what has happened in a space (SPEC.md §7.3).
+//
+// The filter is not optional and is not the caller's to forget. Without one the
+// endpoint answers 400 "Missing event types", which names neither the parameter
+// nor the values it takes, so the request is built here and the refusal for an
+// empty set happens before it.
+func (c *Client) SpaceEvents(ctx context.Context, req SpaceEventsRequest) iter.Seq2[SpaceEvent, error] {
+	if err := CheckSpaceName(req.Space); err != nil {
+		return failed[SpaceEvent](err)
+	}
+	filter, err := eventFilter(req)
+	if err != nil {
+		return failed[SpaceEvent](err)
+	}
+
+	query := url.Values{}
+	query.Set("filter", filter)
+
+	return paginate(ctx, c, pager[SpaceEvent]{
+		path:  req.Space + "/spaceEvents",
+		query: query,
+		limit: req.Limit,
+		decode: func(payload []byte) ([]SpaceEvent, string, error) {
+			var body struct {
+				SpaceEvents   []SpaceEvent `json:"spaceEvents"`
+				NextPageToken string       `json:"nextPageToken"`
+			}
+			err := json.Unmarshal(payload, &body)
+			return body.SpaceEvents, body.NextPageToken, err
+		},
+	})
+}
+
+// eventFilter builds the filter the endpoint requires.
+//
+// The syntax is `event_types:"a" OR event_types:"b"`, with start_time anded on
+// when there is one. Quoted with %q so a value cannot close the string it is
+// in, and the values are this tool's own constants rather than a caller's, so
+// the quoting is the second layer rather than the only one.
+func eventFilter(req SpaceEventsRequest) (string, error) {
+	if req.Filter != "" {
+		return req.Filter, nil
+	}
+	if len(req.Types) == 0 {
+		return "", clientErr("no event types were asked for, and this endpoint requires at least one.")
+	}
+
+	terms := make([]string, 0, len(req.Types))
+	for _, kind := range req.Types {
+		if kind == "" {
+			return "", clientErr("an event type is empty.")
+		}
+		terms = append(terms, fmt.Sprintf("event_types:%q", kind))
+	}
+
+	filter := strings.Join(terms, " OR ")
+	if !req.Since.IsZero() {
+		// start_time takes an equals and means "from here onwards", which is
+		// not what an equals usually means and is not what messages.list does
+		// with createTime, where the comparison is > and < and >= is refused.
+		// Measured on 2026-08-16: start_time > is a 400 "Error parsing the
+		// filter", start_time = returns everything after that instant.
+		//
+		// The OR group is parenthesized because it has to be. The same filter
+		// without the brackets is the same 400, so the brackets are load
+		// bearing rather than tidy.
+		filter = fmt.Sprintf("(%s) AND start_time = %q", filter, wireTime(req.Since))
+	}
+	return filter, nil
+}

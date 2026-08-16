@@ -14,7 +14,10 @@
 
 package chat
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // The wire structs. They hold what the send path needs and what its response
 // carries, and nothing else: the rest of SPEC.md §7.3 arrives with the
@@ -205,4 +208,91 @@ type Emoji struct {
 	// a struct written now would be a guess reviewed as though it were
 	// knowledge.
 	CustomEmoji json.RawMessage `json:"customEmoji,omitempty"`
+}
+
+// SpaceEvent is something that happened in a space.
+type SpaceEvent struct {
+	// Name is spaces/AAA/spaceEvents/BBB.
+	Name string `json:"name,omitempty"`
+
+	// EventType is a reverse-domain name like
+	// google.workspace.chat.message.v1.created.
+	EventType string `json:"eventType,omitempty"`
+
+	EventTime string `json:"eventTime,omitempty"`
+
+	// Payload is the subject of the event, exactly as the API sent it.
+	//
+	// Carried raw rather than modelled, for the reason CardsV2 is, and kept
+	// rather than dropped because it is the only place some of it exists: the
+	// created event for a message that has since been deleted carries the
+	// tombstone, and `messages get` on that name returns nothing. A watch that
+	// published only "a message was created" would send every consumer to an
+	// endpoint that cannot answer.
+	Payload json.RawMessage `json:"-"`
+
+	// Subject is the resource name of whatever the event is about, lifted out
+	// of the payload.
+	Subject string `json:"-"`
+}
+
+// UnmarshalJSON reads an event, including the payload whose field name is the
+// event's own.
+//
+// The shape was measured on 2026-08-16 across three event types rather than
+// read from a reference: an event carries exactly one field whose name ends in
+// EventData, that field carries exactly one field named for the subject, and
+// the subject carries a name.
+//
+//	"messageCreatedEventData":  {"message":  {"name": "spaces/A/messages/B", ...}}
+//	"messageDeletedEventData":  {"message":  {"name": ..., "deleteTime": ...}}
+//	"reactionCreatedEventData": {"reaction": {"name": ".../reactions/C"}}
+//
+// Nothing here fails when that stops being true. An event whose payload is
+// shaped differently keeps its type, its time and its raw bytes, and loses only
+// the convenience of a subject column, which is the right way for a guess about
+// somebody else's schema to be wrong.
+func (e *SpaceEvent) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+
+	// A type alias, so that decoding the named fields does not call this method
+	// again.
+	type plain SpaceEvent
+	var flat plain
+	if err := json.Unmarshal(data, &flat); err != nil {
+		return err
+	}
+	*e = SpaceEvent(flat)
+
+	for key, value := range fields {
+		if !strings.HasSuffix(key, "EventData") {
+			continue
+		}
+		e.Payload = value
+		e.Subject = subjectOf(value)
+		break
+	}
+	return nil
+}
+
+// subjectOf lifts the resource name out of an event payload, and returns empty
+// when the payload is not the shape that was measured.
+func subjectOf(payload json.RawMessage) string {
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &wrapper); err != nil {
+		return ""
+	}
+
+	for _, value := range wrapper {
+		var subject struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(value, &subject); err == nil && subject.Name != "" {
+			return subject.Name
+		}
+	}
+	return ""
 }

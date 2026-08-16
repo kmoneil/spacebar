@@ -143,6 +143,13 @@ Measured on a project with the API enabled and no app configured:
 The line is not reading against writing, which is the obvious guess and is
 wrong. Following a space's events is a read and is on the right-hand side.
 
+Verified on 2026-08-16 from the other direction as well. A Chat app was
+configured on the project, and every row on the right-hand side then worked:
+posting, editing, deleting, reacting, and following a space's events. Nothing on
+the left changed. So this table is a statement about a project with the API
+enabled and no app configured, and configuring the app is what moves everything
+across.
+
 So a deployment that only lists and reads needs less from you than one that
 posts or follows, and if you approve the scopes but no app is configured, users
 will be able to read everything and change nothing.

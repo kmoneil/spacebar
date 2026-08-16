@@ -89,6 +89,10 @@ func (f *fake) GetMessage(_ context.Context, name string) (*chat.Message, error)
 	return nil, output.Errorf("NOT_FOUND", output.ExitAPI, "no message named %q", name)
 }
 
+func (f *fake) Watch(context.Context, chat.WatchRequest) iter.Seq2[chat.SpaceEvent, error] {
+	return func(func(chat.SpaceEvent, error) bool) {}
+}
+
 func (f *fake) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
 	return nil, errors.New("the fake does not edit")
 }

@@ -284,6 +284,11 @@ func TestGoldenOutputContract(t *testing.T) {
 		// holding a value that changes every run does not announce itself as
 		// unstable; it announces itself as the output contract having changed.
 		{"tail-since-and-backfill.txt", []string{"tail", "spaces/AAAATestSpace", "--since", "2026-08-16T09:00:00Z", "--backfill", "5"}, output.ExitUsage, "", true, true},
+
+		{"watch-no-arguments.txt", []string{"watch"}, output.ExitUsage, "", true, true},
+		{"watch-bad-events.txt", []string{"watch", "spaces/AAAATestSpace", "--events", "everything"}, output.ExitUsage, "", true, true},
+		{"watch-interval-below-floor.txt", []string{"watch", "spaces/AAAATestSpace", "--interval", "100ms"}, output.ExitUsage, "", true, true},
+		{"watch-unsupported.txt", []string{"watch", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
 		{"tail-unsupported.txt", []string{"tail", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
 		{"alias-list-empty.txt", []string{"alias", "list"}, output.ExitOK, "", true, true},
 
@@ -357,7 +362,7 @@ func TestGoldenOutputContract(t *testing.T) {
 // are the thing being recorded and a helper that parsed them would be a second
 // implementation of the command tree.
 func needsAProfile(name string) bool {
-	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-"} {
+	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-", "watch-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

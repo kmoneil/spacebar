@@ -148,7 +148,27 @@ func (c *Client) checkTail(req TailRequest) error {
 // three separate concerns in one closure, and only the third one is the part
 // anybody comes back to read.
 func (c *Client) follow(ctx context.Context, req TailRequest, since time.Time, yield func(Message, error) bool) {
-	interval := req.Interval
+	follow(ctx, c, req.Interval, since, yield,
+		func(ctx context.Context, since time.Time, yield func(Message, error) bool) (time.Time, int, bool) {
+			return c.pollOnce(ctx, req.Space, since, yield)
+		})
+}
+
+// follow is the poll loop, shared by tail and watch.
+//
+// A free function rather than a method because Go has no generic methods, and
+// generic because the alternative is two copies of a loop whose backoff, whose
+// quiet counter, and whose cancellation rule all have to stay identical. They
+// would not: the second copy is the one that stops being adjusted.
+//
+// What differs between the two callers is exactly one thing, which is the
+// parameter: how to fetch everything since a watermark and say what the new
+// watermark is. tail asks messages.list about createTime and watch asks
+// spaceEvents.list about eventTime.
+func follow[T any](ctx context.Context, c *Client, interval time.Duration, since time.Time,
+	yield func(T, error) bool,
+	poll func(context.Context, time.Time, func(T, error) bool) (time.Time, int, bool),
+) {
 	if interval == 0 {
 		interval = DefaultPollInterval
 	}
@@ -157,14 +177,14 @@ func (c *Client) follow(ctx context.Context, req TailRequest, since time.Time, y
 	for {
 		// The existing retry seam, so a test drives this with the same injected
 		// clock it uses for backoff and never actually waits. A cancelled wait
-		// is how a caller stops a tail, and it is not an error: a tail that
+		// is how a caller stops this, and it is not an error: a command that
 		// exited non-zero on a deliberate interrupt would make every shell
 		// script wrapping it wrong.
 		if err := c.sleep(ctx, c.backoff(interval, quiet)); err != nil {
 			return
 		}
 
-		newest, found, ok := c.pollOnce(ctx, req.Space, since, yield)
+		newest, found, ok := poll(ctx, since, yield)
 		if !ok {
 			return
 		}
@@ -267,11 +287,12 @@ func (c *Client) pollOnce(ctx context.Context, space string, since time.Time, yi
 // anybody hears about it, which is why it returns nothing: an earlier version
 // returned a bool that was always false, and unparam was right that a result
 // carrying no information is a result somebody will eventually branch on.
-func report(ctx context.Context, err error, yield func(Message, error) bool) {
+func report[T any](ctx context.Context, err error, yield func(T, error) bool) {
 	if ctx.Err() != nil {
 		return
 	}
-	yield(Message{}, err)
+	var zero T
+	yield(zero, err)
 }
 
 // backoff is the interval to wait before the next poll.

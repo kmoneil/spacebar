@@ -118,6 +118,12 @@ var readOnlyCommands = map[string]string{
 	// has nothing to stop, and Ctrl-C is how it ends.
 	"spacebar tail": "polls for messages and writes nothing, ending on a signal rather than on its own",
 
+	// Polls spaceEvents forever and puts nothing anywhere. The same shape as
+	// tail: --dry-run has nothing to stop and Ctrl-C is how it ends. What it
+	// sees that tail cannot is edits, deletions and reactions, and seeing a
+	// deletion is not making one.
+	"spacebar watch": "polls for events and writes nothing, ending on a signal rather than on its own",
+
 	// Read-only in this build and not by nature, which is the entry worth
 	// reading twice. Every tool it registers reads, so a session cannot change
 	// anything in a space. m5-02 adds send_message behind --allow-write, and on

@@ -276,6 +276,10 @@ func (roaming) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[cha
 
 func (roaming) GetMessage(context.Context, string) (*chat.Message, error) { return nil, nil }
 
+func (roaming) Watch(context.Context, chat.WatchRequest) iter.Seq2[chat.SpaceEvent, error] {
+	return func(func(chat.SpaceEvent, error) bool) {}
+}
+
 func (roaming) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
 	return nil, nil
 }

@@ -34,7 +34,12 @@
 // something bad at both jobs. A caller that wants only one takes only one.
 package rows
 
-import "github.com/kmoneil/spacebar/internal/chat"
+import (
+	"encoding/json"
+	"strings"
+
+	"github.com/kmoneil/spacebar/internal/chat"
+)
 
 // Space is the published shape of one space.
 //
@@ -190,4 +195,88 @@ func ForMessage(m chat.Message) (Message, []string) {
 	// output.Cell escapes the tab and the newline, so a message body cannot
 	// forge a column or a row here. That is why the body can be a column at all.
 	return row, []string{m.CreateTime, who, m.Text}
+}
+
+// Event is the published shape of one space event.
+//
+// The payload travels with it, raw. That is a departure from what the other
+// three shapes do, and it is deliberate: for a message that has since been
+// deleted, the payload is the only place the tombstone exists, and `messages
+// get` on that name answers nothing. Publishing the type without the subject
+// would send every consumer to an endpoint that cannot answer.
+type Event struct {
+	Name      string `json:"name"`
+	EventType string `json:"event_type,omitempty"`
+	EventTime string `json:"event_time,omitempty"`
+
+	// Subject is the resource name of whatever happened: the message, the
+	// reaction, the membership.
+	Subject string `json:"subject,omitempty"`
+
+	// Payload is the API's own event data, unaltered. Absent when the event
+	// carried none.
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+// ForEvent projects one space event onto what is published about it.
+//
+// The text row leads with the time and then the type, which is the order tail
+// and messages list use: when, then what, is how a person reads a stream. The
+// fourth column is the message text when the event carries one, because a watch
+// that says "a message was created" and makes somebody fetch it is a worse tail.
+func ForEvent(e chat.SpaceEvent) (Event, []string) {
+	return Event{
+			Name:      e.Name,
+			EventType: e.EventType,
+			EventTime: e.EventTime,
+			Subject:   e.Subject,
+			Payload:   e.Payload,
+		}, []string{
+			e.EventTime,
+			shortEventType(e.EventType),
+			e.Subject,
+			textOf(e.Payload),
+		}
+}
+
+// shortEventType trims the reverse-domain prefix off an event type for the text
+// column, and leaves anything it does not recognise alone.
+//
+// "google.workspace.chat.message.v1.created" is forty characters of which seven
+// carry the information, and a column that wide pushes everything else off the
+// screen. --json keeps the full value, because a program comparing against the
+// API's own documentation needs the name the API uses.
+func shortEventType(full string) string {
+	const prefix = "google.workspace.chat."
+	trimmed, ok := strings.CutPrefix(full, prefix)
+	if !ok {
+		return full
+	}
+	return strings.ReplaceAll(trimmed, ".v1.", " ")
+}
+
+// textOf lifts a message body out of an event payload when there is one.
+//
+// Best effort by design. A payload this does not recognise produces an empty
+// column rather than an error, because the row is still worth printing: the
+// time, the type and the subject are all there, and a reaction has no text to
+// find in the first place.
+func textOf(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+
+	var wrapper map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &wrapper); err != nil {
+		return ""
+	}
+	for _, value := range wrapper {
+		var subject struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(value, &subject); err == nil && subject.Text != "" {
+			return subject.Text
+		}
+	}
+	return ""
 }

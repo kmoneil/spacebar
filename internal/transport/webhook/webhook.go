@@ -183,6 +183,10 @@ func (t *Transport) GetMessage(context.Context, string) (*chat.Message, error) {
 	return nil, transport.Unsupported(t, "messages get", transport.CanRead)
 }
 
+func (t *Transport) Watch(context.Context, chat.WatchRequest) iter.Seq2[chat.SpaceEvent, error] {
+	return transport.Refused[chat.SpaceEvent](t, "watch", transport.CanRead)
+}
+
 func (t *Transport) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
 	return nil, transport.Unsupported(t, "messages edit", transport.CanEdit)
 }

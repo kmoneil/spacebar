@@ -120,6 +120,12 @@ type Transport interface {
 	// GetMessage reads one message by resource name.
 	GetMessage(ctx context.Context, message string) (*chat.Message, error)
 
+	// Watch follows what happens in a space: edits, deletions and reactions as
+	// well as new messages. A read, and on the far side of the Chat app
+	// requirement rather than of the read/write line, which is the one thing
+	// about this endpoint worth remembering.
+	Watch(ctx context.Context, req chat.WatchRequest) iter.Seq2[chat.SpaceEvent, error]
+
 	// The mutation paths. Each is gated on its own capability rather than on a
 	// single "can write", because Chat scopes them separately and because a
 	// profile that may post is not necessarily one that may delete.

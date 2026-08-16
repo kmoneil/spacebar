@@ -21,10 +21,10 @@ human in the loop, through `--json` and through a built-in MCP server.
 webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
-well, as do `tail`, the `alias` group, and `messages edit`, `messages delete`
-and `react`. `auth`, `version`, `licenses` and `completion` work.
-`spacebar mcp` serves the read paths to a model over MCP. Still missing:
-`watch`, attachments, and writing over MCP.
+well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
+`messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
+work. `spacebar mcp` serves the read paths to a model over MCP. Still missing:
+attachments, watching more than one space at a time, and writing over MCP.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -450,6 +450,45 @@ a minute, and any message resets it.
 
 **Ctrl-C exits 0.** It is how the command is meant to end, so it is not a
 failure, and a script wrapping it does not have to special-case the code.
+
+### Watching, which is not tailing
+
+`tail` polls for messages, so it cannot see an edit, a deletion, or a reaction:
+a poll on `createTime` returns new messages and none of those makes one.
+`watch` polls `spaceEvents` instead and reports them as events.
+
+```sh
+spacebar watch spaces/AAAAAAA
+spacebar watch eng --events message,reaction,membership
+spacebar watch eng --since 2h --json
+```
+
+Columns are the time, the kind of event, the resource it happened to, and the
+message text when the event carries one.
+
+```
+2026-08-16T22:04:01.102175Z  message created   spaces/A/messages/8xM   spacebar watch live check
+2026-08-16T22:04:01.769711Z  reaction created  spaces/A/messages/8xM/reactions/115...
+```
+
+`--events` takes any of `message`, `reaction`, `membership` and `space`, and
+defaults to `message,reaction`, which is the conversation. Membership and space
+updates are administrative and arrive on a different rhythm, so they are opt-in
+rather than noise.
+
+**`--json` carries the API's own event payload**, unaltered, under `payload`.
+That is a departure from how the other shapes work here, and it is deliberate:
+for a message that has since been deleted, the payload is the only place its
+tombstone exists, and `messages get` on that name answers nothing.
+
+**An event's payload is the subject as it is now, not as it was.** Measured: an
+edit event for a message deleted ten minutes later carries the tombstone rather
+than the text the edit set. Watching live gets the text; watching history gets
+the current state.
+
+**This endpoint needs the Chat app configured**, which is a separate step from
+enabling the Chat API and is the same step every write needs. It is the reason
+the line is not reading against writing.
 
 **A time window is an RFC 3339 timestamp or how long ago**, as in `30m`, `2h`
 or `36h`. Durations have no day unit, so a week is `168h`. Both `--since` and

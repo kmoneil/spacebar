@@ -204,6 +204,16 @@ func (t *Transport) GetMessage(ctx context.Context, message string) (*chat.Messa
 	return t.client.GetMessage(ctx, message)
 }
 
+// SpaceEvents reads what has happened in a space. Gated on CanRead, which is
+// what it is, even though the API puts it behind the Chat app configuration
+// that every write is behind.
+func (t *Transport) Watch(ctx context.Context, req chat.WatchRequest) iter.Seq2[chat.SpaceEvent, error] {
+	if !t.caps.Has(transport.CanRead) {
+		return transport.Refused[chat.SpaceEvent](t, "watch", transport.CanRead)
+	}
+	return t.client.Watch(ctx, req)
+}
+
 // EditMessage replaces a message's text.
 func (t *Transport) EditMessage(ctx context.Context, req chat.EditRequest) (*chat.Message, error) {
 	if !t.caps.Has(transport.CanEdit) {
