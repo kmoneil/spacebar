@@ -23,6 +23,7 @@ import (
 
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/meta"
+	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
@@ -109,7 +110,7 @@ message posted at exactly that moment is not replayed. It cannot be given with
 				Interval: interval,
 				Since:    from,
 				Backfill: backfill,
-			}), rowForMessage))
+			}), rows.ForMessage))
 		},
 	}
 

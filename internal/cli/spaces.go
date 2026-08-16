@@ -20,105 +20,9 @@ import (
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
+	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
-
-// spaceRow is the --json shape of one space.
-//
-// A shape of this repository's choosing rather than the wire struct, because a
-// golden file makes it a public API the moment one records it. Passing the API's
-// own document through would mean every field Google adds becomes part of this
-// tool's contract without anybody deciding it should be.
-type spaceRow struct {
-	Name        string `json:"name"`
-	SpaceType   string `json:"space_type,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
-
-	// SingleUserBotDm is what tells a direct message with an app from one with a
-	// person. Both have no display name, so without it they are the same row.
-	SingleUserBotDm bool   `json:"single_user_bot_dm,omitempty"`
-	LastActiveTime  string `json:"last_active_time,omitempty"`
-}
-
-// botDM is what the fourth column of `spaces list` says for a direct message
-// with an app.
-//
-// A word rather than "true", because the column is read by a person scanning a
-// list and by an awk one-liner, and both are served better by a value that says
-// what it means. Empty for everything else, which is the wire's own meaning:
-// the API omits the field rather than sending false.
-const botDM = "bot"
-
-func rowForSpace(s chat.Space) (any, []string) {
-	marker := ""
-	if s.SingleUserBotDm {
-		marker = botDM
-	}
-
-	return spaceRow{
-			Name:            s.Name,
-			SpaceType:       s.SpaceType,
-			DisplayName:     s.DisplayName,
-			SingleUserBotDm: s.SingleUserBotDm,
-			LastActiveTime:  s.LastActiveTime,
-		}, []string{
-			s.Name,
-			s.SpaceType,
-			s.DisplayName,
-			marker,
-			s.LastActiveTime,
-		}
-}
-
-// memberRow is the --json shape of one membership.
-type memberRow struct {
-	Name  string `json:"name"`
-	State string `json:"state,omitempty"`
-	Role  string `json:"role,omitempty"`
-
-	// Member is users/NNN, which is the stable identifier. DisplayName is not:
-	// it is chosen by the account holder, is not unique, and is untrusted text.
-	//
-	// The API has never sent one. It is kept as a field, with omitempty, so that
-	// a program parsing this gets it for free on the day Google starts, and so
-	// that dropping it from the text row is a change to what a person reads
-	// rather than to what a script can select.
-	Member      string `json:"member,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
-	MemberType  string `json:"member_type,omitempty"`
-
-	// Affiliation is INTERNAL or EXTERNAL, and absent for an app.
-	Affiliation string `json:"affiliation,omitempty"`
-
-	// CreateTime is when they joined. In the JSON and not in a column, because
-	// "when did they join" is a different question from "who is in here" and the
-	// row is already as wide as a person can scan.
-	CreateTime string `json:"create_time,omitempty"`
-}
-
-func rowForMember(m chat.Membership) (any, []string) {
-	row := memberRow{
-		Name:        m.Name,
-		State:       m.State,
-		Role:        m.Role,
-		Affiliation: m.Affiliation,
-		CreateTime:  m.CreateTime,
-	}
-	if m.Member != nil {
-		row.Member = m.Member.Name
-		row.DisplayName = m.Member.DisplayName
-		row.MemberType = m.Member.Type
-	}
-
-	// The type column is where the display name used to be, and the trade is
-	// deliberate. Measured on 2026-08-16 across seven memberships in five
-	// spaces, and against the sender of every message read the same day, a
-	// user-authenticated read returns {"name": "users/NNN", "type": "HUMAN"} and
-	// nothing else, so that column was structurally blank. HUMAN against BOT is
-	// the fact it was standing in front of: it tells a person from an app, which
-	// is the question a blank name was leaving unanswered.
-	return row, []string{row.Member, row.MemberType, m.State, m.Role, m.Affiliation}
-}
 
 func newSpacesCmd(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
@@ -179,7 +83,7 @@ conversation with a colleague from one with an app.`,
 			return finish(r, opened, stream(r, opened.Transport.Spaces(cmd.Context(), chat.ListSpacesRequest{
 				Filter: filter,
 				Limit:  limit,
-			}), rowForSpace))
+			}), rows.ForSpace))
 		},
 	}
 
@@ -227,7 +131,7 @@ matching is refused rather than guessed at.`,
 				return finish(r, opened, err)
 			}
 
-			data, _ := rowForSpace(*space)
+			data, _ := rows.ForSpace(*space)
 			fields := output.Fields{
 				{Label: "name", Value: space.Name},
 				{Label: "type", Value: space.SpaceType},
@@ -310,7 +214,7 @@ no flag for it yet.`,
 				Space:       target,
 				ShowInvited: showInvited,
 				Limit:       limit,
-			}), rowForMember))
+			}), rows.ForMember))
 		},
 	}
 

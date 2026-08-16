@@ -22,6 +22,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
+	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
@@ -32,62 +33,6 @@ const (
 	orderNewest = "newest"
 	orderOldest = "oldest"
 )
-
-// messageRow is the --json shape of one message.
-//
-// Chosen here rather than passed through from the wire, so that a field the API
-// adds does not silently become part of this tool's contract. Text is the
-// message as Chat markup, unaltered: this tool does not rewrite a value to make
-// it easier to read, and a body that went out as Chat markup comes back as Chat
-// markup.
-type messageRow struct {
-	Name       string `json:"name"`
-	CreateTime string `json:"create_time,omitempty"`
-
-	// LastUpdateTime is set once a message has been edited, and its presence is
-	// the only way to tell an edited message from an original one.
-	LastUpdateTime string `json:"last_update_time,omitempty"`
-
-	Sender      string `json:"sender,omitempty"`
-	DisplayName string `json:"sender_display_name,omitempty"`
-	SenderType  string `json:"sender_type,omitempty"`
-
-	Thread      string `json:"thread,omitempty"`
-	ThreadReply bool   `json:"thread_reply,omitempty"`
-
-	Text string `json:"text,omitempty"`
-}
-
-func rowForMessage(m chat.Message) (any, []string) {
-	row := messageRow{
-		Name:           m.Name,
-		CreateTime:     m.CreateTime,
-		LastUpdateTime: m.LastUpdateTime,
-		ThreadReply:    m.ThreadReply,
-		Text:           m.Text,
-	}
-	if m.Sender != nil {
-		row.Sender = m.Sender.Name
-		row.DisplayName = m.Sender.DisplayName
-		row.SenderType = m.Sender.Type
-	}
-	if m.Thread != nil {
-		row.Thread = m.Thread.Name
-	}
-
-	// The display name is preferred in the text column and the resource name is
-	// the fallback, which is the opposite of how --json orders them. A person
-	// reading a terminal wants to know who said it; a script wants a value it
-	// can compare, and --json carries both.
-	who := row.DisplayName
-	if who == "" {
-		who = row.Sender
-	}
-
-	// output.Cell escapes the tab and the newline, so a message body cannot
-	// forge a column or a row here. That is why the body can be a column at all.
-	return row, []string{m.CreateTime, who, m.Text}
-}
 
 func newMessagesCmd(opts *Options) *cobra.Command {
 	cmd := &cobra.Command{
@@ -184,7 +129,7 @@ in it are escaped before they reach a terminal.`,
 				Until:       to,
 				ShowDeleted: showDeleted,
 				Limit:       limit,
-			}), rowForMessage))
+			}), rows.ForMessage))
 		},
 	}
 
@@ -227,9 +172,8 @@ reports and what the name column of ` + meta.AppName + ` messages list --json ho
 				return finish(r, opened, err)
 			}
 
-			data, _ := rowForMessage(*message)
-			row, _ := data.(messageRow)
-			return r.Block(data, row.Text)
+			row, _ := rows.ForMessage(*message)
+			return r.Block(row, row.Text)
 		},
 	}
 }

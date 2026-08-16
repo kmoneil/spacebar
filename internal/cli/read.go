@@ -128,7 +128,11 @@ func finish(r *output.Renderer, opened *profile.Open, err error) error {
 	return r.Block(dry.Request, dry.Request.Text())
 }
 
-func stream[T any](r *output.Renderer, items iter.Seq2[T, error], row func(T) (any, []string)) error {
+// stream is generic over the row shape as well as the item, so a projection in
+// internal/rows can be passed by name rather than wrapped in a closure at every
+// call site. The renderer takes an any for the structured half, and one that
+// arrives as a concrete type is exactly as encodable.
+func stream[T, R any](r *output.Renderer, items iter.Seq2[T, error], row func(T) (R, []string)) error {
 	for item, err := range items {
 		if err != nil {
 			return err
