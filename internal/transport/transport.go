@@ -120,6 +120,13 @@ type Transport interface {
 	// GetMessage reads one message by resource name.
 	GetMessage(ctx context.Context, message string) (*chat.Message, error)
 
+	// The mutation paths. Each is gated on its own capability rather than on a
+	// single "can write", because Chat scopes them separately and because a
+	// profile that may post is not necessarily one that may delete.
+	EditMessage(ctx context.Context, req chat.EditRequest) (*chat.Message, error)
+	DeleteMessage(ctx context.Context, message string) error
+	React(ctx context.Context, req chat.ReactRequest) (*chat.Reaction, error)
+
 	// FindDirectMessage returns the direct message space shared with one user.
 	FindDirectMessage(ctx context.Context, user string) (*chat.Space, error)
 

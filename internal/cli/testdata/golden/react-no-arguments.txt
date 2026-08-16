@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: react needs a message and an emoji.
+  spacebar react spaces/AAAAAAA/messages/BBBBBBB 👍

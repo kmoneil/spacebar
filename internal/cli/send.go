@@ -306,18 +306,11 @@ func readBody(in io.Reader, r *output.Renderer, text string) (string, error) {
 
 // buildMessage turns the body and the flags into the message to send.
 func buildMessage(body string, flags *sendFlags, r *output.Renderer) (chat.Message, error) {
-	text := body
-
-	if flags.md {
-		translated, warnings, err := format.Translate(body)
-		if err != nil {
-			return chat.Message{}, err
-		}
-		r.Warnings(warnings)
-		text = translated
-	} else if err := format.Validate(body); err != nil {
+	text, warnings, err := format.Body(body, flags.md)
+	if err != nil {
 		return chat.Message{}, err
 	}
+	r.Warnings(warnings)
 
 	message := chat.Message{Text: text}
 	if flags.cardFile == "" {

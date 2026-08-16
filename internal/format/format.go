@@ -123,3 +123,23 @@ func joinLines(lines []string, trailingNewline bool) string {
 	}
 	return out
 }
+
+// Body is what a command does with text somebody typed, given whether they
+// asked for translation.
+//
+// Two callers today, `send` and `messages edit`, and a third arriving with the
+// MCP write tools. The decision it holds is one line long and is still worth
+// having in one place: with --md the body is translated and any warnings are
+// the caller's to print, and without it the body is validated and passed
+// through byte for byte. A second copy would eventually validate in one command
+// and not in the other, which is the failure that ships invalid UTF-8 into a
+// space through whichever path forgot.
+func Body(text string, md bool) (string, []string, error) {
+	if md {
+		return Translate(text)
+	}
+	if err := Validate(text); err != nil {
+		return "", nil, err
+	}
+	return text, nil, nil
+}

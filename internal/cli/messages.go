@@ -18,7 +18,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/kmoneil/spacebar/internal/chat"
+	"github.com/kmoneil/spacebar/internal/format"
 	"github.com/kmoneil/spacebar/internal/meta"
+	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
@@ -42,6 +44,8 @@ before making a request.`,
 	cmd.AddCommand(
 		newMessagesListCmd(opts),
 		newMessagesGetCmd(opts),
+		newMessagesEditCmd(opts),
+		newMessagesDeleteCmd(opts),
 	)
 	return cmd
 }
@@ -168,6 +172,120 @@ reports and what the name column of ` + meta.AppName + ` messages list --json ho
 
 			row, _ := rows.ForMessage(*message)
 			return r.Block(row, row.Text)
+		},
+	}
+}
+
+func newMessagesEditCmd(opts *Options) *cobra.Command {
+	var md bool
+
+	cmd := &cobra.Command{
+		Use:   "edit MESSAGE TEXT",
+		Short: "Replace a message's text",
+		Long: `Replace a message's text.
+
+  ` + meta.AppName + ` messages edit spaces/AAAAAAA/messages/BBBBBBB 'deploy done, finally'
+
+The argument is a message resource name, which is what ` + meta.AppName + ` send
+reports and what the name field of ` + meta.AppName + ` messages list --json holds.
+
+The text replaces the whole body rather than patching it. Chat markup is not
+CommonMark, so --md translates the same way it does on send, and the
+translation is one way: feeding its output back through --md means something
+else.
+
+Editing is limited to messages this account sent, measured rather than assumed:
+editing your own answers 200 and editing somebody else's answers 403, in the
+same space, on the same token, a second apart. The refusal comes from the API
+rather than from this tool, because whose message it is is not something this
+tool can know without asking.`,
+
+		Args: exactlyTwo("messages edit needs a message and the new text.\n" +
+			"  %s messages edit spaces/AAAAAAA/messages/BBBBBBB 'the new text'"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r := renderer(cmd, opts)
+
+			text, warnings, err := format.Body(args[1], md)
+			if err != nil {
+				return err
+			}
+			r.Warnings(warnings)
+
+			opened, err := openProfile(opts, r)
+			if err != nil {
+				return err
+			}
+			if err := transport.Require(opened.Transport, "messages edit", transport.CanEdit); err != nil {
+				return err
+			}
+
+			edited, err := opened.Transport.EditMessage(cmd.Context(), chat.EditRequest{
+				Message: args[0],
+				Text:    text,
+			})
+			if err != nil {
+				return finish(r, opened, err)
+			}
+
+			row, _ := rows.ForMessage(*edited)
+			return r.Result(row, output.Fields{
+				{Label: "edited", Value: edited.Name},
+				{Label: "text", Value: edited.Text},
+			})
+		},
+	}
+
+	cmd.Flags().BoolVar(&md, "md", false, "translate the body from CommonMark into Chat markup")
+	return cmd
+}
+
+func newMessagesDeleteCmd(opts *Options) *cobra.Command {
+	return &cobra.Command{
+		Use:     "delete MESSAGE",
+		Aliases: []string{"rm"},
+		Short:   "Delete a message",
+		Long: `Delete a message.
+
+  ` + meta.AppName + ` messages delete spaces/AAAAAAA/messages/BBBBBBB
+
+This asks first, because it is the one command in this tool that destroys
+something in a space rather than adding to it, and there is no undo: a deleted
+message is gone for everybody who could see it.
+
+With stdin not a terminal there is nobody to ask, so it exits 7 rather than
+prompting. --yes answers in advance, which is what a script does.
+
+Deleting is not limited to your own messages the way editing is. This account
+deleted a message sent by somebody else, in a space where it is a manager, and
+the API allowed it. So read the name twice before you type this: what stops a
+mistake here is the confirmation and nothing else.`,
+
+		Args: exactlyOne("messages delete needs a message.\n" +
+			"  %s messages delete spaces/AAAAAAA/messages/BBBBBBB"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r := renderer(cmd, opts)
+
+			opened, err := openProfile(opts, r)
+			if err != nil {
+				return err
+			}
+			if err := transport.Require(opened.Transport, "messages delete", transport.CanDelete); err != nil {
+				return err
+			}
+
+			// After the capability check and before the request. "This profile
+			// cannot delete" is a better first answer than a question about
+			// something that was never going to happen.
+			if err := r.Confirm(cmd.InOrStdin(), "Delete %s? This cannot be undone.", args[0]); err != nil {
+				return err
+			}
+
+			if err := opened.Transport.DeleteMessage(cmd.Context(), args[0]); err != nil {
+				return finish(r, opened, err)
+			}
+
+			return r.Result(map[string]any{"name": args[0], "deleted": true},
+				output.Fields{{Label: "deleted", Value: args[0]}})
 		},
 	}
 }

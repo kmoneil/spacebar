@@ -17,7 +17,9 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -574,5 +576,139 @@ func TestAMessageIDMayBeginWithAnythingButDots(t *testing.T) {
 				t.Errorf("CheckMessageName(%q) was accepted", name)
 			}
 		})
+	}
+}
+
+// TestEveryMutationHonoursDryRunAndSendsNothing.
+//
+// The CLI's walk cannot reach these three. Its tests can configure exactly one
+// kind of profile, a webhook, and a webhook has none of the three capabilities,
+// so the gate refuses before a request is ever built. That refusal is worth
+// asserting and is a different claim.
+//
+// So this one is held where it is implemented: the stop is on the line before
+// the send inside the client, so no command can forget it and no transport can
+// route around it. The server fails the test if it is reached.
+func TestEveryMutationHonoursDryRunAndSendsNothing(t *testing.T) {
+	const message = "spaces/AAA/messages/BBB"
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		call   func(*Client) error
+	}{
+		{"edit", http.MethodPatch, func(c *Client) error {
+			_, err := c.EditMessage(context.Background(), EditRequest{Message: message, Text: "the new text"})
+			return err
+		}},
+		{"delete", http.MethodDelete, func(c *Client) error {
+			return c.DeleteMessage(context.Background(), message)
+		}},
+		{"react", http.MethodPost, func(c *Client) error {
+			_, err := c.React(context.Background(), ReactRequest{Message: message, Emoji: "👍"})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newReader(t, func(http.ResponseWriter, *http.Request) {
+				t.Errorf("a dry run of %s reached the network", tc.name)
+			})
+			r.client.dryRun = true
+
+			err := tc.call(r.client)
+			dry, ok := errors.AsType[*DryRun](err)
+			if !ok {
+				t.Fatalf("a dry run returned %v, want a *DryRun", err)
+			}
+			if r.count() != 0 {
+				t.Fatalf("a dry run made %d requests", r.count())
+			}
+			if dry.Request.Method != tc.method {
+				t.Errorf("method = %q, want %q", dry.Request.Method, tc.method)
+			}
+			if !strings.Contains(dry.Request.URL, message) {
+				t.Errorf("url = %q, want the message in it", dry.Request.URL)
+			}
+		})
+	}
+}
+
+// TestAnEditAlwaysCarriesItsUpdateMask.
+//
+// The API takes a PATCH with no mask as a request to update nothing and answers
+// 200, so a caller who omitted it would be told the edit worked and would find
+// the old text still there. That is the worst shape a failure can have:
+// successful, silent, and wrong. It is why the mask is not a parameter of this
+// call.
+func TestAnEditAlwaysCarriesItsUpdateMask(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name": "spaces/AAA/messages/BBB", "text": "the new text"}`)
+	})
+
+	edited, err := r.client.EditMessage(context.Background(), EditRequest{
+		Message: "spaces/AAA/messages/BBB",
+		Text:    "the new text",
+	})
+	if err != nil {
+		t.Fatalf("EditMessage: %v", err)
+	}
+	if edited.Text != "the new text" {
+		t.Errorf("the response was not decoded: %+v", edited)
+	}
+
+	paths := r.paths()
+	if len(paths) != 1 || !strings.Contains(paths[0], "updateMask=text") {
+		t.Errorf("paths = %q, want one carrying updateMask=text", paths)
+	}
+}
+
+// TestAReactionIsAnObjectRatherThanAString.
+//
+// Measured before it could be assumed: {"emoji": ":thumbsup:"} is refused at
+// the proto level with "Invalid value at 'reaction.emoji'
+// (google.chat.v1.Emoji)", and {"emoji": {"unicode": "..."}} parses. So a
+// shortcode cannot be passed through, and it is refused here rather than turned
+// into a 400 quoting a proto type at somebody who typed what every chat client
+// accepts.
+func TestAReactionIsAnObjectRatherThanAString(t *testing.T) {
+	var body string
+	r := newReader(t, func(w http.ResponseWriter, req *http.Request) {
+		raw, _ := io.ReadAll(req.Body)
+		body = string(raw)
+		_, _ = fmt.Fprint(w, `{"name": "spaces/AAA/messages/BBB/reactions/CCC"}`)
+	})
+
+	if _, err := r.client.React(context.Background(), ReactRequest{
+		Message: "spaces/AAA/messages/BBB",
+		Emoji:   "👍",
+	}); err != nil {
+		t.Fatalf("React: %v", err)
+	}
+	// The encoder's trailing newline is part of what goes on the wire, and is
+	// trimmed here rather than asserted away: what matters is the object, and
+	// the send path has its own test for the exact bytes.
+	if strings.TrimSpace(body) != `{"emoji":{"unicode":"👍"}}` {
+		t.Errorf("body = %q", body)
+	}
+	if paths := r.paths(); len(paths) != 1 || !strings.Contains(paths[0], "/messages/BBB/reactions") {
+		t.Errorf("paths = %q", paths)
+	}
+}
+
+// TestAShortcodeIsRefusedBeforeTheRequest, because the alternative is a 400
+// naming a protobuf type, for a value every chat client in the world accepts.
+func TestAShortcodeIsRefusedBeforeTheRequest(t *testing.T) {
+	for _, bad := range []string{":thumbsup:", ":+1:", ""} {
+		if err := CheckEmoji(bad); err == nil {
+			t.Errorf("CheckEmoji(%q) was accepted, and the API refuses it", bad)
+		}
+	}
+
+	// Narrow on purpose: it fires on the shape somebody types by habit and not
+	// on anything containing a colon.
+	for _, good := range []string{"👍", "🎉", "a:b"} {
+		if err := CheckEmoji(good); err != nil {
+			t.Errorf("CheckEmoji(%q) = %v", good, err)
+		}
 	}
 }

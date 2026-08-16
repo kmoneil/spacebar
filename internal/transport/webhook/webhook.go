@@ -183,6 +183,18 @@ func (t *Transport) GetMessage(context.Context, string) (*chat.Message, error) {
 	return nil, transport.Unsupported(t, "messages get", transport.CanRead)
 }
 
+func (t *Transport) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
+	return nil, transport.Unsupported(t, "messages edit", transport.CanEdit)
+}
+
+func (t *Transport) DeleteMessage(context.Context, string) error {
+	return transport.Unsupported(t, "messages delete", transport.CanDelete)
+}
+
+func (t *Transport) React(context.Context, chat.ReactRequest) (*chat.Reaction, error) {
+	return nil, transport.Unsupported(t, "react", transport.CanReact)
+}
+
 func (t *Transport) FindDirectMessage(context.Context, string) (*chat.Space, error) {
 	return nil, transport.Unsupported(t, "resolving a direct message", transport.CanResolveDM)
 }

@@ -258,6 +258,25 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"alias-rm-no-such-alias.txt", []string{"alias", "rm", "nothing"}, output.ExitUsage, "", true, true},
 		{"messages-list-bad-time.txt", []string{"messages", "list", "spaces/AAAATestSpace", "--since", "yesterday"}, output.ExitUsage, "", true, true},
 
+		{"messages-edit-no-arguments.txt", []string{"messages", "edit"}, output.ExitUsage, "", true, true},
+		{"messages-edit-unsupported.txt", []string{"messages", "edit", "spaces/AAAATestSpace/messages/BBBB", "text"}, output.ExitUnsupported, "", true, true},
+		{"messages-delete-no-arguments.txt", []string{"messages", "delete"}, output.ExitUsage, "", true, true},
+		{"messages-delete-unsupported.txt", []string{"messages", "delete", "spaces/AAAATestSpace/messages/BBBB", "--yes"}, output.ExitUnsupported, "", true, true},
+
+		// The confirmation is deliberately not recorded here. On the only
+		// profile these goldens can configure, a webhook, the capability gate
+		// fires before the question is asked, so a golden named for the
+		// confirmation would record a refusal instead. profile-rm-unconfirmed
+		// covers the prompt itself, and it can, because removing a profile is
+		// local and has no capability to check first.
+
+		{"react-no-arguments.txt", []string{"react"}, output.ExitUsage, "", true, true},
+		{"react-unsupported.txt", []string{"react", "spaces/AAAATestSpace/messages/BBBB", "\U0001F44D"}, output.ExitUnsupported, "", true, true},
+
+		// A shortcode is refused before the profile is loaded, so this one
+		// records the message rather than the capability gate in front of it.
+		{"react-shortcode.txt", []string{"react", "spaces/AAAATestSpace/messages/BBBB", ":thumbsup:"}, output.ExitUsage, "", true, true},
+
 		{"tail-no-arguments.txt", []string{"tail"}, output.ExitUsage, "", true, true},
 		{"tail-interval-below-floor.txt", []string{"tail", "spaces/AAAATestSpace", "--interval", "100ms"}, output.ExitUsage, "", true, true},
 		// An absolute time rather than "1h", because the refusal echoes what the
@@ -338,7 +357,7 @@ func TestGoldenOutputContract(t *testing.T) {
 // are the thing being recorded and a helper that parsed them would be a second
 // implementation of the command tree.
 func needsAProfile(name string) bool {
-	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-"} {
+	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

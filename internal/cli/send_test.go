@@ -276,6 +276,14 @@ func (roaming) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[cha
 
 func (roaming) GetMessage(context.Context, string) (*chat.Message, error) { return nil, nil }
 
+func (roaming) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
+	return nil, nil
+}
+
+func (roaming) DeleteMessage(context.Context, string) error { return nil }
+
+func (roaming) React(context.Context, chat.ReactRequest) (*chat.Reaction, error) { return nil, nil }
+
 func (roaming) FindDirectMessage(context.Context, string) (*chat.Space, error) { return nil, nil }
 
 func (roaming) Tail(context.Context, chat.TailRequest) iter.Seq2[chat.Message, error] {

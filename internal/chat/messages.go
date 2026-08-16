@@ -23,6 +23,9 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
+
+	"github.com/kmoneil/spacebar/internal/meta"
 )
 
 // MessageIDPrefix is what the API requires a caller-supplied message ID to
@@ -275,6 +278,127 @@ func CheckMessageName(message string) error {
 	if !messageName.MatchString(message) {
 		return clientErr("%q is not a message name.\nA message is a space, then %q, then its identifier, as in %q.",
 			message, "messages/", "spaces/AAAAAAAAAAA/messages/BBBBBBBBBBB")
+	}
+	return nil
+}
+
+// EditRequest asks to replace a message's text.
+type EditRequest struct {
+	// Message is spaces/AAA/messages/BBB. Checked before it reaches a path.
+	Message string
+
+	// Text is the whole new body, not a patch of it. The API replaces the field.
+	Text string
+}
+
+// EditMessage replaces a message's text (SPEC.md §7.3).
+//
+// updateMask is not optional and is not the caller's to forget. The API takes a
+// PATCH with no mask as a request to update nothing, so a caller who omitted it
+// would get a 200 and an unchanged message, which is the worst shape a failure
+// can have: successful, silent, and wrong.
+//
+// The mask is "text" and nothing else, because text is the only field this tool
+// edits. A mask naming a field the body does not carry would clear it.
+func (c *Client) EditMessage(ctx context.Context, req EditRequest) (*Message, error) {
+	if err := CheckMessageName(req.Message); err != nil {
+		return nil, err
+	}
+
+	query := url.Values{}
+	query.Set("updateMask", "text")
+
+	payload, err := c.do(ctx, Request{
+		Method: http.MethodPatch,
+		Path:   req.Message,
+		Query:  query,
+		Body:   Message{Text: req.Text},
+
+		// This particular patch is idempotent: it sets a field to a value, so
+		// sending it twice leaves the same message behind. PATCH does not opt in
+		// by method, because that is a property of what the patch says rather
+		// than of the verb, and the next PATCH this tool grows may append.
+		Idempotent: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var edited Message
+	if err := json.Unmarshal(payload, &edited); err != nil {
+		return nil, c.wrapTransport(fmt.Errorf("the edit was accepted but the response could not be read: %w", err))
+	}
+	return &edited, nil
+}
+
+// DeleteMessage removes a message (SPEC.md §7.3).
+//
+// The API answers with an empty body, so there is nothing to decode and nothing
+// to return but the failure.
+func (c *Client) DeleteMessage(ctx context.Context, message string) error {
+	if err := CheckMessageName(message); err != nil {
+		return err
+	}
+
+	_, err := c.do(ctx, Request{Method: http.MethodDelete, Path: message})
+	return err
+}
+
+// ReactRequest asks to put one emoji on one message.
+type ReactRequest struct {
+	Message string
+	Emoji   string
+}
+
+// React adds a reaction to a message (SPEC.md §7.3).
+func (c *Client) React(ctx context.Context, req ReactRequest) (*Reaction, error) {
+	if err := CheckMessageName(req.Message); err != nil {
+		return nil, err
+	}
+	if err := CheckEmoji(req.Emoji); err != nil {
+		return nil, err
+	}
+
+	payload, err := c.do(ctx, Request{
+		Method: http.MethodPost,
+		Path:   req.Message + "/reactions",
+		Body:   Reaction{Emoji: &Emoji{Unicode: req.Emoji}},
+
+		// Not replayed. Whether a second identical reaction is a duplicate, an
+		// error, or a no-op is the API's business, and a retry that turned a
+		// successful reaction into a failure report would be this tool guessing
+		// on the caller's behalf.
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var added Reaction
+	if err := json.Unmarshal(payload, &added); err != nil {
+		return nil, c.wrapTransport(fmt.Errorf("the reaction was accepted but the response could not be read: %w", err))
+	}
+	return &added, nil
+}
+
+// CheckEmoji refuses what the reactions endpoint cannot take.
+//
+// It takes the emoji itself, as characters. A shortcode is refused at the proto
+// level, measured rather than read: {"emoji": ":thumbsup:"} comes back as
+// "Invalid value at 'reaction.emoji' (google.chat.v1.Emoji)". Passing one
+// through would mean carrying a shortcode-to-emoji table in this tool, which is
+// eighteen hundred entries that go stale, to save pasting one character.
+//
+// So the refusal happens here, before the request, and says what to type
+// instead. The alternative is a 400 quoting a proto type at somebody who wrote
+// something a chat client would have accepted.
+func CheckEmoji(emoji string) error {
+	if emoji == "" {
+		return clientErr("no emoji was given.")
+	}
+	if len(emoji) > 2 && strings.HasPrefix(emoji, ":") && strings.HasSuffix(emoji, ":") {
+		return clientErr("%q is a shortcode, and this endpoint takes the emoji itself.\n"+
+			"Paste the character: %s react MESSAGE '👍'",
+			emoji, meta.AppName)
 	}
 	return nil
 }

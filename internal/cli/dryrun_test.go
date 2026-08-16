@@ -43,12 +43,39 @@ import (
 var writeCommands = map[string]struct {
 	args     []string
 	needsURL bool
+
+	// refusedOnAWebhook says this command needs a capability a webhook does not
+	// have, so the walk below cannot reach its dry run: the gate fires first,
+	// which is correct and is not what that test is about.
+	//
+	// These tests can configure exactly one kind of profile, because a
+	// user-OAuth one would need a client pointed at a test server and
+	// chat.BaseURL is a constant on purpose: an environment variable that
+	// redirects the API base is a lever for sending a credential somewhere
+	// else. So the walk asserts the refusal for these, which is also a claim
+	// worth holding, and the dry-run stop itself is held in internal/chat where
+	// it actually lives, against a server that fails the test if it is reached.
+	refusedOnAWebhook bool
 }{
 	"spacebar send": {args: []string{"send", "deploy done"}},
 
 	// A verification message is a real message in a real space, so this is a
 	// write even though the command is named for configuration.
 	"spacebar profile set-webhook": {args: []string{"profile", "set-webhook", "alerts", "--verify"}, needsURL: true},
+
+	// The three mutations. delete carries --yes because the confirmation comes
+	// before the request and would otherwise be what stopped it, which would
+	// make this test pass for the wrong reason: --dry-run has to be what makes
+	// no request, not the prompt in front of it.
+	"spacebar messages edit": {args: []string{
+		"messages", "edit", "spaces/AAAATestSpace/messages/BBBB", "the new text",
+	}, refusedOnAWebhook: true},
+	"spacebar messages delete": {args: []string{
+		"messages", "delete", "spaces/AAAATestSpace/messages/BBBB", "--yes",
+	}, refusedOnAWebhook: true},
+	"spacebar react": {args: []string{
+		"react", "spaces/AAAATestSpace/messages/BBBB", "👍",
+	}, refusedOnAWebhook: true},
 }
 
 // readOnlyCommands cannot put anything into a space, so --dry-run has nothing
@@ -166,13 +193,22 @@ func TestEveryWriteCommandHonoursDryRun(t *testing.T) {
 			s := configuredRefusing(t)
 
 			got := runCLIIn(t, s.stdinFor(cmd.needsURL), append([]string{"--dry-run"}, cmd.args...)...)
-			if got.exit != output.ExitOK {
-				t.Fatalf("exit = %d, want 0\n%s", got.exit, got.stderr)
+
+			// Either it printed the request it would have made, or it refused
+			// before building one. Both are the claim this walk is for: no write
+			// command reaches the network with --dry-run set, whatever else it
+			// does.
+			want := output.ExitOK
+			if cmd.refusedOnAWebhook {
+				want = output.ExitUnsupported
+			}
+			if got.exit != want {
+				t.Fatalf("exit = %d, want %d\n%s", got.exit, want, got.stderr)
 			}
 			if s.count() != 0 {
 				t.Fatalf("--dry-run made %d requests", s.count())
 			}
-			if got.stdout == "" {
+			if !cmd.refusedOnAWebhook && got.stdout == "" {
 				t.Errorf("--dry-run printed nothing to stdout, so there is nothing to check")
 			}
 		})
@@ -189,6 +225,12 @@ func TestNoDryRunOutputAnywhereCarriesACredential(t *testing.T) {
 	leak := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(testKey) + `|` + regexp.QuoteMeta(testToken) + `|Bearer\s+\S`)
 
 	for path, cmd := range writeCommands {
+		if cmd.refusedOnAWebhook {
+			// The refusal never reaches a request and so never renders one.
+			// What it does print is held by the golden for it, which records
+			// the whole of stderr.
+			continue
+		}
 		for _, mode := range [][]string{{"--dry-run"}, {"--dry-run", "--json"}, {"--dry-run", "--verbose"}} {
 			t.Run(path+strings.Join(mode, " "), func(t *testing.T) {
 				s := configuredRefusing(t)

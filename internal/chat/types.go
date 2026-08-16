@@ -180,3 +180,29 @@ type Membership struct {
 
 	CreateTime string `json:"createTime,omitempty"`
 }
+
+// Reaction is an emoji somebody put on a message.
+type Reaction struct {
+	// Name is spaces/AAA/messages/BBB/reactions/CCC.
+	Name string `json:"name,omitempty"`
+
+	User  *User  `json:"user,omitempty"`
+	Emoji *Emoji `json:"emoji,omitempty"`
+}
+
+// Emoji is the reaction's own type, and it is an object rather than a string.
+//
+// Measured before it could be assumed: {"emoji": ":thumbsup:"} is refused at the
+// proto level with "Invalid value at 'reaction.emoji' (google.chat.v1.Emoji)",
+// and {"emoji": {"unicode": "..."}} parses. So a shortcode cannot be passed
+// through, and this tool would need a table to translate one.
+type Emoji struct {
+	// Unicode is the emoji itself, as characters.
+	Unicode string `json:"unicode,omitempty"`
+
+	// CustomEmoji is a workspace's own uploaded emoji, carried through rather
+	// than modelled for the reason CardsV2 is: nothing here reads inside it, and
+	// a struct written now would be a guess reviewed as though it were
+	// knowledge.
+	CustomEmoji json.RawMessage `json:"customEmoji,omitempty"`
+}

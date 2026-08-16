@@ -363,7 +363,7 @@ func (c *Client) advise(e *APIError, resp *http.Response) string {
 	if c.transport == config.TransportWebhook {
 		return c.adviseWebhook(e)
 	}
-	return c.adviseOAuth(e)
+	return c.adviseOAuth(e, resp.Request)
 }
 
 func (c *Client) adviseWebhook(e *APIError) string {
@@ -391,9 +391,23 @@ func (c *Client) adviseWebhook(e *APIError) string {
 	return ""
 }
 
-func (c *Client) adviseOAuth(e *APIError) string {
+func (c *Client) adviseOAuth(e *APIError, req *http.Request) string {
 	switch e.StatusCode {
 	case http.StatusForbidden:
+		// An edit is the one write with a rule people do not expect, and it was
+		// measured rather than guessed: editing a message this account sent
+		// answers 200, and editing one somebody else sent answers 403, in the
+		// same space, on the same token, a second apart. Delete does not behave
+		// that way, so this says edit and nothing more.
+		//
+		// The generic sentence stays underneath it. A 403 on an edit can also
+		// be a space this account cannot write in at all, and replacing the
+		// general answer with the likely one would send somebody looking in the
+		// wrong place on the day it is the other thing.
+		if req != nil && req.Method == http.MethodPatch {
+			return "Chat only lets the author edit a message, so this usually means somebody else sent it. " +
+				"The account this profile is authorized as is not allowed to do that here." + c.profileSuffix()
+		}
 		return "The account this profile is authorized as is not allowed to do that here." + c.profileSuffix()
 
 	case http.StatusNotFound:

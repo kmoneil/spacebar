@@ -204,6 +204,30 @@ func (t *Transport) GetMessage(ctx context.Context, message string) (*chat.Messa
 	return t.client.GetMessage(ctx, message)
 }
 
+// EditMessage replaces a message's text.
+func (t *Transport) EditMessage(ctx context.Context, req chat.EditRequest) (*chat.Message, error) {
+	if !t.caps.Has(transport.CanEdit) {
+		return nil, transport.Unsupported(t, "messages edit", transport.CanEdit)
+	}
+	return t.client.EditMessage(ctx, req)
+}
+
+// DeleteMessage removes a message.
+func (t *Transport) DeleteMessage(ctx context.Context, message string) error {
+	if !t.caps.Has(transport.CanDelete) {
+		return transport.Unsupported(t, "messages delete", transport.CanDelete)
+	}
+	return t.client.DeleteMessage(ctx, message)
+}
+
+// React adds an emoji to a message.
+func (t *Transport) React(ctx context.Context, req chat.ReactRequest) (*chat.Reaction, error) {
+	if !t.caps.Has(transport.CanReact) {
+		return nil, transport.Unsupported(t, "react", transport.CanReact)
+	}
+	return t.client.React(ctx, req)
+}
+
 // FindDirectMessage returns the direct message space shared with one user.
 //
 // Gated on CanResolveDM, which chat.spaces.readonly grants. It was gated on

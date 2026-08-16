@@ -21,9 +21,10 @@ human in the loop, through `--json` and through a built-in MCP server.
 webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
-well, as do `tail` and the `alias` group. `auth`, `version`, `licenses` and
-`completion` work. `spacebar mcp` serves the read paths to a model over MCP.
-Still missing: `watch`, editing, reacting, attachments, and writing over MCP.
+well, as do `tail`, the `alias` group, and `messages edit`, `messages delete`
+and `react`. `auth`, `version`, `licenses` and `completion` work.
+`spacebar mcp` serves the read paths to a model over MCP. Still missing:
+`watch`, attachments, and writing over MCP.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -327,6 +328,26 @@ spacebar messages list spaces/AAAAAAA --since 2h      # the last two hours
 spacebar messages list spaces/AAAAAAA --since 2026-08-16T09:00:00Z --until 2026-08-16T17:00:00Z
 spacebar messages get spaces/AAAAAAA/messages/BBBBBBB
 ```
+
+And the three that change what is already there:
+
+```sh
+spacebar messages edit spaces/AAAAAAA/messages/BBBBBBB 'the corrected text'
+spacebar messages delete spaces/AAAAAAA/messages/BBBBBBB      # asks first
+spacebar react spaces/AAAAAAA/messages/BBBBBBB 👍
+```
+
+**Editing is limited to messages you sent, and deleting is not.** Measured, not
+assumed: editing your own message answers 200 and editing somebody else's
+answers 403, a second apart on the same token, while a delete of somebody
+else's message in a space you manage is allowed. So `delete` asks before it
+acts, and with stdin not a terminal it exits 7 rather than prompting. `--yes`
+answers in advance.
+
+**`react` takes the emoji, not a shortcode.** `:thumbsup:` is refused by the
+API at the type level, so this tool refuses it before the request and says to
+paste the character rather than carrying a table of shortcode names that goes
+stale.
 
 **Newest first**, so that the default limit returns the latest messages rather
 than the oldest ones in a space's history. Reading a conversation in the order

@@ -89,6 +89,18 @@ func (f *fake) GetMessage(_ context.Context, name string) (*chat.Message, error)
 	return nil, output.Errorf("NOT_FOUND", output.ExitAPI, "no message named %q", name)
 }
 
+func (f *fake) EditMessage(context.Context, chat.EditRequest) (*chat.Message, error) {
+	return nil, errors.New("the fake does not edit")
+}
+
+func (f *fake) DeleteMessage(context.Context, string) error {
+	return errors.New("the fake does not delete")
+}
+
+func (f *fake) React(context.Context, chat.ReactRequest) (*chat.Reaction, error) {
+	return nil, errors.New("the fake does not react")
+}
+
 func (f *fake) FindDirectMessage(context.Context, string) (*chat.Space, error) {
 	return nil, output.Errorf("NOT_FOUND", output.ExitAPI, "no direct message")
 }

@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: messages delete needs a message.
+  spacebar messages delete spaces/AAAAAAA/messages/BBBBBBB
