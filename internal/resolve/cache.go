@@ -67,8 +67,25 @@ type cacheFile struct {
 // An unwritable or unlocatable cache directory is not an error. The resolver
 // works without a cache, one API call at a time, and refusing to resolve
 // because a directory could not be created would turn a read-only home into a
-// tool that cannot find a space.
+// tool that cannot find a space. A name that cannot be a profile is the same
+// answer for the same reason: no cache, and a command that still works.
+//
+// The name is checked here rather than trusted, and the difference matters
+// because this is where a string becomes a path. Every caller today reaches
+// this through config.Active, which returns a key out of a file that
+// CheckProfileName has already been run over, so the check is a second layer.
+// It is written because the layer above is three facts in three packages, and
+// what is on the other side of it is not a bad read: Write renames onto this
+// path and Forget removes it. A first layer that needs the layer below it to be
+// safe is not a first layer.
+//
+// One check at construction covers all three methods, because the path is
+// decided here and never rebuilt.
 func NewCache(profile string) *Cache {
+	if err := config.CheckProfileName(profile); err != nil {
+		return nil
+	}
+
 	dir, err := config.CacheDir()
 	if err != nil {
 		return nil
@@ -158,8 +175,17 @@ func (c *Cache) Write(spaces []chat.Space) error {
 	return os.Rename(temp.Name(), c.path)
 }
 
-// Forget removes the cached list, for `alias` and `logout` to call when what it
-// holds may no longer be what the account can reach.
+// Forget removes the cached list, for the commands that end an authorization or
+// a profile, because what it holds is no longer what that name can reach.
+//
+// Two callers, and the second is the one that is a wrong answer rather than a
+// leftover. `auth logout` leaves the display name of every space the account
+// could reach sitting on disk, which the person who typed logout has no reason
+// to expect. `profile rm` leaves the same file under a name that is reusable:
+// remove a profile, configure a new one with the same name for a different
+// account, and for the rest of the day a display name resolves against the old
+// account's spaces. The Profile field in the file cannot catch that, because it
+// is the same name.
 func (c *Cache) Forget() error {
 	if c == nil {
 		return nil

@@ -46,11 +46,17 @@ const (
 // The keyring is mocked because the real one is the machine's: a test that
 // wrote to it would leave an entry in somebody's login keychain, which is a
 // test with a side effect outside the repository and no way to notice.
+// The cache directory is redirected as well as the configuration one. They are
+// separate roots, so isolating one leaves the other pointing at the machine's,
+// and a test that resolved a display name would write this account's space list
+// into the home directory of whoever ran it. Nothing does that today, which is
+// exactly why it is worth setting before something does.
 func isolate(t *testing.T) string {
 	t.Helper()
 
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv(config.Env("WEBHOOK_URL"), "")
 	keyring.MockInit()
 

@@ -369,6 +369,13 @@ app in those spaces, so a resolver that listed on every command would degrade
 the space for everybody. `--refresh` fetches it again. A resource name or an
 alias never touches the cache at all.
 
+It holds what `spaces list` returns, at mode 0600: resource names, types, and
+display names, with no message text and no credential. `auth logout` and
+`profile rm` delete it. That second one is not tidiness: a profile name is
+reusable and the file is keyed by it, so a name configured again for a
+different account would otherwise resolve display names against the previous
+account's spaces for the rest of the day.
+
 **Give a space a name you will remember:**
 
 ```sh

@@ -431,9 +431,13 @@ func newProfileRemoveCmd(opts *Options) *cobra.Command {
 		Short:   "Remove a profile and the credential behind it",
 		Long: `Remove a profile and the credential behind it.
 
-The credential goes too, from the keyring and from the fallback file. That
-cannot be undone from here: a webhook URL is only recoverable from the space it
-was created in.`,
+The credential goes too, from the keyring and from the fallback file, and so
+does the cached list of spaces this profile could reach. That cannot be undone
+from here: a webhook URL is only recoverable from the space it was created in.
+
+The cached list goes because a profile name can be used again. Configure this
+name for another account tomorrow, and a list left behind would answer its
+display-name lookups with spaces the new account may not be able to see.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -478,5 +482,9 @@ func removeProfile(cfg *config.Config, name string, r *output.Renderer) error {
 		return err
 	}
 	r.Warnings(secrets.Warnings())
+
+	// After the profile is gone rather than before, so that a failed save does
+	// not throw away a cache the profile still has a use for.
+	forgetSpaces(r, name)
 	return nil
 }

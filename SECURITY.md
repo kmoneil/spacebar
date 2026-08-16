@@ -361,6 +361,34 @@ it is pasted rather than as a `400` about an API key days later.
   outcome is the same either way: the question is asked, nothing answers it,
   and the command exits `7`.
 
+## What else lands on disk
+
+One file besides the configuration and the credential fallback, and it is not a
+secret, which is why it is stated here rather than left to be discovered.
+
+`internal/resolve` remembers a profile's space list in `spaces-<profile>.json`
+under the cache directory (`XDG_CACHE_HOME`, `%LocalAppData%`, or `~/.cache`),
+written at mode `0600` in a directory created at `0700`, and used for a day
+before being fetched again. It exists so that resolving a display name or an
+alias does not list every space on every command, on a per-space quota shared
+with every other app acting in those spaces. It holds what `spaces list`
+returns: the resource name, the type, and the display name of every space that
+profile can reach, and no message text and no credential.
+
+**`auth logout` and `profile rm` remove it**, and both did not until this was
+written down. `TestLoggingOutLeavesNoSpaceListBehind` and
+`TestRemovingAProfileLeavesNoSpaceListBehind`. Leaving it after a logout keeps
+the part of the account somebody cannot see and removes the part they can;
+leaving it after `profile rm` is worse than a leftover, because a profile name
+is reusable and the cache is keyed by it, so the next account configured under
+that name would resolve display names against the previous account's spaces
+until the day ran out.
+
+A failure to remove it is a warning and not a non-zero exit. By the time it
+runs, the token is deleted or the profile and its credential are, and reporting
+a failure for the file that is left would tell a script the irreversible part
+did not happen. `TestACacheThatCannotBeRemovedIsAWarningRatherThanAFailure`.
+
 ## Authentication
 
 - **Authorization code with PKCE, loopback redirect, and nothing else.** The
@@ -537,8 +565,25 @@ it is pasted rather than as a `400` about an API key days later.
   refused, not replaced with U+FFFD. A message that is not what was sent is a
   wrong answer that looks like a right one. `TestInvalidUTF8IsRefused`, exit 2,
   naming the byte offset.
-- **Cache and state paths stay under their roots.** A space ID that reached a
-  filename could otherwise name a file anywhere **(M4)**.
+- **Cache and state paths stay under their roots.**
+  `TestACachePathCannotLeaveItsRoot` and `FuzzACachePathStaysUnderItsRoot`,
+  which states it as a property rather than as the separators somebody thought
+  of: for any string, either the name is refused or the file it produces is a
+  direct child of the cache directory.
+
+  One path is derived today. `internal/resolve` remembers a profile's space
+  list in `spaces-<profile>.json` under the cache directory, so the component
+  that reaches a filename is the **profile name**, not a space ID as this claim
+  used to say. What is on the other side of it is not a bad read: the write is
+  a rename onto that path and `Forget` is a remove of it.
+
+  It was safe before it was checked, by three facts in three packages: config
+  loading validates every profile name, `CheckProfileName` refuses a separator
+  and refuses a leading dot, and a profile name only reaches the cache after
+  being looked up in the validated file. `NewCache` now refuses the name
+  itself, because a first layer that needs the layer below it to be safe is not
+  a first layer. A space ID reaching a filename is Milestone 6's store, and it
+  gets its own claim if that lands.
 
 ## Refusing, confirming, and the MCP surface
 

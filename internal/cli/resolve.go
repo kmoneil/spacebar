@@ -19,6 +19,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/profile"
 	"github.com/kmoneil/spacebar/internal/resolve"
 )
@@ -59,4 +60,23 @@ func resolveTarget(ctx context.Context, opened *profile.Open, target string, ref
 		Cache:   resolve.NewCache(opened.Name),
 		Refresh: refresh,
 	})
+}
+
+// forgetSpaces drops a profile's cached space list, for the two commands that
+// end what produced it.
+//
+// A warning rather than a failure, and the reason is what has already happened
+// by the time this runs. `auth logout` has deleted the token and `profile rm`
+// has deleted the profile and its credential, so returning an error here would
+// report a failure for a command that did the irreversible part and succeeded.
+// A warning says what is still on disk, which is the only thing the caller can
+// act on.
+//
+// Silence would be wrong for the same reason it is wrong elsewhere in this
+// tool: the file holds the display name of every space that profile could
+// reach, and somebody who typed logout is entitled to know it is still there.
+func forgetSpaces(r *output.Renderer, profileName string) {
+	if err := resolve.NewCache(profileName).Forget(); err != nil {
+		r.Warn("the cached space list for profile %q is still on disk: %v", profileName, err)
+	}
 }

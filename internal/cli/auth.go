@@ -367,8 +367,9 @@ func newAuthLogoutCmd(opts *Options) *cobra.Command {
 		Short: "Forget a profile's authorization",
 		Long: `Forget a profile's authorization.
 
-The token is deleted from the keyring and from the fallback file. The profile
-stays, so authorizing again needs no other setup.
+The token is deleted from the keyring and from the fallback file, and so is the
+cached list of spaces this profile could reach. The profile stays, so
+authorizing again needs no other setup.
 
 There is no confirmation, unlike removing a profile: an authorization is
 recoverable by consenting again, and a webhook URL is not.
@@ -413,6 +414,7 @@ func runAuthLogout(cmd *cobra.Command, opts *Options) error {
 	// line and mean different things to the person who typed it.
 	_ = store.DeleteToken(name)
 	r.Warnings(store.Warnings())
+	forgetSpaces(r, name)
 
 	return r.Result(map[string]any{"profile": name, "authorized": false},
 		output.Fields{{Label: "logged out", Value: name}})
