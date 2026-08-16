@@ -157,6 +157,7 @@ with, sponsored by, or endorsed by Google.`,
 		newSpacesCmd(opts),
 		newMessagesCmd(opts),
 		newAliasCmd(opts),
+		newTailCmd(opts),
 	)
 
 	return root

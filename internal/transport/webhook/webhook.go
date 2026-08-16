@@ -187,6 +187,10 @@ func (t *Transport) FindDirectMessage(context.Context, string) (*chat.Space, err
 	return nil, transport.Unsupported(t, "resolving a direct message", transport.CanResolveDM)
 }
 
+func (t *Transport) Tail(context.Context, chat.TailRequest) iter.Seq2[chat.Message, error] {
+	return transport.Refused[chat.Message](t, "tail", transport.CanRead)
+}
+
 func (t *Transport) checkSpace(space string) error {
 	if space == "" || space == t.space {
 		return nil

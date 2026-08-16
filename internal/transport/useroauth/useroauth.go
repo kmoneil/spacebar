@@ -216,3 +216,11 @@ func (t *Transport) FindDirectMessage(ctx context.Context, user string) (*chat.S
 	}
 	return t.client.FindDirectMessage(ctx, user)
 }
+
+// Tail follows a space. Gated on CanRead, which is what its polls are.
+func (t *Transport) Tail(ctx context.Context, req chat.TailRequest) iter.Seq2[chat.Message, error] {
+	if !t.caps.Has(transport.CanRead) {
+		return transport.Refused[chat.Message](t, "tail", transport.CanRead)
+	}
+	return t.client.Tail(ctx, req)
+}

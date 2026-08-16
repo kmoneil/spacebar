@@ -122,6 +122,10 @@ type Transport interface {
 
 	// FindDirectMessage returns the direct message space shared with one user.
 	FindDirectMessage(ctx context.Context, user string) (*chat.Space, error)
+
+	// Tail follows a space, yielding each new message as it arrives. It ends
+	// when the context is cancelled, which is how a caller stops it.
+	Tail(ctx context.Context, req chat.TailRequest) iter.Seq2[chat.Message, error]
 }
 
 // CapabilitiesFor is the matrix in SPEC.md §8.1, in one place.

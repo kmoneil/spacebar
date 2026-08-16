@@ -278,6 +278,10 @@ func (roaming) GetMessage(context.Context, string) (*chat.Message, error) { retu
 
 func (roaming) FindDirectMessage(context.Context, string) (*chat.Space, error) { return nil, nil }
 
+func (roaming) Tail(context.Context, chat.TailRequest) iter.Seq2[chat.Message, error] {
+	return func(func(chat.Message, error) bool) {}
+}
+
 // TestWithoutMdTheBodyIsSentByteForByte.
 //
 // The claim on the card, and the reason --md is opt-in. Chat markup is not

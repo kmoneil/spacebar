@@ -256,6 +256,9 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"alias-set-looks-like-a-space.txt", []string{"alias", "set", "spaces/AAAA", "spaces/BBBB"}, output.ExitUsage, "", true, true},
 		{"alias-set-looks-like-an-address.txt", []string{"alias", "set", "bob@example.test", "spaces/BBBB"}, output.ExitUsage, "", true, true},
 		{"alias-rm-no-such-alias.txt", []string{"alias", "rm", "nothing"}, output.ExitUsage, "", true, true},
+		{"tail-no-arguments.txt", []string{"tail"}, output.ExitUsage, "", true, true},
+		{"tail-interval-below-floor.txt", []string{"tail", "spaces/AAAATestSpace", "--interval", "100ms"}, output.ExitUsage, "", true, true},
+		{"tail-unsupported.txt", []string{"tail", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
 		{"alias-list-empty.txt", []string{"alias", "list"}, output.ExitOK, "", true, true},
 
 		// A malformed space name is deliberately not recorded here. On the only
@@ -328,7 +331,7 @@ func TestGoldenOutputContract(t *testing.T) {
 // are the thing being recorded and a helper that parsed them would be a second
 // implementation of the command tree.
 func needsAProfile(name string) bool {
-	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-"} {
+	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

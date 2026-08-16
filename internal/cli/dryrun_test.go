@@ -85,6 +85,12 @@ var readOnlyCommands = map[string]string{
 
 	"spacebar alias": "the group prints help",
 
+	// Polls messages.list forever and puts nothing anywhere. It is the one
+	// read-only command that does not terminate on its own, which is a
+	// different property from this one and is why the entry says so: --dry-run
+	// has nothing to stop, and Ctrl-C is how it ends.
+	"spacebar tail": "polls for messages and writes nothing, ending on a signal rather than on its own",
+
 	// An alias is a line in the configuration file pointing at a space that is
 	// already there, so nothing it does can be seen from inside a space. `set`
 	// is the interesting one: it resolves its target, so it can list spaces

@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: tail needs a space.
+  spacebar tail spaces/AAAAAAA

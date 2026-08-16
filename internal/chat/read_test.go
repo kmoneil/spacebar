@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -488,5 +489,55 @@ func TestGetReadsOneResourceAndChecksItsNameFirst(t *testing.T) {
 	}
 	if r.count() != before {
 		t.Error("a refused name still reached the network")
+	}
+}
+
+// TestAnEmptyPageIsNotTheEndOfTheWalk.
+//
+// Observed against the live API on 2026-08-16, which is why it is a test rather
+// than a hypothetical. Chat's messages.list in ascending order returns a page
+// one item short of the pageSize asked for, so pageSize=1 comes back with no
+// messages at all and a nextPageToken:
+//
+//	pageSize=1  no orderBy               messages=0  token=yes
+//	pageSize=2  no orderBy               messages=1  token=yes
+//	pageSize=1  orderBy=createTime DESC  messages=1  token=yes
+//
+// The likely cause is a membership or space-creation event at the oldest end
+// that counts against the page and is filtered out of the response. Descending
+// order never reaches it in a small page, which is why the default path does not
+// see this and `--order oldest --limit 1` costs two requests instead of one.
+//
+// What matters is the rule: a page with no items and a token means keep going.
+// A pager that stopped there would return nothing for `--limit 1 --order
+// oldest`, and report it as the complete answer, which is m4-07's invariant
+// exactly. It is also the obvious optimisation somebody would make while
+// tidying, and the reason to write it down.
+func TestAnEmptyPageIsNotTheEndOfTheWalk(t *testing.T) {
+	var pages atomic.Int64
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		switch pages.Add(1) {
+		case 1:
+			// Short by one, exactly as the real API answered.
+			_, _ = fmt.Fprint(w, `{"messages":[],"nextPageToken":"second"}`)
+		case 2:
+			_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/BBB","text":"found"}]}`)
+		default:
+			t.Errorf("the walk made %d requests", pages.Load())
+		}
+	})
+
+	got, err := collect(r.client.Messages(context.Background(), ListMessagesRequest{
+		Space: "spaces/AAAATestSpace",
+		Limit: 1,
+	}))
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(got) != 1 || got[0].Text != "found" {
+		t.Fatalf("an empty first page ended the walk: got %d messages, %+v", len(got), got)
+	}
+	if pages.Load() != 2 {
+		t.Errorf("made %d requests, want 2", pages.Load())
 	}
 }

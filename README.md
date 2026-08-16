@@ -383,6 +383,33 @@ could never be consulted is worse than one that is refused.
 A webhook profile can use an alias, because an alias is a local map and needs no
 permission. The last two steps need to read and are refused on one.
 
+## Follow a space
+
+```sh
+spacebar tail spaces/AAAAAAA
+spacebar tail eng --backfill 20        # the last 20, then follow
+spacebar tail eng --json | jq -r .text
+```
+
+**Oldest first**, because this is a conversation read in the order it happened.
+That is the opposite of `messages list`, which is newest first so that a limit
+cuts from the recent end.
+
+Google Chat offers no socket, so this polls. **The interval floor is 2s and a
+smaller one is refused rather than rounded up**: per-space quota is shared with
+every other app acting in that space, so a tight loop degrades the space for
+everybody in it. After five polls with nothing new the interval doubles, up to
+a minute, and any message resets it.
+
+**Ctrl-C exits 0.** It is how the command is meant to end, so it is not a
+failure, and a script wrapping it does not have to special-case the code.
+
+Two things it does not do. It does not replay what was already there unless
+`--backfill` asks. And it never corrects itself: a message edited or deleted
+while you are watching is not shown again, because a poll sees new messages and
+an edit does not make one. Seeing mutations needs `spaceEvents`, which is a
+different command still to come.
+
 **`spaces members` identifies people by resource name, not by display name.**
 The Chat API returns a member as `users/NNN` and a type, with no name attached,
 so the display-name column is blank. That is the API rather than a gap here,

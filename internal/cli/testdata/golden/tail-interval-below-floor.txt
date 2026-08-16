@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: a poll interval of 100ms is below the 2s floor, so it is refused rather than rounded up.
+Per-space quota is shared with every other app acting in that space, so a tight loop degrades the space for everybody in it. Ask for 2s or more.
