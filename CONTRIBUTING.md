@@ -100,9 +100,15 @@ from looking.
 ## Adding a dependency
 
 SPEC.md §3.1 names five permitted direct dependencies and the reason each earns
-its place. Anything else needs an argument in the pull request description, and
-the answer is usually no: the standard library is large, and a dependency is
-forever.
+its place. All five are now here, so the next one is a sixth and needs an
+argument in the pull request description. The answer is usually no: the standard
+library is large, and a dependency is forever.
+
+Count what it links rather than what it requires. `go list -deps` is the
+measurement, and the MCP SDK is why the sentence is here: it is one line in
+`go.mod` and six modules in the binary, which is more than a third of NOTICE.
+That was worth knowing before the import was written rather than when the notice
+gate failed.
 
 Licences: `Apache-2.0`, `MIT`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `0BSD`,
 `Unlicense`, `CC0-1.0`. Nothing else: no `GPL`/`LGPL`/`AGPL`, no `MPL`, no

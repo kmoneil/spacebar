@@ -17,7 +17,7 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestones 1 to 3 of 6 are done.** `spacebar send` works over an incoming
+**Milestones 1 to 3 of 6 are done, and 4 and 5 are most of the way.** `spacebar send` works over an incoming
 webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
@@ -46,6 +46,13 @@ command assumed a profile that could hold a token, so on a webhook one of them
 stored an OAuth client against it and another reported a successful logout of
 something that had never been logged in.
 
+Writing has now been run for real as well. A message was posted as the account
+rather than as a bot, edited, reacted to, and deleted, against the live API on
+2026-08-16, and that run is what settled who may do what: editing is limited to
+the message's author and deleting is not. The tool had already been written with
+the opposite assumption in its own help text, and the live check is the only
+reason it did not ship that way.
+
 The plan, in six milestones:
 
 | #   | Deliverable                                               | State    |
@@ -53,8 +60,8 @@ The plan, in six milestones:
 | 1   | Skeleton, licensing, CI gates                             | **done** |
 | 2   | Webhook transport: `send` with no OAuth at all            | **done** |
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
-| 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  |          |
-| 5   | MCP server                                                |          |
+| 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | most     |
+| 5   | MCP server                                                | reads    |
 | 6   | Local index and search                                    |          |
 
 Milestone 2 is the real proof point. It has to be genuinely useful to somebody

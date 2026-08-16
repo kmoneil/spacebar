@@ -680,7 +680,17 @@ read. It is gated more tightly than the CLI, on purpose.
   pair exists to prevent, and it is invisible to every other test in the tree,
   because the matrix and the scope list had never been compared to each other.
 - **Confirmation that cannot be asked for is refused, not skipped.** Exit code
-  7, `output.ExitRefused`.
+  7, `output.ExitRefused`. Two commands ask: `profile rm`, which destroys a
+  credential that is only recoverable from the space it was issued in, and
+  `messages delete`, which destroys a message everybody in a space could see.
+
+  `messages delete` is the one where the confirmation is the whole defence.
+  Editing is limited by the API to messages the account sent, measured on
+  2026-08-16: a PATCH of somebody else's answers 403. Deleting is not so
+  limited. In the same space, on the same token, this tool deleted a message
+  another sender had posted, because the account is a manager there and the API
+  allows it. So nothing at the far end will stop a wrong resource name, and the
+  question asked before the request is what stands in its place.
 - **A send is never replayed after an upstream error.** A `POST` that received
   a 503 may well have been carried out, with only the acknowledgement lost, and
   nothing in the response distinguishes that from a message that never arrived.
