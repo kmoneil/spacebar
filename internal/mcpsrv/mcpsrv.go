@@ -31,11 +31,13 @@ package mcpsrv
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"iter"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -64,12 +66,33 @@ type Server struct {
 	srv     *mcp.Server
 	profile *profile.Open
 	tools   []string
+
+	// allowed is the space allowlist, empty when every space is allowed. Held
+	// as a set because the check runs on every write.
+	allowed map[string]bool
+
+	audit func(string)
 }
 
 // Options is what the server needs to exist.
 type Options struct {
 	// Profile is an opened profile: its transport, its name, and its aliases.
 	Profile *profile.Open
+
+	// AllowWrite registers the tools that change something in a space. Off by
+	// default, and the default is the point: a model with a message-sending
+	// tool and no gate is one confused turn away from posting to a company-wide
+	// announcements space, and the people who find out are everybody in it.
+	AllowWrite bool
+
+	// AllowSpaces restricts writes to these space resource names. Empty means
+	// every space this profile can reach, which is what --allow-write on its
+	// own asks for.
+	AllowSpaces []string
+
+	// Audit receives one line per tool call. Never nil in the command; a nil
+	// one here means a test that is not asserting on the log.
+	Audit func(string)
 }
 
 // New builds a server with exactly the tools this profile can serve.
@@ -85,12 +108,19 @@ func New(opts Options) (*Server, error) {
 			"the MCP server needs an opened profile.")
 	}
 
+	allowed, err := allowlist(opts.AllowSpaces)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		srv: mcp.NewServer(&mcp.Implementation{
 			Name:    meta.AppName,
 			Version: meta.Version,
 		}, nil),
 		profile: opts.Profile,
+		allowed: allowed,
+		audit:   opts.Audit,
 	}
 
 	caps := opts.Profile.Transport.Capabilities()
@@ -100,9 +130,19 @@ func New(opts Options) (*Server, error) {
 	register(s, caps, transport.CanRead, listMessagesTool, s.listMessages)
 	register(s, caps, transport.CanRead, getMessageTool, s.getMessage)
 
-	if len(s.tools) == 0 {
-		return nil, noToolsErr(opts.Profile.Name, opts.Profile.Transport.Kind())
+	// The write tools, behind the flag as well as behind the capability. Two
+	// gates rather than one, because they answer different questions: the
+	// capability says this profile could, and the flag says this operator
+	// agreed to let a model.
+	if opts.AllowWrite {
+		register(s, caps, transport.CanSend, sendMessageTool, s.sendMessage)
 	}
+
+	if len(s.tools) == 0 {
+		return nil, noToolsErr(opts.Profile.Name, opts.Profile.Transport.Kind(), opts.AllowWrite)
+	}
+
+	s.srv.AddReceivingMiddleware(s.auditing)
 	return s, nil
 }
 
@@ -151,14 +191,61 @@ func register[In, Out any](s *Server, caps transport.Capabilities, needs transpo
 }
 
 // noToolsErr is what a profile that can serve nothing is told.
-func noToolsErr(name string, kind config.Transport) error {
+//
+// Which advice depends on why. A webhook with no --allow-write can serve
+// exactly one tool and was not asked to, so the fix is the flag; a webhook that
+// was asked to has it, and cannot read, so the fix is a different profile.
+func noToolsErr(name string, kind config.Transport, allowWrite bool) error {
+	fix := "Use a profile authorized as you:\n" +
+		"  " + meta.AppName + " auth setup --profile NAME < client_secret.json\n" +
+		"  " + meta.AppName + " auth login --profile NAME"
+	if kind == config.TransportWebhook && !allowWrite {
+		fix = "A webhook can post, which is a write, so this needs --allow-write:\n" +
+			"  " + meta.AppName + " mcp --profile " + name + " --allow-write"
+	}
+
 	return output.Errorf("UNSUPPORTED", output.ExitUnsupported,
-		"profile %q cannot serve any MCP tool, so there is nothing to run.\n"+
-			"Every tool in this build reads, and %q is an incoming webhook, which is write-only.\n"+
-			"Use a profile authorized as you:\n"+
-			"  %s auth setup --profile NAME < client_secret.json\n"+
-			"  %s auth login --profile NAME",
-		name, name, meta.AppName, meta.AppName)
+		"profile %q cannot serve any MCP tool, so there is nothing to run.\n%s", name, fix)
+}
+
+// allowlist turns the --allow-space values into the set writes are checked
+// against.
+//
+// Resource names only, and an alias or a display name is refused here rather
+// than resolved. An allowlist entry that needs resolving is an allowlist whose
+// meaning depends on what the API says at the moment it is consulted, and the
+// thing it is guarding is which space a model may post to.
+func allowlist(spaces []string) (map[string]bool, error) {
+	if len(spaces) == 0 {
+		return nil, nil
+	}
+
+	allowed := make(map[string]bool, len(spaces))
+	for _, space := range spaces {
+		if err := chat.CheckSpaceName(space); err != nil {
+			return nil, output.Errorf("USAGE", output.ExitUsage,
+				"--allow-space takes a space resource name, and %q is not one.\n"+
+					"It is checked against what a tool call resolves to, so an alias or a display name "+
+					"here would be an allowlist whose meaning depends on what the API says at the time.\n"+
+					"%s spaces list prints the names.", space, meta.AppName)
+		}
+		allowed[space] = true
+	}
+	return allowed, nil
+}
+
+// checkAllowed refuses a write to a space outside the allowlist.
+//
+// Called after resolution and never before it. An allowlist checked against
+// what the caller typed is checked against a string the caller controls; the
+// space that will actually be written to is the one that arrives out of
+// internal/resolve, and only that one is worth comparing.
+func (s *Server) checkAllowed(space string) error {
+	if len(s.allowed) == 0 || s.allowed[space] {
+		return nil
+	}
+	return output.Errorf("REFUSED", output.ExitRefused,
+		"%s is not in this server's --allow-space list, so nothing was sent.", space)
 }
 
 // collect reads a bounded number of items out of a streaming list.
@@ -224,3 +311,101 @@ func (s *Server) resolve(ctx context.Context, space string) (string, error) {
 type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
+
+// auditing writes one line per tool call to stderr, per SPEC.md §14.2.
+//
+// A middleware rather than a wrapper on each handler, so that a tool added
+// later is logged without anybody remembering to log it. It records the call
+// rather than the result: what a person auditing this needs is what the model
+// asked for and whether it worked.
+//
+// The arguments are included because for a write they are the message, and an
+// audit log of "send_message was called" answers none of the questions somebody
+// asks it. They are truncated, because a model can send a long one and this
+// goes to a terminal.
+//
+// Nothing here can carry a credential. The arguments come from the model, the
+// profile name is not a secret, and the response is deliberately not logged.
+func (s *Server) auditing(next mcp.MethodHandler) mcp.MethodHandler {
+	return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+		// The raw params, which is what a server middleware is handed: the
+		// typed CallToolParams is what a client sends, and by the time this
+		// runs the arguments are still the bytes that arrived. Measured rather
+		// than assumed, because the two types differ by one word and the audit
+		// log silently recorded nothing when this matched on the wrong one.
+		call, ok := req.GetParams().(*mcp.CallToolParamsRaw)
+		if !ok || s.audit == nil {
+			return next(ctx, method, req)
+		}
+
+		result, err := next(ctx, method, req)
+		s.audit(auditLine(s.profile.Name, call, result, err))
+		return result, err
+	}
+}
+
+// maxAuditedValue bounds one string in the audit line.
+const maxAuditedValue = 256
+
+// auditLine builds the JSON object one call is recorded as.
+func auditLine(profile string, call *mcp.CallToolParamsRaw, result mcp.Result, err error) string {
+	record := map[string]any{
+		"tool":    call.Name,
+		"profile": profile,
+		"ok":      err == nil,
+	}
+	if err != nil {
+		record["error"] = truncate(err.Error())
+	}
+	if called, ok := result.(*mcp.CallToolResult); ok && called != nil && called.IsError {
+		// A tool error is packed into the result rather than returned, so a
+		// line that only looked at err would record every refusal as a success.
+		record["ok"] = false
+	}
+	if args := auditedArgs(call.Arguments); args != nil {
+		record["args"] = args
+	}
+
+	// encoding/json escapes everything below U+0020, so a message body cannot
+	// break the line it is written on.
+	line, marshalErr := json.Marshal(record)
+	if marshalErr != nil {
+		return `{"tool":"` + call.Name + `","profile":"` + profile + `","ok":false,"error":"the audit line could not be encoded"}`
+	}
+	return string(line)
+}
+
+// auditedArgs is the call's arguments with every string bounded.
+//
+// Decoded rather than passed through, so that a long message body is bounded
+// before it reaches a terminal. A body that will not decode is recorded as
+// nothing rather than as itself: the arguments come from a model, and the line
+// they land on is one this tool promises is a single JSON object.
+func auditedArgs(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil
+	}
+
+	out := make(map[string]any, len(fields))
+	for name, value := range fields {
+		if text, isText := value.(string); isText {
+			out[name] = truncate(text)
+			continue
+		}
+		out[name] = value
+	}
+	return out
+}
+
+func truncate(value string) string {
+	runes := []rune(value)
+	if len(runes) <= maxAuditedValue {
+		return value
+	}
+	return string(runes[:maxAuditedValue]) + "..."
+}

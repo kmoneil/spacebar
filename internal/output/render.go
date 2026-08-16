@@ -272,6 +272,21 @@ func (r *Renderer) writeFields(fields Fields) error {
 	return nil
 }
 
+// Audit writes one line to stderr that nothing suppresses.
+//
+// Neither --quiet nor --json turns it off, and that is the difference between
+// it and Note. It exists for the MCP server's record of every tool call, which
+// is a security control rather than a courtesy: an audit line a flag can
+// silence is one that is missing exactly when somebody has a reason to silence
+// it.
+//
+// The value is written as it is, because the caller builds a JSON object and
+// encoding/json has already escaped everything below U+0020. Sanitizing it
+// again would alter a document somebody is going to parse.
+func (r *Renderer) Audit(line string) {
+	_, _ = fmt.Fprintln(r.errw, line)
+}
+
 // Note writes a secondary line to stderr: a hint, or a count, or anything a
 // person might want and a script never parses. Suppressed by --quiet.
 func (r *Renderer) Note(format string, a ...any) {

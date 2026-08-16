@@ -620,7 +620,11 @@ model decides, a tool runs, and a message appears in a space that colleagues
 read. It is gated more tightly than the CLI, on purpose.
 
 - **Writes are off by default.** `spacebar mcp` registers no write tool unless
-  `--allow-write` is passed **(M5)**.
+  `--allow-write` is passed. `TestAWriteToolIsAbsentWithoutAllowWrite` asserts
+  both directions against a connected client: without the flag the tool set is
+  exactly the read tools, and with it `send_message` joins them and nothing else
+  changes. A profile that can serve nothing at all is refused before the session
+  starts rather than connected empty.
 - **A tool whose capability is unavailable is not registered at all**, rather
   than registered and returning an error (SPEC.md §14.1). A model that cannot
   see a tool cannot argue itself into calling it, and a model that can see one
@@ -638,10 +642,41 @@ read. It is gated more tightly than the CLI, on purpose.
   and empty: `TestAProfileThatCanServeNothingIsRefusedRatherThanEmpty`.
 - **`--allow-space` restricts writes to an allowlist** of spaces, so that an
   agent with write access to a scratch space does not have write access to the
-  company-wide announcements space **(M5)**.
-- **Every write tool description ends with the confirmation requirement**, and
-  every tool call is logged to stderr as one JSON line for auditability
-  **(M5)**.
+  company-wide announcements space.
+  `TestASpaceOutsideTheAllowlistIsRefusedBeforeTheRequest` counts sends rather
+  than reading the error, because a refusal that arrives after the POST carries
+  the same error as one that arrives before it and only one of them left a
+  message in a space.
+
+  The check runs **after** resolution and never before it. An allowlist checked
+  against what the caller typed is checked against a string the caller
+  controls; what matters is the space the request will actually reach.
+  `TestAnAliasResolvingIntoTheAllowlistIsAllowed` is what holds the ordering,
+  and it exists because moving the check earlier passed every other test in the
+  file: they compared resource names on both sides, where resolution is the
+  identity.
+
+  An entry has to be a resource name. An alias here would be an allowlist whose
+  meaning depends on what the API says at the moment it is consulted, and the
+  thing it guards is which space a model may post to.
+  `TestAnAllowlistEntryMustBeAResourceName`.
+- **Every write tool description ends with the confirmation requirement**:
+  "This posts a visible message to a real Google Chat space. Confirm with the
+  user before calling." `TestEveryWriteToolSaysToConfirmFirst` compares against
+  those words spelled out in the test rather than against the constant the code
+  uses. The first version compared against the constant, so rewording it moved
+  both sides together and a planted reword passed: a test that cannot fail is
+  worse than no test, because it is counted.
+
+- **Every tool call is one JSON line on stderr**, and neither `--quiet` nor
+  `--json` suppresses it. `TestEveryToolCallIsOneLineOnStderr`. It records the
+  tool, the profile, the arguments with long strings truncated, and whether the
+  call worked, including when the failure is packed into the result rather than
+  returned. Nothing in it is a credential: the arguments come from the model,
+  and the response is deliberately not logged.
+
+  It is a middleware rather than a wrapper on each handler, so a tool added
+  later is logged without anybody remembering to log it.
 - **A webhook posts to one space and there is no version of it that posts
   anywhere else.** The space is derived from the URL rather than configured
   beside it, so the two cannot disagree about where a message goes, and a target

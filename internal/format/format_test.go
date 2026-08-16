@@ -299,3 +299,46 @@ func TestValidUTF8IsAccepted(t *testing.T) {
 		}
 	}
 }
+
+// TestBodyIsTheOneRuleAboutTranslation.
+//
+// Two commands take a body and a --md, and a third arrives with the MCP write
+// tools. What Body holds is the decision they share: with --md the text is
+// translated and the warnings are the caller's to print, and without it the
+// text is validated and passed through byte for byte.
+//
+// The validation half is the one worth a test. A second copy of this that
+// forgot it would send invalid UTF-8 into a space through whichever command
+// forgot, and the refusal is what this repository promises instead.
+func TestBodyIsTheOneRuleAboutTranslation(t *testing.T) {
+	const markdown = "deploy **done**"
+
+	translated, _, err := Body(markdown, true)
+	if err != nil {
+		t.Fatalf("Body with --md: %v", err)
+	}
+	if translated != "deploy *done*" {
+		t.Errorf("Body(%q, true) = %q, want Chat's single asterisk", markdown, translated)
+	}
+
+	// Without --md the body is what was typed, asterisks and all: translating
+	// by default would rewrite everything anybody pasted.
+	same, warnings, err := Body(markdown, false)
+	if err != nil {
+		t.Fatalf("Body without --md: %v", err)
+	}
+	if same != markdown {
+		t.Errorf("Body(%q, false) = %q, want it byte for byte", markdown, same)
+	}
+	if warnings != nil {
+		t.Errorf("a body that was not translated produced warnings: %v", warnings)
+	}
+
+	// Invalid UTF-8 is refused either way, which is the half a second copy of
+	// this logic would drop.
+	for _, md := range []bool{false, true} {
+		if _, _, err := Body("bad \xff byte", md); err == nil {
+			t.Errorf("Body with md=%v accepted invalid UTF-8", md)
+		}
+	}
+}

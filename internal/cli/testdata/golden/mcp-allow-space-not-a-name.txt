@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: --allow-space takes a space resource name, and "eng-alerts" is not one.
+It is checked against what a tool call resolves to, so an alias or a display name here would be an allowlist whose meaning depends on what the API says at the time.
+spacebar spaces list prints the names.

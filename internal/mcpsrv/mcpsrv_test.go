@@ -50,13 +50,23 @@ type fake struct {
 	// fail is yielded instead of the last item, standing in for a page that
 	// failed part way through a walk.
 	fail error
+
+	// sends counts what actually reached the transport, which is what an
+	// allowlist test has to assert on: a refusal after the send carries the
+	// same error as one before it.
+	sends int
 }
 
 func (f *fake) Kind() config.Transport               { return f.kind }
 func (f *fake) Profile() string                      { return "work" }
 func (f *fake) Capabilities() transport.Capabilities { return f.caps }
-func (f *fake) Send(context.Context, chat.SendRequest) (*chat.Message, error) {
-	return nil, errors.New("the fake does not send")
+func (f *fake) Send(_ context.Context, req chat.SendRequest) (*chat.Message, error) {
+	f.sends++
+	return &chat.Message{
+		Name:  req.Space + "/messages/BBB",
+		Text:  req.Message.Text,
+		Space: &chat.Space{Name: req.Space},
+	}, nil
 }
 
 func (f *fake) Spaces(context.Context, chat.ListSpacesRequest) iter.Seq2[chat.Space, error] {
@@ -149,8 +159,14 @@ func full() transport.Capabilities {
 // callable, would pass a test that only asked this package what it had built.
 func connect(t *testing.T, f *fake) *mcp.ClientSession {
 	t.Helper()
+	return connectWith(t, Options{Profile: &profile.Open{Transport: f, Name: "work"}})
+}
 
-	server, err := New(Options{Profile: &profile.Open{Transport: f, Name: "work"}})
+// connectWith is the same, for a test that cares about the options.
+func connectWith(t *testing.T, opts Options) *mcp.ClientSession {
+	t.Helper()
+
+	server, err := New(opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -560,5 +576,398 @@ func TestAClientThatDisconnectsEndsTheRunWithoutAnError(t *testing.T) {
 
 	if err := <-done; err != nil {
 		t.Errorf("a client that disconnected ended the run with %v", err)
+	}
+}
+
+// TestAWriteToolIsAbsentWithoutAllowWrite.
+//
+// The first claim on the card, and the one the whole design rests on. A model
+// that cannot see a tool cannot argue itself into calling it, so the gate is
+// registration rather than a refusal at call time.
+//
+// Both directions are asserted. Without the flag the tool set is exactly the
+// read tools; with it, send_message joins them and nothing else changes.
+func TestAWriteToolIsAbsentWithoutAllowWrite(t *testing.T) {
+	reads := []string{"get_message", "get_space", "list_members", "list_messages", "list_spaces"}
+
+	closed := connect(t, &fake{kind: config.TransportUserOAuth, caps: full()})
+	if got := advertised(t, closed); !slices.Equal(got, reads) {
+		t.Errorf("without --allow-write the tools are %v, want %v", got, reads)
+	}
+
+	open := connectWith(t, Options{
+		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		AllowWrite: true,
+	})
+	want := append(append([]string(nil), reads...), "send_message")
+	slices.Sort(want)
+	if got := advertised(t, open); !slices.Equal(got, want) {
+		t.Errorf("with --allow-write the tools are %v, want %v", got, want)
+	}
+}
+
+// TestAWebhookWithAllowWriteRegistersExactlyOneTool.
+//
+// m5-01's claim, which had to wait for the flag. A webhook can post and can do
+// nothing else, so this is the one profile shape where the tool set is a single
+// write tool, and it is also the population this project exists for.
+func TestAWebhookWithAllowWriteRegistersExactlyOneTool(t *testing.T) {
+	session := connectWith(t, Options{
+		Profile: &profile.Open{
+			Name:      "alerts",
+			Transport: &fake{kind: config.TransportWebhook, caps: transport.CapabilitiesFor(config.TransportWebhook)},
+		},
+		AllowWrite: true,
+	})
+
+	if got := advertised(t, session); !slices.Equal(got, []string{"send_message"}) {
+		t.Errorf("tools = %v, want exactly send_message", got)
+	}
+}
+
+// TestEveryWriteToolSaysToConfirmFirst.
+//
+// Compared as a suffix against the constant rather than searched for as a
+// substring of some words: the sentence is a promise to whoever reads the tool
+// list, and a reworded one is a different promise. SPEC.md §14.2 specifies it
+// exactly.
+func TestEveryWriteToolSaysToConfirmFirst(t *testing.T) {
+	session := connectWith(t, Options{
+		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		AllowWrite: true,
+	})
+
+	result, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	// Spelled out here rather than compared against the constant, which is what
+	// the first version of this test did and which asserted nothing: rewording
+	// the constant moved both sides of the comparison together, and a planted
+	// reword passed. SPEC.md §14.2 specifies these words, so these words are in
+	// the test.
+	const want = "This posts a visible message to a real Google Chat space. " +
+		"Confirm with the user before calling."
+
+	writes := 0
+	for _, tool := range result.Tools {
+		if !strings.HasPrefix(tool.Name, "send_") {
+			continue
+		}
+		writes++
+		if !strings.HasSuffix(tool.Description, want) {
+			t.Errorf("%s does not end with the confirmation sentence:\n%s", tool.Name, tool.Description)
+		}
+	}
+	if writes == 0 {
+		t.Fatal("no write tool was registered, so this asserted nothing")
+	}
+}
+
+// TestASpaceOutsideTheAllowlistIsRefusedBeforeTheRequest.
+//
+// Counted rather than read out of the error, which is the card's own
+// instruction and the same rule the dry-run tests follow: a refusal that
+// arrives after the POST carries the same error as one that arrives before it,
+// and only one of them left a message in a space.
+func TestASpaceOutsideTheAllowlistIsRefusedBeforeTheRequest(t *testing.T) {
+	sent := &fake{kind: config.TransportUserOAuth, caps: full()}
+	session := connectWith(t, Options{
+		Profile:     &profile.Open{Name: "work", Transport: sent},
+		AllowWrite:  true,
+		AllowSpaces: []string{"spaces/AAA"},
+	})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "send_message",
+		Arguments: map[string]any{"space": "spaces/BBB", "text": "hello"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("a space outside the allowlist was accepted")
+	}
+	if sent.sends != 0 {
+		t.Errorf("the refusal arrived after %d sends", sent.sends)
+	}
+
+	// And the allowed one goes through, because an allowlist that refuses
+	// everything is not an allowlist.
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "send_message",
+		Arguments: map[string]any{"space": "spaces/AAA", "text": "hello"},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if sent.sends != 1 {
+		t.Errorf("the allowed space produced %d sends, want 1", sent.sends)
+	}
+}
+
+// TestAnAllowlistEntryMustBeAResourceName, because it is compared against what
+// a call resolves to. An alias here would be an allowlist whose meaning depends
+// on what the API says at the moment it is consulted.
+func TestAnAllowlistEntryMustBeAResourceName(t *testing.T) {
+	for _, bad := range []string{"eng-alerts", "Ops", "bob@example.test", "spaces/", ""} {
+		_, err := New(Options{
+			Profile:     &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			AllowWrite:  true,
+			AllowSpaces: []string{bad},
+		})
+		if err == nil {
+			t.Errorf("--allow-space %q was accepted", bad)
+		}
+	}
+}
+
+// TestEveryToolCallIsOneLineOnStderr, per SPEC.md §14.2, and the line has to be
+// one JSON object rather than a sentence: it is read by whatever is collecting
+// logs, and a message body can contain anything at all.
+func TestEveryToolCallIsOneLineOnStderr(t *testing.T) {
+	var lines []string
+	session := connectWith(t, Options{
+		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		AllowWrite: true,
+		Audit:      func(line string) { lines = append(lines, line) },
+	})
+
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "send_message",
+		Arguments: map[string]any{
+			"space": "spaces/AAA",
+			"text":  "deploy done\nwith a newline in it",
+		},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("one call produced %d lines: %v", len(lines), lines)
+	}
+	if strings.Contains(lines[0], "\n") {
+		t.Errorf("the audit line is not one line:\n%s", lines[0])
+	}
+
+	var record struct {
+		Tool    string         `json:"tool"`
+		Profile string         `json:"profile"`
+		OK      bool           `json:"ok"`
+		Args    map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatalf("the audit line is not JSON: %v\n%s", err, lines[0])
+	}
+	if record.Tool != "send_message" || record.Profile != "work" || !record.OK {
+		t.Errorf("the audit line does not say what happened: %s", lines[0])
+	}
+	if record.Args["text"] != "deploy done\nwith a newline in it" {
+		t.Errorf("the audit line does not carry what was posted: %s", lines[0])
+	}
+
+	// A refusal is recorded as one. A line that said ok for every call would be
+	// a log nobody could use to find the call that went wrong.
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "send_message",
+		Arguments: map[string]any{"space": "spaces/AAA", "text": ""},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("the refusal was not recorded: %v", lines)
+	}
+	if strings.Contains(lines[1], `"ok":true`) {
+		t.Errorf("a refused call was recorded as a success: %s", lines[1])
+	}
+}
+
+// TestALongMessageIsTruncatedInTheAuditLine, because a model can send a long
+// one and this goes to a terminal beside everything else on stderr.
+func TestALongMessageIsTruncatedInTheAuditLine(t *testing.T) {
+	var lines []string
+	session := connectWith(t, Options{
+		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		AllowWrite: true,
+		Audit:      func(line string) { lines = append(lines, line) },
+	})
+
+	long := strings.Repeat("x", maxAuditedValue*2)
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "send_message",
+		Arguments: map[string]any{"space": "spaces/AAA", "text": long},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("lines = %v", lines)
+	}
+	if len(lines[0]) > maxAuditedValue*2 {
+		t.Errorf("the audit line is %d bytes, so nothing was truncated", len(lines[0]))
+	}
+	if !strings.Contains(lines[0], "...") {
+		t.Errorf("a truncated value does not say so: %s", lines[0])
+	}
+}
+
+// TestAnAliasResolvingIntoTheAllowlistIsAllowed.
+//
+// The card's first recon item says the allowlist is checked after resolution
+// and not before, and the tests written for it could not tell the difference:
+// they used resource names on both sides, where resolution is the identity.
+// Moving the check before resolution passed every one of them.
+//
+// This is the case that separates the two. The allowlist holds a resource name,
+// the call names an alias for it, and the two strings are not equal. Checked
+// before resolution, this is refused; checked after, it goes through, which is
+// the whole point of an allowlist that names spaces rather than words.
+func TestAnAliasResolvingIntoTheAllowlistIsAllowed(t *testing.T) {
+	sent := &fake{kind: config.TransportUserOAuth, caps: full()}
+	session := connectWith(t, Options{
+		Profile: &profile.Open{
+			Name:      "work",
+			Transport: sent,
+			Aliases:   map[string]string{"eng": "spaces/AAA"},
+		},
+		AllowWrite:  true,
+		AllowSpaces: []string{"spaces/AAA"},
+	})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "send_message",
+		Arguments: map[string]any{"space": "eng", "text": "hello"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("an alias for an allowed space was refused: %s", contentOf(result))
+	}
+	if sent.sends != 1 {
+		t.Errorf("sends = %d, want 1", sent.sends)
+	}
+
+	// And an alias for a space outside it is still refused, with nothing sent.
+	// The two halves together are what says the check reads the resolved space
+	// rather than the word.
+	outside := &fake{kind: config.TransportUserOAuth, caps: full()}
+	other := connectWith(t, Options{
+		Profile: &profile.Open{
+			Name:      "work",
+			Transport: outside,
+			Aliases:   map[string]string{"ops": "spaces/BBB"},
+		},
+		AllowWrite:  true,
+		AllowSpaces: []string{"spaces/AAA"},
+	})
+
+	refused, err := other.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "send_message",
+		Arguments: map[string]any{"space": "ops", "text": "hello"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !refused.IsError {
+		t.Error("an alias for a space outside the allowlist was accepted")
+	}
+	if outside.sends != 0 {
+		t.Errorf("the refusal arrived after %d sends", outside.sends)
+	}
+}
+
+// TestEveryReadToolAnswersThroughTheSamePackagesTheCLIUses.
+//
+// One round trip per tool, against a connected client. The claim is not that
+// the handlers work in isolation, which a direct call would show, but that each
+// registered tool is reachable by name, takes the arguments its schema
+// advertises, and comes back as the shape internal/rows publishes.
+//
+// It is a table so that a tool added later without a test is visible: the count
+// at the bottom is compared against what the server registered.
+func TestEveryReadToolAnswersThroughTheSamePackagesTheCLIUses(t *testing.T) {
+	backing := &fake{
+		kind: config.TransportUserOAuth,
+		caps: full(),
+		spaces: []chat.Space{{
+			Name: "spaces/AAA", DisplayName: "Ops", SpaceType: "SPACE",
+		}},
+		members: []chat.Membership{{
+			Name:        "spaces/AAA/members/m",
+			State:       "JOINED",
+			Role:        "ROLE_MEMBER",
+			Member:      &chat.User{Name: "users/1", Type: "HUMAN"},
+			Affiliation: "INTERNAL",
+		}},
+		messages: []chat.Message{{
+			Name:       "spaces/AAA/messages/BBB",
+			Text:       "deploy done",
+			CreateTime: "2026-08-16T09:00:00Z",
+		}},
+	}
+	session := connect(t, backing)
+
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+		want string
+	}{
+		{"list_spaces", nil, "spaces/AAA"},
+		{"get_space", map[string]any{"space": "spaces/AAA"}, "Ops"},
+		{"list_members", map[string]any{"space": "spaces/AAA"}, "INTERNAL"},
+		{"list_messages", map[string]any{"space": "spaces/AAA"}, "deploy done"},
+
+		// With an order, and without one. The second row is why this table
+		// exists: calling every tool once found that an absent order was
+		// refused with a message about a value the model never sent.
+		{"list_messages", map[string]any{"space": "spaces/AAA", "order": "oldest"}, "deploy done"},
+		{"get_message", map[string]any{"message": "spaces/AAA/messages/BBB"}, "deploy done"},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      tc.tool,
+				Arguments: tc.args,
+			})
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if result.IsError {
+				t.Fatalf("%s: %s", tc.tool, contentOf(result))
+			}
+
+			body, err := json.Marshal(result.StructuredContent)
+			if err != nil {
+				t.Fatalf("marshalling: %v", err)
+			}
+			if !strings.Contains(string(body), tc.want) {
+				t.Errorf("%s answered %s, want it to contain %q", tc.tool, body, tc.want)
+			}
+		})
+	}
+
+	// Every read tool this profile registers has at least one row above. A tool
+	// added without one fails here rather than shipping untested.
+	if got := len(advertised(t, session)); got != 5 {
+		t.Errorf("the server registered %d tools and this test exercises 5", got)
+	}
+}
+
+// TestATargetThatCannotBeResolvedIsAToolErrorRatherThanAProtocolOne.
+//
+// A model sending a space name that does not exist should read the refusal and
+// try something else. A protocol error would instead look to the client like
+// the server is broken, which is a different conversation with the person
+// watching.
+func TestATargetThatCannotBeResolvedIsAToolErrorRatherThanAProtocolOne(t *testing.T) {
+	session := connect(t, &fake{kind: config.TransportUserOAuth, caps: full()})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "get_space",
+		Arguments: map[string]any{"space": "nothing-is-called-this"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool returned a protocol error: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("a space that does not exist came back as a success")
 	}
 }

@@ -21,6 +21,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/kmoneil/spacebar/internal/chat"
+	"github.com/kmoneil/spacebar/internal/format"
+	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/rows"
 )
 
@@ -191,7 +193,7 @@ func (s *Server) listMessages(ctx context.Context, _ *mcp.CallToolRequest, in li
 	if err != nil {
 		return nil, listMessagesOut{}, err
 	}
-	order, err := chat.OrderBy(in.Order)
+	order, err := orderOf(in.Order)
 	if err != nil {
 		return nil, listMessagesOut{}, err
 	}
@@ -255,4 +257,96 @@ func when(value string) (time.Time, error) {
 		return time.Time{}, nil
 	}
 	return chat.ParseWhen(value, time.Now())
+}
+
+// confirmation is the sentence every write tool's description ends with, from
+// SPEC.md §14.2, exactly.
+//
+// A constant rather than three copies, and asserted by string comparison in the
+// tests rather than by a substring match: a reworded description is a different
+// promise, and the whole reason this is in the description at all is that the
+// model reads it before deciding to call the tool.
+const confirmation = "This posts a visible message to a real Google Chat space. " +
+	"Confirm with the user before calling."
+
+var sendMessageTool = &mcp.Tool{
+	Name: "send_message",
+	Description: "Post a message to a Google Chat space. The text is Chat markup, which is not " +
+		"CommonMark: bold is one asterisk, so **bold** arrives with the asterisks showing. Set md " +
+		"to translate CommonMark into it instead. " + confirmation,
+	Annotations: &mcp.ToolAnnotations{
+		// The SDK's own hints, filled in because a client may show them to
+		// somebody deciding whether to approve a call. They are hints and not
+		// gates: what actually stops a write is --allow-write and the space
+		// allowlist.
+		DestructiveHint: ptr(false),
+		ReadOnlyHint:    false,
+		IdempotentHint:  false,
+		OpenWorldHint:   ptr(true),
+	},
+}
+
+type sendMessageIn struct {
+	Space     string `json:"space" jsonschema:"the space: a resource name like spaces/AAAAAAA, an alias, a display name, or an email address"`
+	Text      string `json:"text" jsonschema:"the message body, as Chat markup unless md is set"`
+	Md        bool   `json:"md,omitempty" jsonschema:"translate the text from CommonMark into Chat markup"`
+	ThreadKey string `json:"thread_key,omitempty" jsonschema:"group this message into the thread with this key, creating it if there is none"`
+}
+
+func (s *Server) sendMessage(ctx context.Context, _ *mcp.CallToolRequest, in sendMessageIn) (*mcp.CallToolResult, rows.Message, error) {
+	if in.Text == "" {
+		return nil, rows.Message{}, output.Errorf("USAGE", output.ExitUsage, "the message is empty.")
+	}
+
+	text, _, err := format.Body(in.Text, in.Md)
+	if err != nil {
+		return nil, rows.Message{}, err
+	}
+
+	// Resolution first, then the allowlist, and that order is the whole of the
+	// guarantee. An allowlist checked against what the caller typed is checked
+	// against a string the caller controls; this is checked against the space
+	// the request will actually reach.
+	target, err := s.resolve(ctx, in.Space)
+	if err != nil {
+		return nil, rows.Message{}, err
+	}
+	if err := s.checkAllowed(target); err != nil {
+		return nil, rows.Message{}, err
+	}
+
+	sent, err := s.profile.Transport.Send(ctx, chat.SendRequest{
+		Space:     target,
+		Message:   chat.Message{Text: text},
+		ThreadKey: in.ThreadKey,
+	})
+	if err != nil {
+		return nil, rows.Message{}, err
+	}
+
+	row, _ := rows.ForMessage(*sent)
+	return nil, row, nil
+}
+
+// ptr is for the SDK's optional booleans, which are pointers so that unset and
+// false are different answers.
+func ptr[T any](v T) *T { return &v }
+
+// orderOf turns an optional order argument into the API's ordering.
+//
+// Empty means the caller left it out, which is not the same as the CLI's
+// situation: there the flag has a default of "newest" and an empty value is
+// something somebody typed, so chat.OrderBy refuses it. Here an absent field is
+// absent, and the request carries no ordering, which internal/chat fills in
+// with newest first.
+//
+// The first version called chat.OrderBy unconditionally, so every list_messages
+// call that did not name an order was refused with a message about a value the
+// model never sent. Found by calling each tool once, which is what that test is
+// for.
+func orderOf(order string) (string, error) {
+	if order == "" {
+		return "", nil
+	}
+	return chat.OrderBy(order)
 }

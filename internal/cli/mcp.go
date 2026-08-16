@@ -26,7 +26,12 @@ import (
 )
 
 func newMCPCmd(opts *Options) *cobra.Command {
-	return &cobra.Command{
+	var (
+		allowWrite  bool
+		allowSpaces []string
+	)
+
+	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve this profile's read paths to a model over MCP",
 		Long: `Serve this profile's read paths to a model over MCP, on stdin and stdout.
@@ -47,9 +52,21 @@ be refused, try again differently, and eventually tell you the tool is broken.
 That is the opposite of how flags work in the rest of this tool, and it is
 deliberate: a person reading --help is served by knowing a flag exists.
 
-Writes are not here yet. Every tool in this build reads, so an incoming webhook,
-which is write-only, can serve none of them and is refused before the session
-starts.
+Writes are off unless --allow-write says otherwise, and that is the default
+worth understanding. A model with a message-sending tool and no gate is one
+confused turn away from posting to a company-wide space, and the people who
+find out are everybody in it. Without the flag, send_message is not registered
+at all, so there is no tool for a model to talk itself into calling.
+
+--allow-space, repeatable, narrows it further: a write to any other space is
+refused before the request. It takes space resource names, because it is
+checked against what a tool call resolves to rather than against what the model
+typed, and an alias here would be an allowlist whose meaning depends on what
+the API says at the time.
+
+Every tool call is written to stderr as one JSON line, whatever --quiet and
+--json say. It records the tool, the profile, the arguments with long strings
+truncated, and whether it worked. Nothing in it is a credential.
 
 Message bodies are written by people, some of them outside your organization.
 They reach a model as data, and this tool escapes what it renders, but nothing
@@ -65,7 +82,12 @@ something is still a message.`,
 				return err
 			}
 
-			server, err := mcpsrv.New(mcpsrv.Options{Profile: opened})
+			server, err := mcpsrv.New(mcpsrv.Options{
+				Profile:     opened,
+				AllowWrite:  allowWrite,
+				AllowSpaces: allowSpaces,
+				Audit:       r.Audit,
+			})
 			if err != nil {
 				return err
 			}
@@ -85,4 +107,12 @@ something is still a message.`,
 			return server.Run(ctx, cmd.InOrStdin(), cmd.OutOrStdout())
 		},
 	}
+
+	f := cmd.Flags()
+	f.BoolVar(&allowWrite, "allow-write", false,
+		"register the tools that change something in a space")
+	f.StringArrayVar(&allowSpaces, "allow-space", nil,
+		"restrict writes to this space resource name; repeatable")
+
+	return cmd
 }

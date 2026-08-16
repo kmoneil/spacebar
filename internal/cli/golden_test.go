@@ -292,6 +292,12 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"watch-bad-events.txt", []string{"watch", "spaces/AAAATestSpace", "--events", "everything"}, output.ExitUsage, "", true, true},
 		{"watch-interval-below-floor.txt", []string{"watch", "spaces/AAAATestSpace", "--interval", "100ms"}, output.ExitUsage, "", true, true},
 		{"watch-unsupported.txt", []string{"watch", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
+
+		// The MCP server's refusals. Both are reached before a session starts,
+		// so they are deterministic: one is a profile that can serve nothing,
+		// and the other is an allowlist entry that is not a space name.
+		{"mcp-nothing-to-serve.txt", []string{"mcp"}, output.ExitUnsupported, "", true, true},
+		{"mcp-allow-space-not-a-name.txt", []string{"mcp", "--allow-write", "--allow-space", "eng-alerts"}, output.ExitUsage, "", true, true},
 		{"tail-unsupported.txt", []string{"tail", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
 		{"alias-list-empty.txt", []string{"alias", "list"}, output.ExitOK, "", true, true},
 
@@ -365,7 +371,7 @@ func TestGoldenOutputContract(t *testing.T) {
 // are the thing being recorded and a helper that parsed them would be a second
 // implementation of the command tree.
 func needsAProfile(name string) bool {
-	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-", "watch-"} {
+	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-", "watch-", "mcp-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

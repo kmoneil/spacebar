@@ -1,0 +1,6 @@
+exit 5
+--- stdout
+--- stderr
+error: profile "alerts" cannot serve any MCP tool, so there is nothing to run.
+A webhook can post, which is a write, so this needs --allow-write:
+  spacebar mcp --profile alerts --allow-write

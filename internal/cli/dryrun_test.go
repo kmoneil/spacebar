@@ -56,6 +56,12 @@ var writeCommands = map[string]struct {
 	// worth holding, and the dry-run stop itself is held in internal/chat where
 	// it actually lives, against a server that fails the test if it is reached.
 	refusedOnAWebhook bool
+
+	// silent says this command prints no request preview, so the two
+	// assertions about one do not apply. `mcp` is the only one: it is a server
+	// whose stdout is the protocol, and with nobody on the other end of the
+	// pipe it says nothing at all, which is correct rather than a gap.
+	silent bool
 }{
 	"spacebar send": {args: []string{"send", "deploy done"}},
 
@@ -76,6 +82,17 @@ var writeCommands = map[string]struct {
 	"spacebar react": {args: []string{
 		"react", "spaces/AAAATestSpace/messages/BBBB", "👍",
 	}, refusedOnAWebhook: true},
+
+	// A server rather than a command, and a writing one the moment
+	// --allow-write registers send_message. It moved here from readOnlyCommands
+	// on the day that flag landed, which is what this gate is for: the question
+	// gets asked again every time the command tree changes.
+	//
+	// The peer says nothing, because the walk hands it an empty stdin, so the
+	// session ends at once and no tool is ever called. What is asserted is the
+	// same as for every other entry: with --dry-run set, nothing reached the far
+	// end.
+	"spacebar mcp": {args: []string{"mcp", "--allow-write"}, silent: true},
 }
 
 // readOnlyCommands cannot put anything into a space, so --dry-run has nothing
@@ -130,12 +147,6 @@ var readOnlyCommands = map[string]string{
 	// sees that tail cannot is edits, deletions and reactions, and seeing a
 	// deletion is not making one.
 	"spacebar watch": "polls for events and writes nothing, ending on a signal rather than on its own",
-
-	// Read-only in this build and not by nature, which is the entry worth
-	// reading twice. Every tool it registers reads, so a session cannot change
-	// anything in a space. m5-02 adds send_message behind --allow-write, and on
-	// that day this moves to writeCommands and this gate is what will say so.
-	"spacebar mcp": "every tool in this build reads; it moves to writeCommands when --allow-write lands",
 
 	// An alias is a line in the configuration file pointing at a space that is
 	// already there, so nothing it does can be seen from inside a space. `set`
@@ -221,7 +232,7 @@ func TestEveryWriteCommandHonoursDryRun(t *testing.T) {
 			if s.count() != 0 {
 				t.Fatalf("--dry-run made %d requests", s.count())
 			}
-			if !cmd.refusedOnAWebhook && got.stdout == "" {
+			if !cmd.refusedOnAWebhook && !cmd.silent && got.stdout == "" {
 				t.Errorf("--dry-run printed nothing to stdout, so there is nothing to check")
 			}
 		})
@@ -238,10 +249,9 @@ func TestNoDryRunOutputAnywhereCarriesACredential(t *testing.T) {
 	leak := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(testKey) + `|` + regexp.QuoteMeta(testToken) + `|Bearer\s+\S`)
 
 	for path, cmd := range writeCommands {
-		if cmd.refusedOnAWebhook {
-			// The refusal never reaches a request and so never renders one.
-			// What it does print is held by the golden for it, which records
-			// the whole of stderr.
+		if cmd.refusedOnAWebhook || cmd.silent {
+			// Neither reaches a request, so neither renders one. What they do
+			// print is held by the goldens, which record the whole of stderr.
 			continue
 		}
 		for _, mode := range [][]string{{"--dry-run"}, {"--dry-run", "--json"}, {"--dry-run", "--verbose"}} {

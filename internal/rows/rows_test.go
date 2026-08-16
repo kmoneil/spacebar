@@ -16,6 +16,7 @@ package rows
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/kmoneil/spacebar/internal/chat"
@@ -226,4 +227,116 @@ func TestTwoDirectMessagesAreNotTheSameRow(t *testing.T) {
 	// consumer filtering on the key gets the same answer either way.
 	assertJSON(t, withPerson, `{"name":"spaces/CCC","space_type":"DIRECT_MESSAGE",`+
 		`"last_active_time":"2023-02-24T18:03:10.183295Z"}`)
+}
+
+// TestAnEventRowCarriesWhatAWatchNeedsToShow.
+//
+// The payload is the part worth pinning. It is published raw, which none of the
+// other shapes here do, because for a message that has since been deleted it is
+// the only place the tombstone exists: `messages get` on that name answers
+// nothing. A version of this that dropped it would look tidier and would send
+// every consumer to an endpoint that cannot answer.
+func TestAnEventRowCarriesWhatAWatchNeedsToShow(t *testing.T) {
+	created := chat.SpaceEvent{
+		Name:      "spaces/AAA/spaceEvents/MTc4Ng",
+		EventType: "google.workspace.chat.message.v1.created",
+		EventTime: "2026-08-16T21:36:48.376447Z",
+		Subject:   "spaces/AAA/messages/BBB",
+		Payload:   []byte(`{"message":{"name":"spaces/AAA/messages/BBB","text":"deploy done"}}`),
+	}
+
+	row, cells := ForEvent(created)
+	assertJSON(t, row, `{"name":"spaces/AAA/spaceEvents/MTc4Ng",`+
+		`"event_type":"google.workspace.chat.message.v1.created",`+
+		`"event_time":"2026-08-16T21:36:48.376447Z","subject":"spaces/AAA/messages/BBB",`+
+		`"payload":{"message":{"name":"spaces/AAA/messages/BBB","text":"deploy done"}}}`)
+
+	if len(cells) != 4 {
+		t.Fatalf("cells = %q, want 4 columns", cells)
+	}
+	if cells[1] != "message created" {
+		t.Errorf("the type column is %q; forty characters of reverse domain pushes the row off the screen", cells[1])
+	}
+	if cells[3] != "deploy done" {
+		t.Errorf("the text column is %q, and a watch that makes somebody fetch the message is a worse tail", cells[3])
+	}
+}
+
+// TestAnEventThisToolDoesNotRecogniseStillPrints.
+//
+// A payload shaped some other way costs the subject and the text columns and
+// nothing else. That is the direction a guess about somebody else's schema
+// should be wrong in: the time and the type are the API's own fields and are
+// still there.
+func TestAnEventThisToolDoesNotRecogniseStillPrints(t *testing.T) {
+	for _, payload := range []string{
+		``,
+		`{}`,
+		`{"whatever":{"no":"name"}}`,
+		`not json at all`,
+		`{"reaction":{"name":"spaces/AAA/messages/BBB/reactions/CCC"}}`,
+	} {
+		row, cells := ForEvent(chat.SpaceEvent{
+			Name:      "spaces/AAA/spaceEvents/X",
+			EventType: "google.workspace.chat.space.v1.updated",
+			EventTime: "2026-08-16T21:36:48.376447Z",
+			Payload:   []byte(payload),
+		})
+
+		if row.EventType == "" || row.EventTime == "" {
+			t.Errorf("payload %q cost the fields that were understood: %+v", payload, row)
+		}
+		if len(cells) != 4 {
+			t.Errorf("payload %q produced %d columns", payload, len(cells))
+		}
+		if cells[1] != "space updated" {
+			t.Errorf("payload %q lost its type column: %q", payload, cells[1])
+		}
+	}
+}
+
+// TestAMessageRowCarriesItsAttachmentsAndNotTheirDownloadURL.
+//
+// The URL the API returns beside every attachment carries an access token in
+// its query, which makes it a credential rather than a link. It is not decoded
+// in internal/chat, so it cannot appear here; this asserts the published shape
+// is the resource name instead, which is what messages download takes.
+func TestAMessageRowCarriesItsAttachmentsAndNotTheirDownloadURL(t *testing.T) {
+	row, _ := ForMessage(chat.Message{
+		Name: "spaces/AAA/messages/BBB",
+		Text: "the report",
+		Attachment: []chat.Attachment{{
+			Name:              "spaces/AAA/messages/BBB/attachments/CCC",
+			ContentName:       "report.pdf",
+			ContentType:       "application/pdf",
+			AttachmentDataRef: &chat.AttachmentDataRef{ResourceName: "Q2xvbmU="},
+			Source:            "UPLOADED_CONTENT",
+		}, {
+			// A Drive file, which has no bytes to fetch here.
+			Name:         "spaces/AAA/messages/BBB/attachments/DDD",
+			ContentName:  "notes",
+			DriveDataRef: []byte(`{"driveFileId":"abc"}`),
+			Source:       "DRIVE_FILE",
+		}},
+	})
+
+	if len(row.Attachments) != 2 {
+		t.Fatalf("attachments = %+v", row.Attachments)
+	}
+	if row.Attachments[0].ResourceName != "Q2xvbmU=" {
+		t.Errorf("the first attachment lost its resource name: %+v", row.Attachments[0])
+	}
+	if row.Attachments[1].ResourceName != "" {
+		t.Errorf("a Drive file was given a resource name: %+v", row.Attachments[1])
+	}
+
+	body, err := json.Marshal(row)
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	for _, forbidden := range []string{"downloadUri", "thumbnailUri", "attachment_token"} {
+		if strings.Contains(string(body), forbidden) {
+			t.Errorf("the published shape carries %s, which is a credential:\n%s", forbidden, body)
+		}
+	}
 }

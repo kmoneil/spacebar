@@ -599,9 +599,9 @@ command with the profile as an argument.
 {"command": "spacebar", "args": ["mcp", "--profile", "work"]}
 ```
 
-Five tools today, all reads: `list_spaces`, `get_space`, `list_members`,
-`list_messages`, `get_message`. They return the same shapes `--json` does,
-because both come from one place.
+Five read tools: `list_spaces`, `get_space`, `list_members`, `list_messages`,
+`get_message`. They return the same shapes `--json` does, because both come
+from one place.
 
 **A tool this profile cannot serve is not registered at all.** A model that
 cannot see a tool cannot argue itself into calling it; one that can see a broken
@@ -612,7 +612,32 @@ before the session starts rather than connected with nothing to offer. This is
 deliberately the opposite of how flags work in the CLI, where a person reading
 `--help` is served by knowing that `--file` exists.
 
-**Writes are not here yet.** Every tool in this build reads.
+**Writes are off unless you say otherwise.**
+
+```json
+{"command": "spacebar", "args": ["mcp", "--profile", "work", "--allow-write",
+                                 "--allow-space", "spaces/AAAAAAA"]}
+```
+
+Without `--allow-write`, `send_message` is not registered at all, so there is no
+tool for a model to talk itself into calling. With it, `--allow-space` narrows
+where it may post, checked against the space a call resolves to rather than
+against the string the model sent, and refused before the request rather than
+after it.
+
+Every write tool's description ends with "This posts a visible message to a real
+Google Chat space. Confirm with the user before calling.", which is what the
+model reads before deciding.
+
+**Every tool call is one JSON line on stderr**, and neither `--quiet` nor
+`--json` turns it off. It says which tool, which profile, what the arguments
+were with long strings truncated, and whether it worked. An audit line a flag
+can silence is missing exactly when somebody has a reason to silence it.
+
+A webhook profile is worth a word here: it can post and can do nothing else, so
+`spacebar mcp --allow-write` on one registers exactly one tool, and without the
+flag it is refused before the session starts because there would be nothing to
+offer.
 
 **Message text is untrusted input.** It reaches a model as data, and a message
 that asks the model to do something is still a message. That is why writing over
