@@ -30,6 +30,7 @@ func newTailCmd(opts *Options) *cobra.Command {
 	var (
 		interval time.Duration
 		backfill int
+		since    string
 		refresh  bool
 	)
 
@@ -40,6 +41,7 @@ func newTailCmd(opts *Options) *cobra.Command {
 
   ` + meta.AppName + ` tail spaces/AAAAAAA
   ` + meta.AppName + ` tail eng --backfill 20        # the last 20, then follow
+  ` + meta.AppName + ` tail eng --since 30m          # everything since, then follow
   ` + meta.AppName + ` tail eng --json | jq -r .text
 
 Oldest first, because this is a conversation being read in the order it
@@ -55,15 +57,27 @@ a minute, and any message resets it.
 Ctrl-C exits 0. It is how this command is meant to end, so it is not a failure.
 
 Two things it does not do. It does not replay what was already there unless
---backfill asks. And it never corrects itself: a message edited or deleted while
-you are watching is not shown again, because a poll sees new messages and an
-edit does not make one.`,
+--backfill or --since asks. And it never corrects itself: a message edited or
+deleted while you are watching is not shown again, because a poll sees new
+messages and an edit does not make one.
+
+--since takes an RFC 3339 timestamp or how long ago, as in 30m or 2h, and it
+means strictly after: the API compares createTime with > and refuses >=, so a
+message posted at exactly that moment is not replayed. It cannot be given with
+--backfill, because the two disagree about where to start.`,
 
 		Args: exactlyOne("tail needs a space.\n  %s tail spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Refused before the profile is even loaded, so a bad interval
-			// costs no keyring read and no network call.
+			// Refused before the profile is even loaded, so a bad interval or
+			// an unparseable time costs no keyring read and no network call.
 			if err := chat.CheckInterval(interval); err != nil {
+				return err
+			}
+			from, err := parseSince(since)
+			if err != nil {
+				return err
+			}
+			if err := chat.CheckTailWindow(from, backfill); err != nil {
 				return err
 			}
 
@@ -93,6 +107,7 @@ edit does not make one.`,
 			return finish(r, opened, stream(r, opened.Transport.Tail(ctx, chat.TailRequest{
 				Space:    space,
 				Interval: interval,
+				Since:    from,
 				Backfill: backfill,
 			}), rowForMessage))
 		},
@@ -101,6 +116,7 @@ edit does not make one.`,
 	f := cmd.Flags()
 	f.DurationVar(&interval, "interval", 0, "how often to poll, at least 2s")
 	f.IntVar(&backfill, "backfill", 0, "print this many existing messages before following")
+	f.StringVar(&since, "since", "", sinceHelp)
 	addRefreshFlag(cmd, &refresh)
 
 	return cmd

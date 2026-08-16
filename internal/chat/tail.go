@@ -108,9 +108,35 @@ func (c *Client) Tail(ctx context.Context, req TailRequest) iter.Seq2[Message, e
 	}
 }
 
+// CheckTailWindow refuses the two ways of saying where to start at once.
+//
+// Exported for the same reason CheckInterval is: the CLI refuses before it
+// loads a profile, so a contradiction in what was typed costs no keyring read
+// and no network call, and the MCP server must reach the same rule rather than
+// grow a second copy of it. checkTail calls it again below, because a refusal
+// that only exists in an adapter is a refusal one of the adapters will forget.
+//
+// Refused rather than ordered by precedence. startOfTail fetches the last N
+// messages with no filter at all and then follows from the newest of them, so a
+// Since given beside a Backfill is read and then overwritten. Either precedence
+// rule leaves somebody watching a window they did not ask for, with nothing
+// saying so.
+func CheckTailWindow(since time.Time, backfill int) error {
+	if since.IsZero() || backfill <= 0 {
+		return nil
+	}
+	return clientErr("--since and --backfill both say where to start, and they disagree.\n"+
+		"--since %s replays everything after that time; --backfill %d replays the last %d messages, "+
+		"whenever they were.\nAsk for one of them.",
+		since.UTC().Format(time.RFC3339), backfill, backfill)
+}
+
 // checkTail refuses what cannot be polled, before anything is fetched.
 func (c *Client) checkTail(req TailRequest) error {
 	if err := CheckSpaceName(req.Space); err != nil {
+		return err
+	}
+	if err := CheckTailWindow(req.Since, req.Backfill); err != nil {
 		return err
 	}
 	return CheckInterval(req.Interval)

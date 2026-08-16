@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: "yesterday" is not a time.
+Give an RFC 3339 timestamp, as in "2026-08-16T09:00:00Z" or "2026-08-16T09:00:00-05:00", or how long ago, as in "90m", "2h" or "36h".
+There is no day unit in a duration, so a week is "168h".

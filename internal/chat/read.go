@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/kmoneil/spacebar/internal/output"
 )
@@ -74,6 +75,22 @@ type ListMessagesRequest struct {
 	Space string
 
 	Filter string
+
+	// Since and Until bound the window, and both are exclusive.
+	//
+	// Exclusive because the API says so rather than because it reads better:
+	// createTime accepts > and <, and >= is answered with 400 "Invalid filter
+	// query", measured on 2026-08-16. A --since that meant "at or after" would
+	// have to subtract a nanosecond from what the caller typed, which is a value
+	// altered to make it representable, so the flag means strictly after and the
+	// help says so.
+	//
+	// Zero means unbounded on that side. They compose with Filter rather than
+	// replacing it: this endpoint's filter takes createTime and thread.name and
+	// nothing else, so a caller who passes both is filtering by thread and by
+	// time, which is one question.
+	Since time.Time
+	Until time.Time
 
 	// OrderBy is one of the constants above. Empty means OrderNewestFirst,
 	// filled in here rather than left to the API, whose own default is oldest
@@ -138,7 +155,7 @@ func (c *Client) Messages(ctx context.Context, req ListMessagesRequest) iter.Seq
 
 	query := url.Values{}
 	query.Set("orderBy", order)
-	setIf(query, "filter", req.Filter)
+	setIf(query, "filter", messageFilter(req))
 	if req.ShowDeleted {
 		query.Set("showDeleted", "true")
 	}

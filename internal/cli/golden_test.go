@@ -256,8 +256,15 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"alias-set-looks-like-a-space.txt", []string{"alias", "set", "spaces/AAAA", "spaces/BBBB"}, output.ExitUsage, "", true, true},
 		{"alias-set-looks-like-an-address.txt", []string{"alias", "set", "bob@example.test", "spaces/BBBB"}, output.ExitUsage, "", true, true},
 		{"alias-rm-no-such-alias.txt", []string{"alias", "rm", "nothing"}, output.ExitUsage, "", true, true},
+		{"messages-list-bad-time.txt", []string{"messages", "list", "spaces/AAAATestSpace", "--since", "yesterday"}, output.ExitUsage, "", true, true},
+
 		{"tail-no-arguments.txt", []string{"tail"}, output.ExitUsage, "", true, true},
 		{"tail-interval-below-floor.txt", []string{"tail", "spaces/AAAATestSpace", "--interval", "100ms"}, output.ExitUsage, "", true, true},
+		// An absolute time rather than "1h", because the refusal echoes what the
+		// window resolved to and a duration resolves against the clock. A golden
+		// holding a value that changes every run does not announce itself as
+		// unstable; it announces itself as the output contract having changed.
+		{"tail-since-and-backfill.txt", []string{"tail", "spaces/AAAATestSpace", "--since", "2026-08-16T09:00:00Z", "--backfill", "5"}, output.ExitUsage, "", true, true},
 		{"tail-unsupported.txt", []string{"tail", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
 		{"alias-list-empty.txt", []string{"alias", "list"}, output.ExitOK, "", true, true},
 

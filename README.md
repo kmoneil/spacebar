@@ -323,6 +323,8 @@ spacebar spaces members spaces/AAAAAAA --show-invited # and anybody asked but no
 spacebar messages list spaces/AAAAAAA                 # newest 25
 spacebar messages list spaces/AAAAAAA --limit 100
 spacebar messages list spaces/AAAAAAA --order oldest
+spacebar messages list spaces/AAAAAAA --since 2h      # the last two hours
+spacebar messages list spaces/AAAAAAA --since 2026-08-16T09:00:00Z --until 2026-08-16T17:00:00Z
 spacebar messages get spaces/AAAAAAA/messages/BBBBBBB
 ```
 
@@ -404,6 +406,7 @@ permission. The last two steps need to read and are refused on one.
 ```sh
 spacebar tail spaces/AAAAAAA
 spacebar tail eng --backfill 20        # the last 20, then follow
+spacebar tail eng --since 30m          # everything since, then follow
 spacebar tail eng --json | jq -r .text
 ```
 
@@ -419,6 +422,16 @@ a minute, and any message resets it.
 
 **Ctrl-C exits 0.** It is how the command is meant to end, so it is not a
 failure, and a script wrapping it does not have to special-case the code.
+
+**A time window is an RFC 3339 timestamp or how long ago**, as in `30m`, `2h`
+or `36h`. Durations have no day unit, so a week is `168h`. Both `--since` and
+`--until` are **strictly** outside the boundary: the API compares `createTime`
+with `>` and `<` and refuses `>=`, so a message posted at exactly the moment
+you name is not returned, and this tool would rather say that than shift your
+timestamp by a nanosecond to hide it. On `messages list` they combine with
+`--filter`, and your expression is parenthesized first so that an `OR` in it
+keeps its meaning. `tail` takes `--since` and refuses it beside `--backfill`,
+because the two disagree about where to start.
 
 Two things it does not do. It does not replay what was already there unless
 `--backfill` asks. And it never corrects itself: a message edited or deleted

@@ -112,6 +112,8 @@ func newMessagesListCmd(opts *Options) *cobra.Command {
 		limit       int
 		order       string
 		filter      string
+		since       string
+		until       string
 		showDeleted bool
 		refresh     bool
 	)
@@ -125,10 +127,18 @@ func newMessagesListCmd(opts *Options) *cobra.Command {
   ` + meta.AppName + ` messages list eng-alerts                 # an alias
   ` + meta.AppName + ` messages list 'Ops'                      # a display name
   ` + meta.AppName + ` messages list spaces/AAAAAAA --json | jq -r .text
+  ` + meta.AppName + ` messages list eng-alerts --since 2h        # the last two hours
+  ` + meta.AppName + ` messages list eng-alerts --since 2026-08-16T09:00:00Z --until 2026-08-16T17:00:00Z
 
 Newest first, so that the default limit returns the latest messages rather than
 the oldest ones in the space's history. --order oldest reverses it, and reading
 a conversation in the order it happened is what ` + meta.AppName + ` tail will be for.
+
+--since and --until take an RFC 3339 timestamp or how long ago, as in 90m or
+2h, and both are strict: the API compares createTime with > and <, and refuses
+>=, so a message posted at exactly the boundary is not returned. They combine
+with --filter rather than replacing it, and your expression keeps its own
+meaning, because it is parenthesized before anything is added to it.
 
 Columns are the creation time, who sent it, and the text, separated by a tab.
 The text is Chat markup exactly as the API returned it, and control characters
@@ -137,6 +147,17 @@ in it are escaped before they reach a terminal.`,
 		Args: exactlyOne("messages list needs a space.\n  %s messages list spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			orderBy, err := orderByFor(order)
+			if err != nil {
+				return err
+			}
+
+			// Both parsed before the profile is loaded, so a mistyped time
+			// costs no keyring read and no request.
+			from, err := parseSince(since)
+			if err != nil {
+				return err
+			}
+			to, err := parseSince(until)
 			if err != nil {
 				return err
 			}
@@ -159,6 +180,8 @@ in it are escaped before they reach a terminal.`,
 				Space:       space,
 				OrderBy:     orderBy,
 				Filter:      filter,
+				Since:       from,
+				Until:       to,
 				ShowDeleted: showDeleted,
 				Limit:       limit,
 			}), rowForMessage))
@@ -169,6 +192,8 @@ in it are escaped before they reach a terminal.`,
 	f.IntVar(&limit, "limit", defaultLimit, limitHelp)
 	f.StringVar(&order, "order", orderNewest, "newest or oldest first")
 	f.StringVar(&filter, "filter", "", "the API's own filter expression, passed through unaltered")
+	f.StringVar(&since, "since", "", sinceHelp)
+	f.StringVar(&until, "until", "", untilHelp)
 	f.BoolVar(&showDeleted, "show-deleted", false, "include tombstones for deleted messages")
 	addRefreshFlag(cmd, &refresh)
 	return cmd

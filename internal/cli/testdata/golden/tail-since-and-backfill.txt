@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: --since and --backfill both say where to start, and they disagree.
+--since 2026-08-16T09:00:00Z replays everything after that time; --backfill 5 replays the last 5 messages, whenever they were.
+Ask for one of them.

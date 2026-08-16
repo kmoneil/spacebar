@@ -17,6 +17,7 @@ package cli
 import (
 	"errors"
 	"iter"
+	"time"
 
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -35,6 +36,30 @@ const defaultLimit = 25
 // limitHelp is the same sentence everywhere a limit is registered, because three
 // wordings of one flag is how two of them end up meaning different things.
 const limitHelp = "how many to return; 0 means every one, fetched a page at a time"
+
+// The window flags, worded once for the same reason.
+//
+// "strictly" is in both because the API put it there: createTime accepts > and
+// <, and answers >= with 400 "Invalid filter query". A caller who reads "since
+// 09:00" and does not see the message posted at 09:00 exactly should have been
+// told, and the place to tell them is the line they read before typing it.
+const (
+	sinceHelp = "only messages created strictly after this: an RFC 3339 time, or how long ago, as in 90m or 2h"
+	untilHelp = "only messages created strictly before this, in the same two forms as --since"
+)
+
+// parseSince turns a window flag into a time, treating unset as unbounded.
+//
+// The parsing itself lives in internal/chat beside CheckInterval, so that the
+// MCP server takes the same argument by the same rule. What is here is the one
+// thing that is genuinely the flag's: an empty string is not a bad time, it is
+// nobody having asked for a bound.
+func parseSince(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	return chat.ParseWhen(value, time.Now())
+}
 
 // openProfile resolves the active profile and reports its credential warnings.
 //
