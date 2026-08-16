@@ -358,3 +358,221 @@ func TestAnUndecodableSuccessIsNotReportedAsASend(t *testing.T) {
 		t.Errorf("made %d requests, want 1: a response that would not decode is not a reason to send again", h.count())
 	}
 }
+
+// TestASpaceNameIsCheckedAgainstWhatWouldChangeTheRequest.
+//
+// The table the recon for m3-05 proved and no test held. Percent encoding is
+// the interesting half: `%2f` is refused because `%` is outside the character
+// class, not because anything decodes it, so `%2F` and `%25` and every other
+// spelling of an encoded slash fail for one reason rather than three. A rule
+// that decoded first would need to decode exactly as many times as the far end
+// does, and nothing tells it how many that is.
+func TestASpaceNameIsCheckedAgainstWhatWouldChangeTheRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		space string
+		ok    bool
+	}{
+		{"a real one", "spaces/AAAAExampleOne", true},
+		{"a direct message", "spaces/AAAAExampleDM", true},
+		{"underscore and hyphen", "spaces/A_a-1", true},
+
+		{"empty", "", false},
+		{"no prefix", "AAA", false},
+		{"a traversal", "spaces/../../etc", false},
+		{"a second segment", "spaces/AAA/messages", false},
+		{"an encoded slash lower", "spaces/AAA%2f..", false},
+		{"an encoded slash upper", "spaces/AAA%2F..", false},
+		{"an encoded percent", "spaces/AAA%252f", false},
+		{"a query", "spaces/AAA?key=stolen", false},
+		{"a fragment", "spaces/AAA#f", false},
+		{"an absolute URL", "https://elsewhere.invalid/v1/spaces/AAA", false},
+		{"a scheme-relative host", "//elsewhere.invalid/spaces/AAA", false},
+		{"a backslash", `spaces\AAA`, false},
+		{"a newline", "spaces/AAA\nevil", false},
+		{"a tab", "spaces/AAA\tevil", false},
+		{"a NUL", "spaces/AAA\x00evil", false},
+		{"a trailing space", "spaces/AAA ", false},
+		{"a dot, which a message name allows and this does not", "spaces/AAA.BBB", false},
+		{"non-ASCII", "spaces/café", false},
+		{"the prefix alone", "spaces/", false},
+		{"only the prefix without a slash", "spaces", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckSpaceName(tc.space)
+			if tc.ok && err != nil {
+				t.Errorf("CheckSpaceName(%q) = %v, want it accepted", tc.space, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("CheckSpaceName(%q) was accepted", tc.space)
+			}
+		})
+	}
+}
+
+// FuzzASpaceNameThatIsAcceptedIsSafeUnescaped states the property the validator
+// exists for, which nothing else in the tree says.
+//
+// FuzzAPathStaysOnTheBase is a different claim. It says no path escapes the
+// base, which is true whatever the pattern accepts, because the join defends
+// itself. This says the thing that makes escaping the second layer rather than
+// the only one: a name the pattern accepts needs no escaping at all, so a code
+// path that forgot to escape it would still request the space that was checked.
+//
+// Stated as a byte comparison rather than as a list of dangerous characters. A
+// list is what somebody thought of; this fails for any character that survives
+// the pattern and then means something to a URL.
+func FuzzASpaceNameThatIsAcceptedIsSafeUnescaped(f *testing.F) {
+	for _, seed := range []string{
+		"spaces/AAAAExampleOne", "spaces/A_a-1", "spaces/AAA", "spaces/",
+		"spaces/AAA%2f..", "spaces/../../etc", "spaces/AAA?key=stolen",
+		"spaces/AAA#f", "spaces/AAA\x00evil", "spaces/café", "AAA", "",
+		"spaces/AAA/messages", "//elsewhere.invalid/spaces/AAA", `spaces\AAA`,
+	} {
+		f.Add(seed)
+	}
+
+	client, err := New(Options{BaseURL: "https://chat.example/v1?key=" + testKey})
+	if err != nil {
+		f.Fatalf("New: %v", err)
+	}
+
+	f.Fuzz(func(t *testing.T, space string) {
+		if CheckSpaceName(space) != nil {
+			return
+		}
+
+		// The two shapes an accepted name takes on the way to a request: the
+		// space alone, as spaces get reads it, and the space with a collection
+		// under it, as messages list and spaces members build it.
+		for _, path := range []string{space, space + "/messages", space + "/members"} {
+			target, err := client.resolve(Request{Method: http.MethodGet, Path: path})
+			if err != nil {
+				t.Fatalf("a name that passed the check was refused as a path: %q: %v", path, err)
+			}
+
+			// Byte-identical, unescaped. If the accepted name had needed
+			// escaping, EscapedPath would differ from the concatenation, and
+			// the request would name something other than what was checked.
+			want := "/v1/" + path
+			if target.EscapedPath() != want {
+				t.Fatalf("accepted name %q was altered on the way to a request:\n got %q\nwant %q",
+					space, target.EscapedPath(), want)
+			}
+			if target.Path != want {
+				t.Fatalf("accepted name %q decodes to a different path:\n got %q\nwant %q",
+					space, target.Path, want)
+			}
+
+			// Nothing the name contained became a query, a fragment, or a
+			// different host, and the credential is still the profile's own.
+			if target.Host != "chat.example" || target.Scheme != "https" {
+				t.Fatalf("accepted name %q reached %s://%s", space, target.Scheme, target.Host)
+			}
+			if target.Fragment != "" || target.RawFragment != "" {
+				t.Fatalf("accepted name %q produced a fragment %q", space, target.Fragment)
+			}
+			if target.Query().Get("key") != testKey {
+				t.Fatalf("accepted name %q changed the credential to %q", space, target.Query().Get("key"))
+			}
+			if len(target.Query()) != 1 {
+				t.Fatalf("accepted name %q added a query parameter: %v", space, target.Query())
+			}
+		}
+	})
+}
+
+// FuzzAMessageNameThatIsAcceptedIsSafeUnescaped, the same property for the
+// other pattern, which is worth stating separately because it admits a dot and
+// the space rule does not. A pattern that admits more characters is a pattern
+// with more ways to be wrong.
+func FuzzAMessageNameThatIsAcceptedIsSafeUnescaped(f *testing.F) {
+	for _, seed := range []string{
+		"spaces/AAA/messages/nMs6.nMs6", "spaces/AAA/messages/client-0123abcd",
+		"spaces/AAA/messages/BBB", "spaces/AAA/messages/", "spaces/AAA",
+		"spaces/AAA/messages/../../../etc", "spaces/AAA/messages/B%2fC",
+		"spaces/AAA/messages/B.C.D", "spaces/AAA/messages/..", "",
+	} {
+		f.Add(seed)
+	}
+
+	client, err := New(Options{BaseURL: "https://chat.example/v1?key=" + testKey})
+	if err != nil {
+		f.Fatalf("New: %v", err)
+	}
+
+	f.Fuzz(func(t *testing.T, message string) {
+		if CheckMessageName(message) != nil {
+			return
+		}
+
+		target, err := client.resolve(Request{Method: http.MethodGet, Path: message})
+		if err != nil {
+			t.Fatalf("a name that passed the check was refused as a path: %q: %v", message, err)
+		}
+
+		want := "/v1/" + message
+		if target.EscapedPath() != want || target.Path != want {
+			t.Fatalf("accepted name %q was altered on the way to a request:\n got %q (raw %q)\nwant %q",
+				message, target.Path, target.EscapedPath(), want)
+		}
+		if target.Host != "chat.example" || target.Scheme != "https" {
+			t.Fatalf("accepted name %q reached %s://%s", message, target.Scheme, target.Host)
+		}
+		if target.Query().Get("key") != testKey || len(target.Query()) != 1 {
+			t.Fatalf("accepted name %q changed the query to %v", message, target.Query())
+		}
+
+		// A dot is admitted, and "." and ".." are the two that would move a
+		// path. The pattern has to keep them out even though it allows the
+		// character they are made of.
+		if strings.HasSuffix(message, "/.") || strings.HasSuffix(message, "/..") {
+			t.Fatalf("accepted name %q ends in a path element that would move the request", message)
+		}
+	})
+}
+
+// TestAMessageIDMayBeginWithAnythingButDots.
+//
+// The first fix for the ".." hole required a leading alphanumeric, which would
+// have refused a message that exists: the API's identifiers look base64url and
+// that alphabet contains - and _. A validator that is too narrow presents as
+// this tool being unable to open somebody's message, and it gets found by a
+// user rather than by a test. What is refused is only what is dangerous.
+func TestAMessageIDMayBeginWithAnythingButDots(t *testing.T) {
+	for _, tc := range []struct {
+		id string
+		ok bool
+	}{
+		// The shapes the API and this tool actually produce.
+		{"nMs6.nMs6", true},
+		{"XdvpVBoTxdM.XdvpVBoTxdM", true},
+		{"client-0123abcd", true},
+
+		// base64url, which is what the identifiers look like. Refusing these
+		// would be a bug reported as "spacebar cannot open this message".
+		{"-leadingHyphen", true},
+		{"_leadingUnderscore", true},
+		{"-_-", true},
+		{".leadingDot", true},
+		{"..twoDotsThenText", true},
+
+		// The two that are path elements rather than names, and the general
+		// case of them. These are what the pattern exists to keep out.
+		{".", false},
+		{"..", false},
+		{"...", false},
+		{"", false},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			name := "spaces/AAA/messages/" + tc.id
+			err := CheckMessageName(name)
+			if tc.ok && err != nil {
+				t.Errorf("CheckMessageName(%q) = %v, want it accepted", name, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("CheckMessageName(%q) was accepted", name)
+			}
+		})
+	}
+}

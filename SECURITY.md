@@ -16,7 +16,7 @@ Pre-1.0, and the six milestones this is planned in are still landing.
 
 Every claim below is either **held by a test**, in which case the test is
 named, or a **requirement on the milestone that implements it**, in which case
-it carries that milestone: `(M3)`, `(M5)`. A claim with neither is a bug in
+it carries that milestone: `(M4)`, `(M5)`. A claim with neither is a bug in
 this document, and should be reported as one.
 
 The distinction matters. A security document that describes an intention in the
@@ -63,16 +63,51 @@ message ID, a resolved alias, and an email that came back from a directory
 lookup are all strings from somewhere else. None of them may change which URL
 is requested. A space is refused unless it matches `^spaces/[A-Za-z0-9_-]+$`
 (SPEC.md §15.8), by `chat.CheckSpaceName`, which is the one place that rule
-lives. Held today on the two paths that exist: the space a webhook URL names,
-and a target given on the command line.
-`TestABadURLIsRefusedAtConstruction`, `TestARubbishTargetIsRefusedAsOne`.
+lives. A message name has its own pattern and its own function,
+`chat.CheckMessageName`, because the two admit different characters and one
+function taking a flag would be a call site away from checking a message
+against the space rule.
+
+Held on every path a name reaches today: the space a webhook URL names, a
+target given on the command line, and each of the five read endpoints.
+`TestABadURLIsRefusedAtConstruction`, `TestARubbishTargetIsRefusedAsOne`,
+`TestAReadRefusesABadSpaceNameWithoutAskingTheAPI`,
+`TestASpaceNameIsCheckedAgainstWhatWouldChangeTheRequest`, and
+`TestAMessageNameIsCheckedAndAdmitsTheShapeTheAPIActuallyReturns`.
+
+**What the pattern accepts is safe as a path segment unescaped**, which is what
+makes escaping the second layer rather than the only one. Stated as a property:
+a name that passes the check produces a request path byte-identical to the name
+itself, on the same host, with the profile's own credential and no parameter
+the name added. `FuzzASpaceNameThatIsAcceptedIsSafeUnescaped` and
+`FuzzAMessageNameThatIsAcceptedIsSafeUnescaped`.
+
+That claim was false when it was first written down, which is the argument for
+stating it as a property rather than as the cases somebody thought of.
+`CheckMessageName` admitted a dot, because the API's own generated IDs contain
+one, and so it admitted `.` and `..` as whole identifiers:
+`spaces/AAA/messages/..` addresses the space rather than a message in it.
+Nothing ever left the process wrong, because the relative-path rule below
+refused it at the join, but a first layer that needs the second one is not a
+first layer. The identifier now has to contain at least one character that is
+not a dot.
+
+Deliberately not "has to begin with an alphanumeric", which was the first fix
+and was worse than the bug. The API's identifiers look base64url, an alphabet
+that contains `-` and `_`, so that rule could refuse a message that exists, and
+the failure would present as this tool being unable to open somebody's message.
+A validator that is too narrow is found by a user; one that is too wide is
+found by an attacker. Refuse what is dangerous, which here is an identifier
+made of nothing but dots. `TestAMessageIDMayBeginWithAnythingButDots`.
 
 That is a check on the value and not the only defence. Anything reaching a
 request path also goes through the relative-path rule below, which refuses a
 path that would leave the base at all, and `FuzzAPathStaysOnTheBase` states it
-as a property rather than as a list of cases. What Milestone 3 owes is the
-third path: a resolver turning an alias or an email into a space, whose output
-has to go through the same function **(M3)**.
+as a property rather than as a list of cases. What is still owed is the third
+path: a resolver turning an alias or an email into a space, whose output has to
+go through the same function rather than a second copy of it **(M4)**. That
+path is also the only one on which a NUL can arrive, because argv is
+NUL-terminated and a command-line argument cannot carry one.
 
 **Assumed trusted: the caller.** Flags, arguments, the config file, and the
 profile are the operator's own instructions. `spacebar send "shipping now"`

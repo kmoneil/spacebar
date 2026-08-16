@@ -215,7 +215,27 @@ var spaceName = regexp.MustCompile(`^spaces/[A-Za-z0-9_-]+$`)
 // caller-supplied ID is the other shape it takes, and those begin with the
 // client- prefix and are hex from DeriveMessageID. Neither admits a slash, which
 // is the character that would add a path segment.
-var messageName = regexp.MustCompile(`^spaces/[A-Za-z0-9_-]+/messages/[A-Za-z0-9_.-]+$`)
+//
+// The identifier must contain at least one character that is not a dot, which
+// is the part somebody would otherwise remove as fussy. Admitting the dot
+// admitted "." and ".." as whole identifiers, and those are not characters that
+// need escaping, they are path elements that move the request:
+// spaces/AAA/messages/.. addresses the space rather than a message in it. The
+// relative-path check caught it at the join, so nothing ever left the process
+// wrong, but this pattern's promise is that anything it accepts is safe as a
+// path segment unescaped, and it was leaning on the second layer to keep it. A
+// rule that needs the layer below it is not the first layer. Found by
+// FuzzAMessageNameThatIsAcceptedIsSafeUnescaped on a seed.
+//
+// Written as "any leading dots, then a non-dot" rather than as "must begin with
+// an alphanumeric", which was the first attempt and was wrong. The API's IDs
+// look base64url, and that alphabet contains - and _, so a leading-alphanumeric
+// rule could refuse a message that exists. The failure would present as this
+// tool being unable to open one of somebody's messages, which is the same shape
+// of bug as a space regex that is too narrow, and it would be found by a user
+// rather than by us. What is refused here is only what is dangerous: an
+// identifier made of nothing but dots.
+var messageName = regexp.MustCompile(`^spaces/[A-Za-z0-9_-]+/messages/[.]*[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
 
 // CheckSpaceName refuses anything that is not a space resource name
 // (SPEC.md §15.8).
