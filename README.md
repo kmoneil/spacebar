@@ -36,10 +36,13 @@ Reading has been run against the real API too. `spaces list`, `spaces get`,
 Google rather than from a test server, which settled three things that had been
 decoded from the API reference and never watched work: the response shapes,
 that `orderBy` accepts `createTime DESC`, and that `pageSize` is honoured
-exactly. The live run is also what found the one bug in the set, which is worth
-saying plainly because it is the argument for doing it: `spaces members` asked
-for a scope no authorization requested, so it failed on every profile the tool
-could create, and no test in the tree could have seen it.
+exactly. The live run is also what found the two bugs in the set, which is
+worth saying plainly because it is the argument for doing it. `spaces members`
+asked for a scope no authorization requested, so it failed on every profile the
+tool could create, and no test in the tree could have seen it. And every `auth`
+command assumed a profile that could hold a token, so on a webhook one of them
+stored an OAuth client against it and another reported a successful logout of
+something that had never been logged in.
 
 The plan, in six milestones:
 
@@ -295,7 +298,7 @@ On a profile authorized as you, rather than a webhook:
 spacebar spaces list                                  # name, type, display name
 spacebar spaces list --limit 0                        # every one
 spacebar spaces get spaces/AAAAAAA
-spacebar spaces members spaces/AAAAAAA
+spacebar spaces members spaces/AAAAAAA                # who, state, role
 
 spacebar messages list spaces/AAAAAAA                 # newest 25
 spacebar messages list spaces/AAAAAAA --limit 100
@@ -306,6 +309,13 @@ spacebar messages get spaces/AAAAAAA/messages/BBBBBBB
 **Newest first**, so that the default limit returns the latest messages rather
 than the oldest ones in a space's history. Reading a conversation in the order
 it happened is what `tail` will be for.
+
+**`spaces members` identifies people by resource name, not by display name.**
+The Chat API returns a member as `users/NNN` and a type, with no name attached,
+so the display-name column is blank. That is the API rather than a gap here,
+and it is worth knowing before you build something that expects a name in it.
+`users/NNN` is the stable identifier in any case; a display name is chosen by
+the account holder and is not unique.
 
 **A list streams.** Pages are fetched as you consume them, so `--json` is NDJSON
 and the first object arrives before the last page has been requested:

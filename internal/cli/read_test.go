@@ -288,3 +288,51 @@ func TestOrderOnlyTakesWhatItDocuments(t *testing.T) {
 		}
 	}
 }
+
+// TestAMembershipAsTheAPIActuallyReturnsIt.
+//
+// TestTheRowShapesAreTheContractAnAgentParses builds a membership with a
+// display name, which is the right shape to freeze and is not a shape this
+// endpoint produces. Measured against a real space on 2026-08-16,
+// spaces.members.list answers with a resource name and a type and nothing else:
+//
+//	"member": {"name": "users/100000000000000000001", "type": "HUMAN"}
+//
+// So the display-name column is blank in practice, the JSON field is absent,
+// and `users/NNN` is the only identifier a caller gets. The column is kept
+// because that is one observation of one membership in one space, and a column
+// removed on that evidence would have to come back the first time somebody sees
+// a name in it. What must not drift is the documentation, which said the column
+// held a display name and was read by somebody deciding whether to parse it.
+func TestAMembershipAsTheAPIActuallyReturnsIt(t *testing.T) {
+	data, cells := rowForMember(chat.Membership{
+		Name:  "spaces/AAA/members/100000000000000000001",
+		State: "JOINED",
+		Role:  "ROLE_MANAGER",
+		Member: &chat.User{
+			Name: "users/100000000000000000001",
+			Type: "HUMAN",
+		},
+	})
+
+	// No display_name key at all, rather than an empty one, so a consumer can
+	// tell "not provided" from "provided and empty".
+	assertJSON(t, data, `{"name":"spaces/AAA/members/100000000000000000001","state":"JOINED",`+
+		`"role":"ROLE_MANAGER","member":"users/100000000000000000001","member_type":"HUMAN"}`)
+
+	// The text row keeps its column count, so a caller splitting on tabs finds
+	// state and role where the documentation says they are.
+	if len(cells) != 4 {
+		t.Fatalf("cells = %q, want 4 columns", cells)
+	}
+	if cells[0] != "users/100000000000000000001" {
+		t.Errorf("the first column is not the identifier: %q", cells[0])
+	}
+	if cells[1] != "" {
+		t.Errorf("the display-name column is %q; if the API has started sending one, "+
+			"the README and the command's help both say it does not", cells[1])
+	}
+	if cells[2] != "JOINED" || cells[3] != "ROLE_MANAGER" {
+		t.Errorf("state and role are not in columns three and four: %q", cells)
+	}
+}

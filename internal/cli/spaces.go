@@ -187,9 +187,15 @@ Columns are the member's resource name, their display name, their state, and
 their role. State is worth reading: an invited member is not a member yet, and
 a list that showed both the same way would answer the question wrongly.
 
-A display name is chosen by the account holder and is not unique. The resource
-name is the identifier; the display name is untrusted text and is escaped
-before it reaches a terminal.`,
+The display name column is blank, measured against a real space rather than
+read from documentation: this endpoint returns a member as a resource name and
+a type and nothing else. The column is kept rather than removed because it is
+one observation, on one space, of one membership, and a column removed on that
+evidence would have to come back the first time somebody sees a name in it.
+
+The resource name is the identifier in any case. A display name is chosen by
+the account holder, is not unique, and is untrusted text that is escaped before
+it reaches a terminal.`,
 
 		Args: exactlyOne("spaces members needs a space.\n  %s spaces members spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
