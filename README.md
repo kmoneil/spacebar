@@ -282,6 +282,16 @@ The scopes this build asks for have grown since that token was issued.
 
 `spacebar auth status` prints the scopes a profile actually holds.
 
+**Reading and writing need different things from your Cloud project.** Enabling
+the Chat API is enough to read: spaces, messages, and members all work as soon
+as you have consented. Writing also needs a Chat app configured on the project,
+under Chat API, Configuration in the Cloud console. Without it, every write
+refuses with a 404 saying "Google Chat app not found", which is not about the
+space and which `spacebar` explains when it happens.
+
+If you only need to read, you can skip that step. If you need to post as
+yourself, do it before wondering why sending fails.
+
 **One warning you may see.** An OAuth client that has not been verified by
 Google is in testing mode, where authorizations are revoked seven days after
 consent. Nothing in the API says whether yours is, so the warning is worded as a

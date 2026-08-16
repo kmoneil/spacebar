@@ -391,6 +391,22 @@ func (c *Client) adviseOAuth(e *APIError) string {
 		return "The account this profile is authorized as is not allowed to do that here." + c.profileSuffix()
 
 	case http.StatusNotFound:
+		// The Chat API answers "Google Chat app not found" with a 404 on every
+		// write, for a client whose Cloud project has the API enabled but no
+		// Chat app configured on it. Nothing about that is a missing space, and
+		// the generic advice below is actively wrong for it: `spaces list`
+		// works, because reading is exactly what still works, so somebody
+		// follows it, sees their spaces, and learns nothing.
+		//
+		// Measured on 2026-08-16. Every read returned 200 and every write,
+		// including messages.create, returned this. It is the difference
+		// between turning the API on and configuring the app that uses it.
+		if strings.Contains(e.Message, "Chat app not found") {
+			return "This is not about the space. Enabling the Chat API is not the same as configuring a Chat app on it, " +
+				"and every write needs the second: reading works on this profile and posting, editing, deleting and reacting do not. " +
+				"Configure the app under Chat API, Configuration in the Google Cloud console for the project this client belongs to." +
+				c.profileSuffix()
+		}
 		return "Run '" + meta.AppName + " spaces list' to see the spaces this profile can reach." + c.profileSuffix()
 
 	case http.StatusUnauthorized:

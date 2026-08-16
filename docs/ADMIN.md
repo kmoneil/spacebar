@@ -115,6 +115,29 @@ half of one that is:
   membership list is the `.readonly` scope in the table above, and this tool
   never changes who is in a space.
 
+## Reading and writing need different things from the project
+
+Worth knowing before you approve anything, because it decides what the tool can
+actually do once you have.
+
+**Enabling the Chat API is enough to read.** Listing spaces, reading messages,
+and reading who is in a space all work as soon as the API is on and the user has
+consented to the scopes above.
+
+**Writing needs a Chat app configured on the project as well.** Posting,
+editing, deleting and reacting all refuse a client whose project has the API
+enabled and no app configured on it, with a 404 that says "Google Chat app not
+found". That is the Configuration tab of the Chat API in the Cloud console,
+where an app gets a name, an avatar, and a description.
+
+Measured rather than read from documentation: on a project with the API enabled
+and no app configured, every read returned 200 and every write returned that
+404, including sending an ordinary message.
+
+So a read-only deployment needs less from you than a read-write one, and if you
+approve the scopes but no app is configured, users will be able to read
+everything and post nothing.
+
 ## What a user can do that you may care about
 
 Stated plainly, because a document that only lists reassurances is not a useful

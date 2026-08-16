@@ -332,3 +332,61 @@ func rawDetails(t *testing.T, raw ...string) []json.RawMessage {
 	}
 	return details
 }
+
+// TestAChatAppNotFoundIsNotAMissingSpace.
+//
+// Measured on 2026-08-16. A Cloud project with the Chat API enabled but no Chat
+// app configured on it reads everything and writes nothing: spaces, messages
+// and members all answered 200, and messages.create, messages.patch,
+// messages.delete and reactions.create all answered this 404.
+//
+// The generic 404 advice is "run spaces list to see the spaces this profile can
+// reach", which is worse than saying nothing. It is not about the space, and
+// `spaces list` is exactly the thing that still works, so somebody follows it,
+// sees their spaces, and is no closer.
+func TestAChatAppNotFoundIsNotAMissingSpace(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":{"code":404,"status":"NOT_FOUND",`+
+			`"message":"Google Chat app not found. To create a Chat app, you must turn on the Chat API `+
+			`and configure the app in the Google Cloud console."}}`)
+	})
+	h.client.transport = config.TransportUserOAuth
+
+	_, err := sendOne(h)
+	if err == nil {
+		t.Fatal("a 404 was reported as a successful send")
+	}
+
+	if strings.Contains(err.Error(), "spaces list") {
+		t.Errorf("the advice sends somebody to the command that still works:\n%v", err)
+	}
+	for _, want := range []string{
+		"not about the space", // what it is not.
+		"Configuration",       // where to go.
+		"Cloud console",       // where that is.
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the advice does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+// TestAnOrdinary404StillSaysToListSpaces, so that the branch above is a special
+// case and not a replacement. A space that really has gone is the common 404,
+// and `spaces list` is the right answer to it.
+func TestAnOrdinary404StillSaysToListSpaces(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = fmt.Fprint(w, `{"error":{"code":404,"status":"NOT_FOUND","message":"Requested entity was not found."}}`)
+	})
+	h.client.transport = config.TransportUserOAuth
+
+	_, err := sendOne(h)
+	if err == nil {
+		t.Fatal("a 404 was reported as a successful send")
+	}
+	if !strings.Contains(err.Error(), "spaces list") {
+		t.Errorf("an ordinary 404 lost its advice:\n%v", err)
+	}
+}
