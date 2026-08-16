@@ -144,6 +144,15 @@ func (r *Renderer) Item(data any, cells ...string) error {
 // terminal unexamined. Colour is added afterwards, by this package, which is
 // why sanitizing does not erase it.
 func (r *Renderer) Warn(format string, a ...any) {
+	r.WarnCode("", format, a...)
+}
+
+// WarnCode is Warn with a machine-readable code for a caller to branch on.
+//
+// Separate rather than a parameter on Warn, because most warnings have nothing
+// to branch on and a code argument at every call site would be an empty string
+// repeated fifty times. The ones that need it are the ones a program acts on.
+func (r *Renderer) WarnCode(code, format string, a ...any) {
 	if r.opts.Quiet {
 		return
 	}
@@ -153,7 +162,7 @@ func (r *Renderer) Warn(format string, a ...any) {
 		// One object per line, matching the error envelope, so that a caller
 		// reading stderr in --json mode gets a stream of documents rather than
 		// a mixture of JSON and prose it has to guess at.
-		_ = r.encode(r.errw, warningEnvelope{Warning: warningBody{Message: message}}, false)
+		_ = r.encode(r.errw, warningEnvelope{Warning: warningBody{Code: code, Message: message}}, false)
 		return
 	}
 
@@ -205,6 +214,11 @@ type warningEnvelope struct {
 }
 
 type warningBody struct {
+	// Code is optional and machine-readable, so a caller branches on a value
+	// rather than matching on prose. The error envelope has had one since m2-04
+	// and a warning did not, which was fine while every warning was advisory and
+	// stopped being fine when one of them meant "this answer is short".
+	Code    string `json:"code,omitempty"`
 	Message string `json:"message"`
 }
 

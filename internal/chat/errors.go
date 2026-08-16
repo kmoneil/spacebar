@@ -49,6 +49,12 @@ var (
 	// A caller with only a status code would have to import net/http to tell
 	// them apart, and only internal/chat may.
 	ErrInvalidRequest = errors.New("the request was not understood")
+
+	// ErrTruncated is a walk that ended before the far end ran out of pages,
+	// for a reason that is not the caller's doing and not a request failure.
+	// Its own sentinel so that a caller can tell "this answer is short" from
+	// "this request failed", which are different things to act on.
+	ErrTruncated = errors.New("the result is incomplete")
 )
 
 // APIError is a request that came back wrong (SPEC.md §7.5).

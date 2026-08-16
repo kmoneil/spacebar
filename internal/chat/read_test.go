@@ -16,6 +16,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/kmoneil/spacebar/internal/config"
+	"github.com/kmoneil/spacebar/internal/output"
 )
 
 // bearer is an Authorizer that never refreshes, standing in for the token
@@ -263,24 +265,54 @@ func TestAFailureMidwayReachesTheCallerThatIsConsumingThatPage(t *testing.T) {
 	}
 }
 
-// TestANonAdvancingPageTokenStopsTheWalk.
+// TestANonAdvancingPageTokenStopsTheWalkAndSaysSo.
 //
 // A server that returns the same token forever would otherwise be an infinite
 // loop: a command that never returns, spending quota, on a machine somebody has
 // to go and find. It cannot happen against the real API, and it costs one
 // comparison to make it impossible.
-func TestANonAdvancingPageTokenStopsTheWalk(t *testing.T) {
+//
+// Stopping was the whole of this test until m4-07, and stopping is only half
+// the job. Every other way a walk ends early is either the caller's own doing,
+// which is not truncation, or a request failure, which exits non-zero. This one
+// ended short with no error at exit zero, which is a truncated result reported
+// as complete: the invariant m4-07 owns, produced by this repository's own
+// defence against a far end that will not paginate.
+//
+// The rows already fetched are still yielded. They were real, and a partial
+// answer with a non-zero exit is honest where a partial answer with a zero exit
+// is not.
+func TestANonAdvancingPageTokenStopsTheWalkAndSaysSo(t *testing.T) {
 	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"nextPageToken": "stuck", "messages": [{"name": "spaces/AAA/messages/m"}]}`)
 	})
 
-	got, err := collect(r.client.Messages(context.Background(), ListMessagesRequest{Space: "spaces/AAA"}))
-	if err != nil {
-		t.Fatalf("Messages: %v", err)
+	var got []Message
+	var err error
+	for message, e := range r.client.Messages(context.Background(), ListMessagesRequest{Space: "spaces/AAA"}) {
+		if e != nil {
+			err = e
+			break
+		}
+		got = append(got, message)
+	}
+
+	if err == nil {
+		t.Fatal("a walk that stopped early reported nothing, so it is indistinguishable from a complete one")
+	}
+	if !errors.Is(err, ErrTruncated) {
+		t.Errorf("the failure is not ErrTruncated: %v", err)
+	}
+	if got := output.ExitCodeOf(err); got == output.ExitOK {
+		t.Errorf("a truncated list exited %d, which a script reads as success", got)
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Errorf("the failure does not say the result is short:\n%v", err)
 	}
 
 	// Two pages: the first issues "stuck", the second is asked for with it and
-	// returns it again, which is where the walk gives up.
+	// returns it again, which is where the walk gives up. Both pages' rows are
+	// kept.
 	if len(got) != 2 {
 		t.Errorf("got %d messages from a server stuck on one token, want 2", len(got))
 	}
@@ -539,5 +571,137 @@ func TestAnEmptyPageIsNotTheEndOfTheWalk(t *testing.T) {
 	}
 	if pages.Load() != 2 {
 		t.Errorf("made %d requests, want 2", pages.Load())
+	}
+}
+
+// TestEveryWayAListEndsIsEitherCompleteOrSaysItIsNot.
+//
+// The m4-07 enumeration, as a table, because this failure is silent by nature
+// and the thing that makes it silent is a case nobody thought to check. A job
+// that reads fifty messages as though they were the whole conversation makes
+// its decisions on a subset and reports success, and nothing downstream can
+// tell.
+//
+// The rule the table encodes: a walk that ended because the caller said so is
+// complete, and a walk that ended for any other reason says it did.
+func TestEveryWayAListEndsIsEitherCompleteOrSaysItIsNot(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		limit     int
+		handler   func(page int, w http.ResponseWriter)
+		wantRows  int
+		truncated bool
+	}{
+		{
+			name:  "the last page had no token",
+			limit: 0,
+			handler: func(_ int, w http.ResponseWriter) {
+				_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/a"}]}`)
+			},
+			wantRows: 1,
+		},
+		{
+			// The caller asked for two and got two. Nothing was cut short: a
+			// limit is an instruction, not an interruption, and marking it
+			// truncated would make the flag meaningless by firing on the
+			// commonest possible invocation.
+			name:  "the limit was reached",
+			limit: 2,
+			handler: func(_ int, w http.ResponseWriter) {
+				_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/a"},{"name":"spaces/AAA/messages/b"}],"nextPageToken":"more"}`)
+			},
+			wantRows: 2,
+		},
+		{
+			name:  "an error on the second page",
+			limit: 0,
+			handler: func(page int, w http.ResponseWriter) {
+				if page == 1 {
+					_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/a"}],"nextPageToken":"two"}`)
+					return
+				}
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = fmt.Fprint(w, `{"error":{"code":403,"status":"PERMISSION_DENIED","message":"nope"}}`)
+			},
+			wantRows:  1,
+			truncated: true,
+		},
+		{
+			name:  "the server would not advance its token",
+			limit: 0,
+			handler: func(_ int, w http.ResponseWriter) {
+				_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/a"}],"nextPageToken":"stuck"}`)
+			},
+			wantRows:  2,
+			truncated: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var page int
+			var mu sync.Mutex
+			r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+				mu.Lock()
+				page++
+				n := page
+				mu.Unlock()
+				tc.handler(n, w)
+			})
+
+			var rows int
+			var failure error
+			for _, err := range r.client.Messages(context.Background(), ListMessagesRequest{
+				Space: "spaces/AAAATestSpace",
+				Limit: tc.limit,
+			}) {
+				if err != nil {
+					failure = err
+					break
+				}
+				rows++
+			}
+
+			if rows != tc.wantRows {
+				t.Errorf("got %d rows, want %d", rows, tc.wantRows)
+			}
+
+			// The whole point: a caller checking the exit code alone must not be
+			// able to mistake one for the other.
+			exit := output.ExitOK
+			if failure != nil {
+				exit = output.ExitCodeOf(failure)
+			}
+			if tc.truncated && exit == output.ExitOK {
+				t.Errorf("a truncated list exited %d, which a script reads as the whole answer", exit)
+			}
+			if !tc.truncated && failure != nil {
+				t.Errorf("a complete list reported %v", failure)
+			}
+		})
+	}
+}
+
+// TestACallerThatStopsRangingIsNotATruncation.
+//
+// The fifth way out, and the one that cannot be tested from the table above,
+// because it is the consumer's decision rather than the producer's. Breaking
+// out of a range is how `--limit` is implemented one layer up and how a caller
+// who has seen enough stops, and neither is a failure.
+func TestACallerThatStopsRangingIsNotATruncation(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/a"}],"nextPageToken":"more"}`)
+	})
+
+	for _, err := range r.client.Messages(context.Background(), ListMessagesRequest{Space: "spaces/AAAATestSpace"}) {
+		if err != nil {
+			t.Fatalf("the first page failed: %v", err)
+		}
+		break
+	}
+
+	// One request, and no second one chasing a token nobody wanted. A producer
+	// that kept fetching after the caller left would spend quota on rows that
+	// are thrown away.
+	if r.count() != 1 {
+		t.Errorf("made %d requests after the caller stopped, want 1", r.count())
 	}
 }

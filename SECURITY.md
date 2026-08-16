@@ -665,13 +665,53 @@ read. It is gated more tightly than the CLI, on purpose.
 
 ## Truncation is a security property
 
-A result set cut short is never reported as complete. In `--json` mode a list
-is NDJSON and a truncated one carries an explicit marker plus a token to resume
-from; in text mode it is a structured stderr warning and a non-zero exit. The
-reason this is in the security document rather than only in the output contract
-is that the failure is silent by nature: a nightly job that reads fifty
-messages as the whole conversation makes decisions on a subset and reports
-success, and nothing downstream can tell **(M4)**.
+A result set cut short is never reported as complete. The reason this is in the
+security document rather than only in the output contract is that the failure is
+silent by nature: a nightly job that reads fifty messages as the whole
+conversation makes decisions on a subset and reports success, and nothing
+downstream can tell.
+
+**The signal is the exit code, and it already distinguishes every case.** A walk
+ends for one of five reasons, and they divide cleanly:
+
+| how it ended                     | complete? | exit     |
+| -------------------------------- | --------- | -------- |
+| the last page had no token       | yes       | 0        |
+| `--limit` was reached            | yes       | 0        |
+| the caller stopped ranging       | yes       | 0        |
+| a request failed part way        | **no**    | non-zero |
+| the server would not advance     | **no**    | non-zero |
+
+`TestEveryWayAListEndsIsEitherCompleteOrSaysItIsNot` asserts the table case by
+case, and `TestACallerThatStopsRangingIsNotATruncation` holds the third row,
+which cannot be tested with the others because it is the consumer's decision
+rather than the producer's.
+
+A `--limit` is deliberately not truncation. It is an instruction, and marking it
+would fire the flag on the commonest invocation there is, which is how a flag
+stops being read.
+
+**The last row was the real gap and this repository created it.** `paginate`
+stops when the far end hands back the token it was just given, which exists so a
+server that will not paginate cannot hold a list open forever on a shared quota.
+It stopped silently, at exit 0, with a short result: the defence producing the
+exact failure the claim above forbids. It now yields `chat.ErrTruncated`, and
+the rows already fetched are still delivered, because a partial answer with a
+non-zero exit is honest where a partial answer with a zero exit is not.
+`TestANonAdvancingPageTokenStopsTheWalkAndSaysSo`.
+
+**An empty page is not the end**, which is the other half and was observed
+rather than reasoned: Chat's `messages.list` in ascending order returns a page
+one item short of the `pageSize` asked for, so `pageSize=1` comes back with no
+messages and a token. A pager that stopped there would report a truncated
+result as complete. `TestAnEmptyPageIsNotTheEndOfTheWalk`.
+
+**stdout carries no completeness flag, deliberately.** A list in `--json` is
+NDJSON with no envelope, so a flag would have to be a field on every row, which
+puts a per-list fact on each item, or a trailing summary object, which breaks
+the `jq -r .text` the README tells people to run. A caller that wants a reason
+rather than a number reads the stderr warning, which in `--json` mode is a JSON
+document and now carries a `code` to branch on.
 
 `stdout` is data and nothing else. A failing command writes nothing at all to
 it, so a partially written document can never be parsed as a whole one. Held

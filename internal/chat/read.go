@@ -24,6 +24,8 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+
+	"github.com/kmoneil/spacebar/internal/output"
 )
 
 // maxPageSize is the largest page any of these endpoints will return.
@@ -251,12 +253,25 @@ func paginate[T any](ctx context.Context, c *Client, p pager[T]) iter.Seq2[T, er
 				return
 			}
 
+			if next == "" {
+				return
+			}
+
 			// A token identical to the one just used is a server that would keep
 			// answering forever. It cannot happen against the real API and it
 			// costs one comparison to make it impossible here, because the
 			// alternative is a command that never returns and a quota spent
 			// finding out.
-			if next == "" || next == token {
+			//
+			// Stopping is right and stopping silently is not. Every other way a
+			// walk ends early is either the caller's own doing or an error that
+			// exits non-zero, so a caller checking the exit code cannot be
+			// misled by any of them. This one ends short, with no error, at exit
+			// zero, which is a truncated result reported as complete: this
+			// repository's own defence producing the failure the defence exists
+			// to prevent. So it yields one.
+			if next == token {
+				yield(zero, errTruncated(p.path))
 				return
 			}
 			token = next
@@ -317,6 +332,26 @@ func (p pager[T]) pageSize(seen int) int {
 		return remaining
 	}
 	return maxPageSize
+}
+
+// errTruncated reports a walk that stopped early through no fault of the
+// caller's.
+//
+// An error rather than a warning, because the exit code is what a script checks
+// and this is the one truncation that would otherwise be indistinguishable from
+// success. The rows already written stay: they were real, and a partial answer
+// with a non-zero exit is honest where a partial answer with a zero exit is not.
+func errTruncated(path string) error {
+	return &output.Error{
+		Code: "TRUNCATED",
+		Exit: output.ExitAPI,
+		Message: fmt.Sprintf(
+			"the list of %s stopped early: the server kept handing back the same page token, "+
+				"so the results above are incomplete.\n"+
+				"Nothing was wrong with the request. Try again, and if it repeats, the far end is not paginating.",
+			path),
+		Err: ErrTruncated,
+	}
 }
 
 // failed is an iterator that yields one error and stops.
