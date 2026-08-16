@@ -92,6 +92,15 @@ type ListMessagesRequest struct {
 type ListMembersRequest struct {
 	Space string
 
+	// ShowInvited includes people who have been invited and have not joined.
+	//
+	// The API returns joined memberships only unless this is set, so a State
+	// column can otherwise never say anything but JOINED. Off by default because
+	// that is the API's own default and because an invited person is not in the
+	// space yet, and the flag that turns it on is what makes the difference
+	// visible rather than silent.
+	ShowInvited bool
+
 	// Limit is how many memberships the caller wants. Zero or less means all.
 	Limit int
 }
@@ -155,8 +164,14 @@ func (c *Client) Members(ctx context.Context, req ListMembersRequest) iter.Seq2[
 		return failed[Membership](err)
 	}
 
+	query := url.Values{}
+	if req.ShowInvited {
+		query.Set("showInvited", "true")
+	}
+
 	return paginate(ctx, c, pager[Membership]{
 		path:  req.Space + "/members",
+		query: query,
 		limit: req.Limit,
 		decode: func(payload []byte) ([]Membership, string, error) {
 			var body struct {

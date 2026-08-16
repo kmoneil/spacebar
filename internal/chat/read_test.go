@@ -489,6 +489,120 @@ func TestSpacesAndMembersWalkTheirOwnEndpoints(t *testing.T) {
 	}
 }
 
+// TestAPageDecodesTheFieldsTheAPIActuallySends.
+//
+// The bodies are transcriptions of live responses read on 2026-08-16, trimmed
+// only of fields nothing here reads. They are here because every one of these
+// fields was being dropped by the decoder while the endpoint was sending it,
+// and a struct tag that stops matching is invisible: the field goes quiet
+// rather than failing.
+//
+// The membership pair is the measured one. A person carries an affiliation and
+// an app carries none, which is the API saying that an app is neither inside
+// nor outside an organization.
+func TestAPageDecodesTheFieldsTheAPIActuallySends(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, req *http.Request) {
+		if strings.Contains(req.URL.Path, "/members") {
+			_, _ = fmt.Fprint(w, `{"memberships": [
+				{"name": "spaces/AAA/members/100000000000000000001", "state": "JOINED",
+				 "member": {"name": "users/100000000000000000001", "type": "HUMAN"},
+				 "createTime": "2026-04-17T11:29:51.976760Z", "role": "ROLE_MEMBER",
+				 "affiliation": "INTERNAL"},
+				{"name": "spaces/AAA/members/100000000000000000002", "state": "JOINED",
+				 "member": {"name": "users/100000000000000000002", "type": "BOT"},
+				 "createTime": "2026-04-17T11:29:51.976760Z", "role": "ROLE_MEMBER"}]}`)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"spaces": [
+			{"name": "spaces/AAA", "type": "ROOM", "displayName": "spacebar testing",
+			 "spaceType": "SPACE", "lastActiveTime": "2026-08-14T22:16:10.852351Z"},
+			{"name": "spaces/BBB", "type": "DM", "singleUserBotDm": true,
+			 "spaceType": "DIRECT_MESSAGE", "lastActiveTime": "2026-04-17T11:29:52.558415Z"},
+			{"name": "spaces/CCC", "type": "ROOM", "externalUserAllowed": true,
+			 "spaceType": "DIRECT_MESSAGE", "lastActiveTime": "1970-01-01T00:00:00Z"}]}`)
+	})
+
+	spaces, err := collect(r.client.Spaces(context.Background(), ListSpacesRequest{}))
+	if err != nil {
+		t.Fatalf("Spaces: %v", err)
+	}
+	if len(spaces) != 3 {
+		t.Fatalf("spaces = %+v", spaces)
+	}
+	if spaces[0].SingleUserBotDm {
+		t.Error("a room decoded as a direct message with an app")
+	}
+	if !spaces[1].SingleUserBotDm {
+		t.Error("singleUserBotDm was dropped, which is what makes two direct messages the same row")
+	}
+	if spaces[2].SingleUserBotDm {
+		t.Error("a direct message with a person decoded as one with an app")
+	}
+	if spaces[0].LastActiveTime != "2026-08-14T22:16:10.852351Z" {
+		t.Errorf("last active = %q", spaces[0].LastActiveTime)
+	}
+
+	// The epoch is a value this API sends for a space that has never been
+	// active. Passed through as it arrived rather than blanked, because a
+	// caller that wants to treat it as "never" can, and a caller that is handed
+	// an empty string cannot tell it from a field that was not returned.
+	if spaces[2].LastActiveTime != "1970-01-01T00:00:00Z" {
+		t.Errorf("last active = %q, want the epoch the API sent", spaces[2].LastActiveTime)
+	}
+
+	members, err := collect(r.client.Members(context.Background(), ListMembersRequest{Space: "spaces/AAA"}))
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("members = %+v", members)
+	}
+	if members[0].Affiliation != "INTERNAL" {
+		t.Errorf("affiliation = %q, want the value the API sent", members[0].Affiliation)
+	}
+	if members[1].Affiliation != "" {
+		t.Errorf("an app's membership was given an affiliation of %q; the API sends none",
+			members[1].Affiliation)
+	}
+	if members[0].CreateTime == "" {
+		t.Error("createTime was dropped")
+	}
+}
+
+// TestInvitedMembersAreAskedForOnlyWhenTheyAreWanted.
+//
+// The API returns joined memberships unless showInvited is set, so the
+// parameter is the whole difference between "who is in this space" and "who is
+// in this space or has been asked". It is off by default because that is the
+// API's own default, and a request that carried it always would be answering a
+// different question from the one the command documents.
+func TestInvitedMembersAreAskedForOnlyWhenTheyAreWanted(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"memberships": []}`)
+	})
+
+	if _, err := collect(r.client.Members(context.Background(), ListMembersRequest{Space: "spaces/AAA"})); err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+	if _, err := collect(r.client.Members(context.Background(), ListMembersRequest{
+		Space:       "spaces/AAA",
+		ShowInvited: true,
+	})); err != nil {
+		t.Fatalf("Members --show-invited: %v", err)
+	}
+
+	paths := r.paths()
+	if len(paths) != 2 {
+		t.Fatalf("paths = %q", paths)
+	}
+	if strings.Contains(paths[0], "showInvited") {
+		t.Errorf("the default request asked for invited members: %s", paths[0])
+	}
+	if !strings.Contains(paths[1], "showInvited=true") {
+		t.Errorf("--show-invited did not reach the request: %s", paths[1])
+	}
+}
+
 // TestGetReadsOneResourceAndChecksItsNameFirst.
 func TestGetReadsOneResourceAndChecksItsNameFirst(t *testing.T) {
 	r := newReader(t, func(w http.ResponseWriter, req *http.Request) {

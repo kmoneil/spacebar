@@ -33,17 +33,40 @@ type spaceRow struct {
 	Name        string `json:"name"`
 	SpaceType   string `json:"space_type,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
+
+	// SingleUserBotDm is what tells a direct message with an app from one with a
+	// person. Both have no display name, so without it they are the same row.
+	SingleUserBotDm bool   `json:"single_user_bot_dm,omitempty"`
+	LastActiveTime  string `json:"last_active_time,omitempty"`
 }
 
+// botDM is what the fourth column of `spaces list` says for a direct message
+// with an app.
+//
+// A word rather than "true", because the column is read by a person scanning a
+// list and by an awk one-liner, and both are served better by a value that says
+// what it means. Empty for everything else, which is the wire's own meaning:
+// the API omits the field rather than sending false.
+const botDM = "bot"
+
 func rowForSpace(s chat.Space) (any, []string) {
+	marker := ""
+	if s.SingleUserBotDm {
+		marker = botDM
+	}
+
 	return spaceRow{
-			Name:        s.Name,
-			SpaceType:   s.SpaceType,
-			DisplayName: s.DisplayName,
+			Name:            s.Name,
+			SpaceType:       s.SpaceType,
+			DisplayName:     s.DisplayName,
+			SingleUserBotDm: s.SingleUserBotDm,
+			LastActiveTime:  s.LastActiveTime,
 		}, []string{
 			s.Name,
 			s.SpaceType,
 			s.DisplayName,
+			marker,
+			s.LastActiveTime,
 		}
 }
 
@@ -55,20 +78,46 @@ type memberRow struct {
 
 	// Member is users/NNN, which is the stable identifier. DisplayName is not:
 	// it is chosen by the account holder, is not unique, and is untrusted text.
+	//
+	// The API has never sent one. It is kept as a field, with omitempty, so that
+	// a program parsing this gets it for free on the day Google starts, and so
+	// that dropping it from the text row is a change to what a person reads
+	// rather than to what a script can select.
 	Member      string `json:"member,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	MemberType  string `json:"member_type,omitempty"`
+
+	// Affiliation is INTERNAL or EXTERNAL, and absent for an app.
+	Affiliation string `json:"affiliation,omitempty"`
+
+	// CreateTime is when they joined. In the JSON and not in a column, because
+	// "when did they join" is a different question from "who is in here" and the
+	// row is already as wide as a person can scan.
+	CreateTime string `json:"create_time,omitempty"`
 }
 
 func rowForMember(m chat.Membership) (any, []string) {
-	row := memberRow{Name: m.Name, State: m.State, Role: m.Role}
+	row := memberRow{
+		Name:        m.Name,
+		State:       m.State,
+		Role:        m.Role,
+		Affiliation: m.Affiliation,
+		CreateTime:  m.CreateTime,
+	}
 	if m.Member != nil {
 		row.Member = m.Member.Name
 		row.DisplayName = m.Member.DisplayName
 		row.MemberType = m.Member.Type
 	}
 
-	return row, []string{row.Member, row.DisplayName, m.State, m.Role}
+	// The type column is where the display name used to be, and the trade is
+	// deliberate. Measured on 2026-08-16 across seven memberships in five
+	// spaces, and against the sender of every message read the same day, a
+	// user-authenticated read returns {"name": "users/NNN", "type": "HUMAN"} and
+	// nothing else, so that column was structurally blank. HUMAN against BOT is
+	// the fact it was standing in front of: it tells a person from an app, which
+	// is the question a blank name was leaving unanswered.
+	return row, []string{row.Member, row.MemberType, m.State, m.Role, m.Affiliation}
 }
 
 func newSpacesCmd(opts *Options) *cobra.Command {
@@ -105,9 +154,15 @@ func newSpacesListCmd(opts *Options) *cobra.Command {
   ` + meta.AppName + ` spaces list --limit 0            # every one
   ` + meta.AppName + ` spaces list --json | jq -r .name
 
-Columns are name, type, and display name, separated by a tab. A direct message
+Columns are name, type, display name, whether it is a direct message with an
+app, and when the space was last active, separated by a tab. A direct message
 and a group chat have no display name of their own, so those rows are blank in
-the last column rather than filled in with a guess about who is in them.`,
+the third column rather than filled in with a guess about who is in them.
+
+The fourth column says "bot" for a direct message with a Chat app and is empty
+for everything else. It is there because without it every direct message is the
+same row: the same blank name, the same DIRECT_MESSAGE, and no way to tell a
+conversation with a colleague from one with an app.`,
 
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -173,11 +228,24 @@ matching is refused rather than guessed at.`,
 			}
 
 			data, _ := rowForSpace(*space)
-			return r.Result(data, output.Fields{
+			fields := output.Fields{
 				{Label: "name", Value: space.Name},
 				{Label: "type", Value: space.SpaceType},
 				{Label: "display name", Value: space.DisplayName},
-			})
+				{Label: "last active", Value: space.LastActiveTime},
+			}
+
+			// Only when it is true. A line saying a room is not a direct
+			// message with an app answers a question nobody reading a room
+			// asked, and unlike a list this output has no columns to keep
+			// aligned.
+			if space.SingleUserBotDm {
+				fields = append(fields, output.Field{
+					Label: "direct message with",
+					Value: "a Chat app, not a person",
+				})
+			}
+			return r.Result(data, fields)
 		},
 	}
 
@@ -187,8 +255,9 @@ matching is refused rather than guessed at.`,
 
 func newSpacesMembersCmd(opts *Options) *cobra.Command {
 	var (
-		limit   int
-		refresh bool
+		limit       int
+		showInvited bool
+		refresh     bool
 	)
 
 	cmd := &cobra.Command{
@@ -197,20 +266,28 @@ func newSpacesMembersCmd(opts *Options) *cobra.Command {
 		Long: `List who is in a space.
 
   ` + meta.AppName + ` spaces members spaces/AAAAAAA
+  ` + meta.AppName + ` spaces members spaces/AAAAAAA --show-invited
 
-Columns are the member's resource name, their display name, their state, and
-their role. State is worth reading: an invited member is not a member yet, and
-a list that showed both the same way would answer the question wrongly.
+Columns are the member's resource name, whether they are a person or an app,
+their state, their role, and their affiliation, separated by a tab.
 
-The display name column is blank, measured against a real space rather than
-read from documentation: this endpoint returns a member as a resource name and
-a type and nothing else. The column is kept rather than removed because it is
-one observation, on one space, of one membership, and a column removed on that
-evidence would have to come back the first time somebody sees a name in it.
+Affiliation is INTERNAL or EXTERNAL: whether they are inside your organization
+or outside it. It is the column to read before posting something you would not
+send outside. An app's membership has no affiliation at all, so that column is
+blank on those rows, and nothing here fills in a value the API did not send.
 
-The resource name is the identifier in any case. A display name is chosen by
-the account holder, is not unique, and is untrusted text that is escaped before
-it reaches a terminal.`,
+There is no display name column. This endpoint returns a member as a resource
+name and a type and nothing else, measured across seven memberships in five
+spaces rather than read from documentation, and the sender of a message comes
+back the same way, so it is how a user-authorized read answers rather than
+something about one space. The resource name is the identifier in any case.
+--json still carries a display_name field, so a caller gets one for free if the
+API ever starts sending it.
+
+By default this lists members who have joined. Somebody who has been invited
+and has not accepted is not returned at all unless --show-invited asks for
+them. A membership held by a Google Group is not returned either, and there is
+no flag for it yet.`,
 
 		Args: exactlyOne("spaces members needs a space.\n  %s spaces members spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -230,13 +307,16 @@ it reaches a terminal.`,
 			}
 
 			return finish(r, opened, stream(r, opened.Transport.Members(cmd.Context(), chat.ListMembersRequest{
-				Space: target,
-				Limit: limit,
+				Space:       target,
+				ShowInvited: showInvited,
+				Limit:       limit,
 			}), rowForMember))
 		},
 	}
 
-	cmd.Flags().IntVar(&limit, "limit", defaultLimit, limitHelp)
+	f := cmd.Flags()
+	f.IntVar(&limit, "limit", defaultLimit, limitHelp)
+	f.BoolVar(&showInvited, "show-invited", false, "include people who were invited and have not joined")
 	addRefreshFlag(cmd, &refresh)
 	return cmd
 }

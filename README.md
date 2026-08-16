@@ -21,8 +21,9 @@ human in the loop, through `--json` and through a built-in MCP server.
 webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
-well. `auth`, `version`, `licenses` and `completion` work. Still missing:
-`tail`, `watch`, editing, reacting, attachments, aliases, and the MCP server.
+well, as do `tail` and the `alias` group. `auth`, `version`, `licenses` and
+`completion` work. Still missing: `watch`, editing, reacting, attachments, and
+the MCP server.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -312,11 +313,12 @@ apply to you. A client with an Internal user type is not subject to it at all.
 On a profile authorized as you, rather than a webhook:
 
 ```sh
-spacebar spaces list                                  # name, type, display name
+spacebar spaces list                                  # name, type, name, bot, last active
 spacebar spaces list --limit 0                        # every one
 spacebar spaces get spaces/AAAAAAA
 spacebar spaces get 'Ops'                             # or by display name
-spacebar spaces members spaces/AAAAAAA                # who, state, role
+spacebar spaces members spaces/AAAAAAA                # who, kind, state, role, affiliation
+spacebar spaces members spaces/AAAAAAA --show-invited # and anybody asked but not joined
 
 spacebar messages list spaces/AAAAAAA                 # newest 25
 spacebar messages list spaces/AAAAAAA --limit 100
@@ -419,10 +421,30 @@ different command still to come.
 
 **`spaces members` identifies people by resource name, not by display name.**
 The Chat API returns a member as `users/NNN` and a type, with no name attached,
-so the display-name column is blank. That is the API rather than a gap here,
-and it is worth knowing before you build something that expects a name in it.
-`users/NNN` is the stable identifier in any case; a display name is chosen by
-the account holder and is not unique.
+and the sender of a message comes back the same way. That is how a
+user-authorized read answers rather than a gap here, and it is worth knowing
+before you build something that expects a name. `users/NNN` is the stable
+identifier in any case; a display name is chosen by the account holder and is
+not unique. `--json` carries a `display_name` field regardless, so a caller gets
+one for free if the API ever starts sending it.
+
+**The affiliation column says who is outside your organization.** It is
+`INTERNAL` or `EXTERNAL`, and it is the column to read before posting something
+that should not leave the company. An app's membership carries no affiliation at
+all, so that column is blank on those rows, and nothing here fills in a value the
+API did not send.
+
+**`spaces members` lists people who have joined.** Somebody who was invited and
+has not accepted is not returned at all unless `--show-invited` asks for them,
+which is the API's own default rather than a choice made here. A membership held
+by a Google Group is not returned either and has no flag yet, so on a space whose
+access comes through a group, this list is not the whole answer to "who can see
+what I post here".
+
+**A direct message with an app is marked.** Every direct message has a blank
+display name, so without the fourth column a conversation with a colleague and a
+conversation with a bot are the same row. `--json` carries it as
+`single_user_bot_dm`, present only when true.
 
 **A list streams.** Pages are fetched as you consume them, so `--json` is NDJSON
 and the first object arrives before the last page has been requested:

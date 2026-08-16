@@ -105,6 +105,28 @@ type Space struct {
 	// is deliberately absent: the API deprecated it, and carrying both would
 	// mean deciding which one to believe.
 	SpaceType string `json:"spaceType,omitempty"`
+
+	// SingleUserBotDm is true when a direct message is with a Chat app rather
+	// than with a person.
+	//
+	// Without it every direct message renders as the same row, because a DM has
+	// no display name of its own. That is not cosmetic: m4-01 recorded that
+	// every direct message on the test account was with a bot, and half of them
+	// were with people, and the claim survived because `spaces list` printed
+	// four identical rows. A list whose rows cannot be told apart is a list
+	// nobody can check a belief against.
+	//
+	// Absent means false, which is the wire's own meaning rather than an
+	// assumption: the API omits the field for a room and for a direct message
+	// with a person.
+	SingleUserBotDm bool `json:"singleUserBotDm,omitempty"`
+
+	// LastActiveTime is when the space last had activity.
+	//
+	// A string like every other time in this file. One direct message on the
+	// test account answers 1970-01-01T00:00:00Z, which is a value the API sends
+	// and not a decode that went wrong, so it is passed through as it arrived.
+	LastActiveTime string `json:"lastActiveTime,omitempty"`
 }
 
 // Membership is somebody's place in a space.
@@ -131,7 +153,30 @@ type Membership struct {
 	// GroupMember is carried through rather than modelled, for the reason
 	// CardsV2 is: nothing in this tool reads inside it yet, and a struct written
 	// now would be a guess reviewed as though it were knowledge.
+	//
+	// It cannot arrive at all today, because the API sends a group membership
+	// only when the request sets showGroups and nothing here sets it. That gap
+	// is m4-09's, and it is a gap rather than an oversight: the shape cannot be
+	// observed from any space this account can reach.
 	GroupMember json.RawMessage `json:"groupMember,omitempty"`
+
+	// Affiliation is INTERNAL or EXTERNAL: whether this member is inside the
+	// organization or outside it.
+	//
+	// The security-relevant field on this endpoint, for exactly the population
+	// this tool is built for. Somebody in a locked-down Workspace org asking
+	// "who can see what I am about to post here" is asking this question.
+	//
+	// It is absent on an app's membership, measured across seven memberships in
+	// five spaces on 2026-08-16: every HUMAN carried INTERNAL and the one BOT
+	// carried nothing. That is structural rather than a sampling accident, since
+	// an app is neither inside nor outside an organization. Absent renders as
+	// absent, and nothing anywhere fills in INTERNAL for a membership the API
+	// declined to label.
+	//
+	// EXTERNAL has not been observed from this account, so the value is passed
+	// through unaltered and no code here decides what it means.
+	Affiliation string `json:"affiliation,omitempty"`
 
 	CreateTime string `json:"createTime,omitempty"`
 }

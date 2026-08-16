@@ -764,7 +764,12 @@ Stated plainly, because a threat model that only lists wins is not one.
 
 It can lie about the data: wrong messages, wrong senders, a display name that
 impersonates somebody else, since Chat display names are not unique and this
-tool prints what the API returns. It can withhold messages; a page that claims to be
+tool prints what the API returns. That now includes a membership's
+`affiliation`, which `spaces members` prints as INTERNAL or EXTERNAL and which
+somebody reads before deciding whether a space is safe to post in. It is the
+far end's claim, printed unaltered and never filled in here when it is absent,
+and it is worth exactly as much as everything else on this list. It can withhold
+messages; a page that claims to be
 the last one is believed, because there is no second source to check it
 against. It can make requests slow or expensive, bounded by four things and
 nothing else: `--timeout`, which bounds one attempt rather than the command;
