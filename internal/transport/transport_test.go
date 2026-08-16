@@ -350,14 +350,16 @@ func TestARefusalForAnUnrecognizedTransportStillReadsAsASentence(t *testing.T) {
 // could do it and no default scope permits it, which is a safe state only for
 // as long as no command requires it: the moment one does, the command 403s on
 // every profile this tool can create.
-var notYetGranted = map[Capability]string{
-	// chat.spaces is what grants spaces:findDirectMessage, and it also permits
-	// creating spaces, so it is not asked for until a command needs it.
-	// Milestone 4 adds the resolver, and it has to widen DefaultScopes in the
-	// same change or this stops being a to-do and becomes the members bug
-	// again.
-	CanResolveDM: "M4 adds the resolver; DefaultScopes must gain chat.spaces with it",
-}
+// Empty on purpose, and that is the state to keep it in. The one entry it ever
+// had said chat.spaces was needed for spaces:findDirectMessage and that
+// Milestone 4 would have to widen DefaultScopes for it. The m4-01 recon probed
+// the live endpoint and got 200 on chat.spaces.readonly, so the entry was
+// describing a limitation that did not exist, and DM resolution would have been
+// refused at exit 5 on every profile this tool creates.
+//
+// An entry here is a claim about the API, so it needs the probe that supports
+// it written down beside it, not a reading of the reference.
+var notYetGranted = map[Capability]string{}
 
 // TestTheDefaultGrantCoversWhatTheMatrixClaims is the test that was missing.
 //

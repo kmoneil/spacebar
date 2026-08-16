@@ -191,9 +191,14 @@ var SendOnlyScopes = []string{ScopeSendOnly}
 //
 // Send, edit and delete messages, list spaces so that a target can be resolved
 // by name, and read who is in one. Deliberately not chat.spaces, which permits
-// creating spaces and looking up direct messages, because neither is something
-// this tool does yet and a scope requested before it is needed is a scope an
-// administrator has to approve for no reason.
+// creating and deleting spaces, because that is not something this tool does
+// and a scope requested before it is needed is a scope an administrator has to
+// approve for no reason.
+//
+// Looking up a direct message was listed here as a second thing chat.spaces was
+// for, and it is not: spaces:findDirectMessage answers on chat.spaces.readonly,
+// measured against the live API on 2026-08-16. The claim came from the
+// reference and would have cost a scope nobody needed.
 //
 // chat.memberships.readonly is here because `spaces members` needs it and was
 // shipped without it: the command 403'd on every profile this tool could

@@ -108,8 +108,9 @@ not.
 Two scopes are deliberately **not** requested, and both of them are the writable
 half of one that is:
 
-- `chat.spaces` permits creating spaces and looking up direct messages. Nothing
-  in the tool needs it yet.
+- `chat.spaces` permits creating and deleting spaces. Nothing in the tool does
+  that. Finding an existing direct message does **not** need it: that reads on
+  `chat.spaces.readonly`, which is in the table above.
 - `chat.memberships` permits adding and removing people from a space. Reading a
   membership list is the `.readonly` scope in the table above, and this tool
   never changes who is in a space.

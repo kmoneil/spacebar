@@ -188,15 +188,27 @@ func CapabilitiesFor(kind config.Transport) Capabilities {
 // one no scope gates, which is the honest answer for CanSendCards: no scope
 // grants it, because what it needs is app authentication rather than permission.
 var grants = map[Capability][]string{
-	CanSend:        {auth.ScopeSendOnly, auth.ScopeMessages},
-	CanRead:        {auth.ScopeReadOnly, auth.ScopeMessages},
-	CanEdit:        {auth.ScopeMessages},
-	CanDelete:      {auth.ScopeMessages},
-	CanReact:       {auth.ScopeReactions, auth.ScopeMessages},
-	CanThread:      {auth.ScopeSendOnly, auth.ScopeMessages},
-	CanUpload:      {auth.ScopeSendOnly, auth.ScopeMessages},
-	CanListSpaces:  {auth.ScopeSpacesRO, auth.ScopeSpaces},
-	CanResolveDM:   {auth.ScopeSpaces},
+	CanSend:       {auth.ScopeSendOnly, auth.ScopeMessages},
+	CanRead:       {auth.ScopeReadOnly, auth.ScopeMessages},
+	CanEdit:       {auth.ScopeMessages},
+	CanDelete:     {auth.ScopeMessages},
+	CanReact:      {auth.ScopeReactions, auth.ScopeMessages},
+	CanThread:     {auth.ScopeSendOnly, auth.ScopeMessages},
+	CanUpload:     {auth.ScopeSendOnly, auth.ScopeMessages},
+	CanListSpaces: {auth.ScopeSpacesRO, auth.ScopeSpaces},
+	// spaces:findDirectMessage answers on chat.spaces.readonly. Measured against
+	// the live API on 2026-08-16, not read from the reference: with a token
+	// holding chat.messages, chat.spaces.readonly and chat.memberships.readonly
+	// and not chat.spaces, the endpoint returned 200 and the DM's resource name.
+	//
+	// It was {ScopeSpaces} until that probe, which would have refused DM
+	// resolution at exit 5 on every profile this tool creates, for want of a
+	// scope the operation does not need. That is the `spaces members` bug
+	// inverted: there the capability was claimed and ungranted, here the grant
+	// was real and the capability said otherwise. Both refuse work that would
+	// have succeeded, and neither is visible to a test that answers its own
+	// requests.
+	CanResolveDM:   {auth.ScopeSpacesRO, auth.ScopeSpaces},
 	CanReadMembers: {auth.ScopeMembers},
 }
 

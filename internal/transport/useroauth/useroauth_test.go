@@ -86,9 +86,9 @@ func wiredWithScopes(t *testing.T, scopes []string, handler http.HandlerFunc) (*
 //
 // Against the scopes an ordinary authorization asks for, rather than against the
 // bare matrix, because the matrix is a ceiling and what a profile can do is the
-// ceiling narrowed by the grant. CanResolveDM is absent from the list for that
-// reason: the matrix claims it, chat.spaces is what grants it, and the default
-// set deliberately does not ask for it until a command needs one.
+// ceiling narrowed by the grant. Every row is listed now, including CanResolveDM,
+// which was left out while the tree believed spaces:findDirectMessage needed
+// chat.spaces. It answers on chat.spaces.readonly.
 func TestItCanDoEverythingTheWebhookCannot(t *testing.T) {
 	caps := transport.ScopedCapabilities(config.TransportUserOAuth, auth.DefaultScopes)
 
@@ -102,6 +102,7 @@ func TestItCanDoEverythingTheWebhookCannot(t *testing.T) {
 		transport.CanUpload,
 		transport.CanListSpaces,
 		transport.CanReadMembers,
+		transport.CanResolveDM,
 	} {
 		if !caps.Has(want) {
 			t.Errorf("a user-OAuth profile cannot %v, and it should be able to", want)

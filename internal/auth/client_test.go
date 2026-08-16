@@ -246,9 +246,13 @@ func TestSendOnlyIsExactlyOneScope(t *testing.T) {
 	}
 
 	// The default set is narrow too, and deliberately excludes chat.spaces,
-	// which permits creating spaces and looking up direct messages. Neither is
-	// something this tool does yet, and a scope requested before it is needed
-	// is a scope an administrator has to approve for no reason.
+	// which permits creating and deleting spaces. That is not something this
+	// tool does, and a scope requested before it is needed is a scope an
+	// administrator has to approve for no reason.
+	//
+	// Not because of direct messages. spaces:findDirectMessage answers on
+	// chat.spaces.readonly, which the m4-01 recon measured, so nothing about
+	// resolving a DM needs this scope.
 	//
 	// The narrowness is a floor and not a target. A scope that a shipped command
 	// needs belongs here whatever it costs in approval, which is the lesson of
