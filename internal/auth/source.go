@@ -17,6 +17,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -43,6 +44,21 @@ type Source struct {
 	store   *Store
 	profile string
 	src     oauth2.TokenSource
+
+	// mu guards held and the write-back that goes with it.
+	//
+	// One command in one goroutine was the only caller until the MCP server,
+	// which serves tool calls concurrently over one profile: several of them
+	// ask for an Authorization header at once, and each one that refreshes
+	// rewrites this token and stores it. x/oauth2 serializes the refresh
+	// itself, so the value arriving here is consistent; what is not is the
+	// read-modify-write below, which is this package's own.
+	//
+	// Proven rather than assumed. TestConcurrentUseIsSafe fails under -race
+	// without this, on persist reading held while another goroutine writes it,
+	// and the visible damage is worse than a torn string: two goroutines write
+	// the keyring and the token that survives is whichever finished last.
+	mu sync.Mutex
 
 	// held is what is currently stored, and what a rotation is compared
 	// against.
@@ -113,7 +129,7 @@ func (s *Source) Authorization(context.Context) (string, error) {
 // and when it has not the 401 was about something else and a second identical
 // request would be a request made to learn something already known.
 func (s *Source) Refresh(context.Context) (bool, error) {
-	before := s.held.AccessToken
+	before := s.Token().AccessToken
 
 	access, err := s.AccessToken()
 	if err != nil {
@@ -124,7 +140,7 @@ func (s *Source) Refresh(context.Context) (bool, error) {
 
 // Warnings is what the caller prints, once, per SPEC.md §6.7.
 func (s *Source) Warnings() []string {
-	warning, _ := Assess(s.held, s.now())
+	warning, _ := Assess(s.Token(), s.now())
 	if warning == "" {
 		return nil
 	}
@@ -138,6 +154,9 @@ func (s *Source) Warnings() []string {
 // that runs inside the access token's hour and refreshes nothing, and a keyring
 // write per command is a keychain prompt per command on macOS.
 func (s *Source) persist(fresh *oauth2.Token) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	changed := fresh.AccessToken != s.held.AccessToken ||
 		(fresh.RefreshToken != "" && fresh.RefreshToken != s.held.RefreshToken)
 
@@ -177,7 +196,17 @@ func (s *Source) persist(fresh *oauth2.Token) {
 
 // Token is what is currently held, for a caller that wants to report on it
 // rather than use it.
-func (s *Source) Token() *Token { return s.held }
+//
+// A copy, not the pointer. The caller would otherwise be handed the value
+// persist mutates, so reading a field off it while another tool call refreshes
+// is a race in the caller's code that no amount of care here would prevent.
+func (s *Source) Token() *Token {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	held := *s.held
+	return &held
+}
 
 // refreshErr turns a refresh failure into ours.
 //

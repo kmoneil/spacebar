@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/zalando/go-keyring"
 
@@ -63,8 +64,16 @@ type backend interface {
 
 // Store reads and writes secrets, preferring the OS keyring.
 type Store struct {
-	keyring  backend
-	file     backend
+	keyring backend
+	file    backend
+
+	// mu guards warnings, which several goroutines can append to at once.
+	//
+	// One command in one goroutine was the only caller until the MCP server,
+	// which serves tool calls concurrently over one profile, so two failed
+	// keyring writes could append to this slice at the same time. The keyring
+	// and file backends are the OS's problem and are safe; this slice is ours.
+	mu       sync.Mutex
 	warnings []string
 }
 
@@ -88,7 +97,11 @@ func New() (*Store, error) {
 // process stream: a warning built here and printed there is escaped by the one
 // package that knows how, and this package cannot quietly become a second
 // place that writes to a terminal.
-func (s *Store) Warnings() []string { return s.warnings }
+func (s *Store) Warnings() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.warnings...)
+}
 
 // AddWarnings folds warnings from elsewhere into this store's list.
 //
@@ -107,6 +120,9 @@ func (s *Store) AddWarnings(warnings []string) {
 
 func (s *Store) warn(format string, a ...any) {
 	msg := fmt.Sprintf(format, a...)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if !strings.Contains(strings.Join(s.warnings, "\n"), msg) {
 		s.warnings = append(s.warnings, msg)
 	}

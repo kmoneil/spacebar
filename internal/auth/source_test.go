@@ -18,6 +18,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -346,5 +347,48 @@ func TestPersistNeverBlanksTheRefreshToken(t *testing.T) {
 	}
 	if stored.AccessToken != "ya29.new" {
 		t.Errorf("the access token was not updated: %q", stored.AccessToken)
+	}
+}
+
+// TestConcurrentUseIsSafe.
+//
+// The CLI runs one command in one goroutine, so nothing here was ever called
+// twice at once. The MCP server is the first caller that can: a model may have
+// several tool calls in flight, each asking for an Authorization header on the
+// same profile.
+//
+// Under -race this fails without the mutex. The values it would corrupt are the
+// held token and the store's warnings, and the visible failure is worse than a
+// wrong string: two goroutines can write the keyring at once, and the token that
+// lands is whichever finished last.
+func TestConcurrentUseIsSafe(t *testing.T) {
+	s := newAuthServer(t)
+	s.answer(http.StatusOK, `{"access_token":"ya29.new","refresh_token":"1//rotated",`+
+		`"token_type":"Bearer","expires_in":3599}`)
+
+	store, _ := memoryStore()
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	source := sourceAgainst(t, s, store, expired(now, 2*24*time.Hour), now)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := source.Authorization(context.Background()); err != nil {
+				t.Errorf("Authorization: %v", err)
+			}
+			_ = source.Warnings()
+			_ = source.Token()
+		}()
+	}
+	wg.Wait()
+
+	stored, err := store.LoadToken("work")
+	if err != nil {
+		t.Fatalf("nothing was stored: %v", err)
+	}
+	if stored.AccessToken != "ya29.new" {
+		t.Errorf("the stored access token is %q", stored.AccessToken)
 	}
 }
