@@ -113,6 +113,9 @@ func runAuthLogin(cmd *cobra.Command, opts *Options, sendOnly bool) error {
 	if err != nil {
 		return err
 	}
+	if err := checkAuthorizable(cfg, name, "auth login"); err != nil {
+		return err
+	}
 
 	store, err := auth.New()
 	if err != nil {
@@ -168,6 +171,40 @@ func loginProfileName(cfg *config.Config, flagValue string) (string, error) {
 	}
 	return "", output.Usagef("which profile should this authorize?\n"+
 		"  %s auth login --profile work", meta.AppName)
+}
+
+// checkAuthorizable refuses a profile whose transport cannot hold an
+// authorization.
+//
+// Every command in this group assumed one that could, and none of them said so,
+// which the Milestone 3 exit sweep found by running them against a webhook
+// profile. Each was wrong in its own way and none of them failed:
+// `auth setup` filed an OAuth client and secret against a profile whose
+// transport is webhook and then printed "now authorize it";
+// `auth login` reported "no OAuth client is configured", which sent somebody to
+// spend five minutes in the Cloud console on a reason that was not the reason;
+// and `auth logout` reported "logged out" for a profile that held nothing to
+// forget, while the credential a person means when they say that, the webhook
+// URL, stayed exactly where it was.
+//
+// A name that is not configured is not refused. That is the ordinary way a
+// user-OAuth profile comes into existence: `auth setup --profile work` on a
+// fresh machine creates it, and demanding it exist first would refuse the
+// invocation the documentation tells people to type.
+func checkAuthorizable(cfg *config.Config, name, command string) error {
+	profile, configured := cfg.Profiles[name]
+	if !configured || profile.Transport == config.TransportUserOAuth {
+		return nil
+	}
+
+	return output.Errorf("UNSUPPORTED", output.ExitUnsupported,
+		"%q needs a profile that can hold an authorization, and profile %q is an incoming webhook.\n"+
+			"A webhook is a URL rather than a token: it is issued for one space, it authenticates by "+
+			"being secret, and there is nothing about it to log in to or out of.\n"+
+			"To authorize as yourself, use a new profile:\n"+
+			"  %s auth setup --profile NAME < client_secret.json\n"+
+			"To remove this one and the URL behind it: %s profile rm %s",
+		command, name, meta.AppName, meta.AppName, name)
 }
 
 // storeAuthorization writes the token and records the profile it belongs to.
@@ -357,6 +394,9 @@ func runAuthLogout(cmd *cobra.Command, opts *Options) error {
 	if err != nil {
 		return err
 	}
+	if err := checkAuthorizable(cfg, name, "auth logout"); err != nil {
+		return err
+	}
 
 	store, err := auth.New()
 	if err != nil {
@@ -366,6 +406,11 @@ func runAuthLogout(cmd *cobra.Command, opts *Options) error {
 	// A token that was not there is not a failure. The profile is unauthorized
 	// either way, which is what was asked for, and reporting "there was nothing
 	// to delete" would make an interrupted logout impossible to finish.
+	//
+	// That reasoning holds for a profile that could have held one, which is why
+	// the transport is checked above rather than folded in here. "There was no
+	// token" and "this kind of profile never has one" look identical from this
+	// line and mean different things to the person who typed it.
 	_ = store.DeleteToken(name)
 	r.Warnings(store.Warnings())
 
@@ -375,18 +420,29 @@ func runAuthLogout(cmd *cobra.Command, opts *Options) error {
 
 // noClientErr is the message SPEC.md §6.1 specifies for a build with no client.
 //
-// It deliberately does not name `auth setup`, which the spec's wording does,
-// because that command does not exist in this build and a message sending
-// somebody from one dead end to another is worse than the first dead end. The
-// milestone that adds it puts the pointer back.
+// It named no command until the Milestone 3 exit sweep, on the grounds that
+// `auth setup` did not exist and sending somebody from one dead end to another
+// is worse than the first dead end. Milestone 3 added it, and the comment
+// saying otherwise outlived the condition it described, which is how a refusal
+// goes on giving advice from a version of the tool that no longer exists.
+//
+// It names the same two commands, in the same order, as the message
+// internal/profile raises for the same condition, because there were two
+// wordings of one fact and they had already drifted: one sent somebody to the
+// Cloud console with two environment variables, the other to `auth setup`. The
+// environment variables still work and are still documented; they are not the
+// first thing to offer somebody who has just been told there is nothing to
+// authorize against.
 func noClientErr() error {
 	return output.Errorf("NO_CLIENT", output.ExitUsage,
 		"no OAuth client is configured, so there is nothing to authorize against.\n"+
 			"A build from source has none on purpose: a client committed to an open repository is a "+
 			"client every fork uses, spending one quota and showing one consent screen.\n"+
 			"Create one in your own Cloud project, with an Internal user type if your organization "+
-			"allows it, and set %s and %s.",
-		config.Env("CLIENT_ID"), config.Env("CLIENT_SECRET"))
+			"allows it, and store it with:\n"+
+			"  %s auth setup --profile NAME < client_secret.json\n"+
+			"Run '%s auth setup' on its own to see how to create it, or set %s and %s.",
+		meta.AppName, meta.AppName, config.Env("CLIENT_ID"), config.Env("CLIENT_SECRET"))
 }
 
 // scopesFor is what this authorization will ask permission for.
@@ -496,6 +552,9 @@ func runAuthSetup(cmd *cobra.Command, opts *Options) error {
 
 	name, err := loginProfileName(cfg, opts.Profile)
 	if err != nil {
+		return err
+	}
+	if err := checkAuthorizable(cfg, name, "auth setup"); err != nil {
 		return err
 	}
 	client, err := auth.ParseClient(body)

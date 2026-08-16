@@ -17,13 +17,12 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestone 2 of 6 is done, and Milestone 3 is most of the way there.**
-`spacebar send` works over an incoming webhook, with no OAuth, no administrator
-approval, and no Cloud project: give a profile a webhook URL and send. On a
-profile authorized as you, `spaces list`, `spaces get`, `spaces members`,
-`messages list` and `messages get` work as well. `auth`, `version`, `licenses`
-and `completion` work. Still missing: `tail`, `watch`, editing, reacting,
-attachments, aliases, and the MCP server.
+**Milestones 1 to 3 of 6 are done.** `spacebar send` works over an incoming
+webhook, with no OAuth, no administrator approval, and no Cloud project: give a
+profile a webhook URL and send. On a profile authorized as you, `spaces list`,
+`spaces get`, `spaces members`, `messages list` and `messages get` work as
+well. `auth`, `version`, `licenses` and `completion` work. Still missing:
+`tail`, `watch`, editing, reacting, attachments, aliases, and the MCP server.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -48,7 +47,7 @@ The plan, in six milestones:
 | --- | --------------------------------------------------------- | -------- |
 | 1   | Skeleton, licensing, CI gates                             | **done** |
 | 2   | Webhook transport: `send` with no OAuth at all            | **done** |
-| 3   | User OAuth: `auth`, `spaces`, `messages`                  |          |
+| 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
 | 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  |          |
 | 5   | MCP server                                                |          |
 | 6   | Local index and search                                    |          |

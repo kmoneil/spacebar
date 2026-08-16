@@ -23,6 +23,7 @@ import (
 
 	"github.com/kmoneil/spacebar/internal/auth"
 	"github.com/kmoneil/spacebar/internal/config"
+	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 )
 
@@ -203,10 +204,15 @@ func TestAuthLogoutForgetsTheTokenAndKeepsTheProfile(t *testing.T) {
 // TestLoginWithNoClientSaysWhatToDo.
 //
 // The first thing somebody hits on a build from source, where the client is
-// deliberately empty. The message deliberately does not name `auth setup`,
-// which SPEC.md §6.1 words it with, because that command does not exist in this
-// build and sending somebody from one dead end to another is worse than the
-// first.
+// deliberately empty. It named no command until Milestone 3, because
+// `auth setup` did not exist and sending somebody from one dead end to another
+// is worse than the first. This test asserted that absence, so when the command
+// arrived the test went on holding the refusal to the older build's shape,
+// which is how a stale assertion outlives the condition it was written for.
+//
+// It now asserts the opposite, and it asserts both halves: the command that
+// stores a client, and the environment variables, which still work and are
+// still what a scripted install uses.
 func TestLoginWithNoClientSaysWhatToDo(t *testing.T) {
 	isolate(t)
 	t.Setenv(config.Env("CLIENT_ID"), "")
@@ -218,13 +224,15 @@ func TestLoginWithNoClientSaysWhatToDo(t *testing.T) {
 	if got.stdout != "" {
 		t.Errorf("a failing command wrote to stdout: %q", got.stdout)
 	}
-	for _, want := range []string{config.Env("CLIENT_ID"), config.Env("CLIENT_SECRET"), "Internal"} {
+	for _, want := range []string{
+		config.Env("CLIENT_ID"),
+		config.Env("CLIENT_SECRET"),
+		"Internal",
+		meta.AppName + " auth setup --profile NAME < client_secret.json",
+	} {
 		if !strings.Contains(got.stderr, want) {
 			t.Errorf("the failure does not mention %q:\n%s", want, got.stderr)
 		}
-	}
-	if strings.Contains(got.stderr, "auth setup") {
-		t.Errorf("the failure names a command this build does not have:\n%s", got.stderr)
 	}
 }
 
@@ -543,5 +551,90 @@ func TestTheWalkthroughNeedsNoProfile(t *testing.T) {
 	stored := runCLIIn(t, consoleFile, "auth", "setup")
 	if stored.exit != output.ExitUsage {
 		t.Errorf("storing a client with no profile exited %d, want %d", stored.exit, output.ExitUsage)
+	}
+}
+
+// TestAuthRefusesAProfileThatCannotHoldAnAuthorization.
+//
+// Found by the Milestone 3 exit sweep, by running the auth group against a
+// webhook profile rather than by reading anything. All three commands assumed
+// a profile that could hold a token and none of them said so, and each was
+// wrong differently:
+//
+//   - `auth setup` filed an OAuth client ID and secret against a profile whose
+//     transport is webhook, exited 0, and printed "now authorize it".
+//   - `auth login` said "no OAuth client is configured", which is a reason that
+//     sends somebody to spend five minutes in the Cloud console creating one
+//     they cannot use.
+//   - `auth logout` said "logged out" for a profile that held nothing to
+//     forget, while the credential a person means when they type that, the
+//     webhook URL, stayed exactly where it was. A false report to somebody
+//     trying to remove their access is the worst of the three.
+func TestAuthRefusesAProfileThatCannotHoldAnAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		stdin string
+	}{
+		{"setup", []string{"auth", "setup", "--profile", "alerts"}, consoleFile},
+		{"login", []string{"auth", "login", "--profile", "alerts"}, ""},
+		{"logout", []string{"auth", "logout", "--profile", "alerts"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolate(t)
+			if setup := runCLIIn(t, testWebhook, "profile", "set-webhook", "alerts"); setup.exit != output.ExitOK {
+				t.Fatalf("set-webhook: exit %d\n%s", setup.exit, setup.stderr)
+			}
+
+			got := runCLIIn(t, tc.stdin, tc.args...)
+			if got.exit != output.ExitUnsupported {
+				t.Fatalf("exit = %d, want %d\n%s%s", got.exit, output.ExitUnsupported, got.stdout, got.stderr)
+			}
+			if got.stdout != "" {
+				t.Errorf("a failing command wrote to stdout: %q", got.stdout)
+			}
+
+			for _, want := range []string{
+				"alerts",     // which profile.
+				"webhook",    // what it is.
+				"auth setup", // how to get one that can.
+				"profile rm", // how to remove this one and its URL.
+			} {
+				if !strings.Contains(got.stderr, want) {
+					t.Errorf("the refusal does not mention %q:\n%s", want, got.stderr)
+				}
+			}
+
+			// The webhook is untouched. This is the half that made the logout
+			// case a false report rather than a harmless one.
+			after := runCLIIn(t, "", "send", "--dry-run", "deploy done")
+			if after.exit != output.ExitOK {
+				t.Errorf("the webhook stopped working after %v: exit %d\n%s", tc.args, after.exit, after.stderr)
+			}
+		})
+	}
+}
+
+// TestAuthSetupStillCreatesAProfileThatDoesNotExistYet.
+//
+// The other side of the refusal above, and the reason it checks the transport
+// rather than merely requiring the profile to be configured. `auth setup
+// --profile work` on a fresh machine is how a user-OAuth profile comes into
+// existence, and it is the invocation the README and docs/ADMIN.md both tell
+// people to type.
+func TestAuthSetupStillCreatesAProfileThatDoesNotExistYet(t *testing.T) {
+	isolate(t)
+
+	got := runCLIIn(t, consoleFile, "auth", "setup", "--profile", "brandnew")
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit = %d, want 0\n%s", got.exit, got.stderr)
+	}
+
+	list := runCLIIn(t, "", "profile", "list", "--json")
+	if !strings.Contains(list.stdout, `"name":"brandnew"`) {
+		t.Errorf("the profile was not created:\n%s", list.stdout)
+	}
+	if !strings.Contains(list.stdout, `"transport":"useroauth"`) {
+		t.Errorf("the profile it created cannot hold the authorization it just set up:\n%s", list.stdout)
 	}
 }
