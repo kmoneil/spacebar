@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: an alias cannot contain "/", so "spaces/AAAA" is refused.
+A name beginning "spaces/" is resolved as a space directly and an alias of that shape would never be consulted.

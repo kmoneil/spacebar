@@ -485,36 +485,3 @@ func FuzzWhateverItReturnsIsASpaceName(f *testing.F) {
 		}
 	})
 }
-
-// TestNoRefusalNamesACommandThisBuildDoesNotHave.
-//
-// The Milestone 2 exit sweep found three refusals pointing at commands that did
-// not exist, and each one sent somebody from one dead end to another. The
-// ambiguity and bad-alias messages both wanted to say "give it an alias", and
-// the alias command is m4-02.
-//
-// A string check rather than a walk of the command tree, because this package
-// cannot see the tree: it has no dependency on internal/cli and should not gain
-// one. When m4-02 lands, this test is what fails and says to put the pointer
-// back.
-func TestNoRefusalNamesACommandThisBuildDoesNotHave(t *testing.T) {
-	r := reader(ops, opsEsc)
-
-	ambiguous, err := Resolve(context.Background(), r, "op", Options{})
-	if err == nil {
-		t.Fatalf("expected an ambiguity refusal, got %q", ambiguous)
-	}
-
-	_, aliasErr := Resolve(context.Background(), reader(ops), "bad", Options{
-		Aliases: map[string]string{"bad": "not-a-space"},
-	})
-	if aliasErr == nil {
-		t.Fatal("expected a bad-alias refusal")
-	}
-
-	for _, refusal := range []error{err, aliasErr} {
-		if strings.Contains(refusal.Error(), "alias set") {
-			t.Errorf("a refusal names `alias set`, which this build does not have:\n%v", refusal)
-		}
-	}
-}

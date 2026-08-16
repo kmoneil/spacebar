@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: profile "alerts" has no alias called "nothing".
+See them with: spacebar alias list

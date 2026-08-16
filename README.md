@@ -350,10 +350,28 @@ app in those spaces, so a resolver that listed on every command would degrade
 the space for everybody. `--refresh` fetches it again. A resource name or an
 alias never touches the cache at all.
 
-Aliases resolve today and nothing writes one yet: the `alias` command is still
-to come, so an alias means an `aliases` entry added to the configuration file by
-hand. A webhook profile can use one, because an alias is a local map and needs
-no permission, but the last two steps need to read and are refused on one.
+**Give a space a name you will remember:**
+
+```sh
+spacebar alias set eng spaces/AAAAAAA
+spacebar alias set eng 'Engineering'      # resolved now, stored as the space
+spacebar alias set bob bob@example.com    # the direct message with them
+spacebar alias list
+spacebar alias rm eng
+```
+
+The target is resolved when the alias is set, and the space it resolved to is
+what gets stored. A display name is a label somebody else controls, so storing
+one would mean an alias that quietly points somewhere new the day a room is
+renamed.
+
+An alias belongs to one profile, so a work profile and a personal one cannot
+see each other's names. It cannot contain a slash or an `@`, because resolution
+reads a name of either shape as something other than an alias, and one that
+could never be consulted is worse than one that is refused.
+
+A webhook profile can use an alias, because an alias is a local map and needs no
+permission. The last two steps need to read and are refused on one.
 
 **`spaces members` identifies people by resource name, not by display name.**
 The Chat API returns a member as `users/NNN` and a type, with no name attached,

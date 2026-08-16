@@ -183,12 +183,11 @@ func directMessageErr(address string, err error) error {
 // It names the alias as well as the value, because the thing to fix is the
 // entry in the configuration file and not what was typed on the command line.
 //
-// It names the file rather than an `alias` command, which m4-02 adds and this
-// build does not have. A refusal pointing at a command that does not exist is
-// the second dead end on top of the first, which the Milestone 2 sweep found
-// three times and which the milestone adding the command puts right.
+// It named no command until m4-02 added one, on the grounds that a refusal
+// pointing at a command this build does not have is the second dead end on top
+// of the first. That milestone landed, so it names the command that fixes it.
 func aliasErr(name, value string, err error) error {
 	return output.Usagef("alias %q points at %q, which is not a space name.\n%v\n"+
-		"Fix the aliases entry for %q in the %s configuration file.",
-		name, value, err, name, meta.AppName)
+		"Point it somewhere real with: %s alias set %s spaces/AAAAAAA",
+		name, value, err, meta.AppName, name)
 }

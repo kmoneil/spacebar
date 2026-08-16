@@ -53,6 +53,17 @@ var volatile = []*regexp.Regexp{
 	// a loopback server on whatever port the kernel handed out. The port is the
 	// machine; the rest of the line, including the redaction, is the contract.
 	regexp.MustCompile(`(http://127\.0\.0\.1:)\d+(/)`),
+
+	// The path to the configuration file, which several refusals name so that
+	// somebody can go and look at it. Under test it is a t.TempDir, so it is a
+	// different absolute path on every run and on every machine.
+	//
+	// Added after a golden recorded one and would have failed `make contract`
+	// on the very next invocation. That is the failure mode worth guarding: an
+	// unstable golden does not announce itself as unstable, it announces itself
+	// as the output contract having changed, which is the sentence somebody
+	// acts on.
+	regexp.MustCompile(`(default in )[^\n]*(spacebar/config\.json)`),
 }
 
 func normalize(s string) string {
@@ -241,6 +252,12 @@ func TestGoldenOutputContract(t *testing.T) {
 
 		{"spaces-get-no-arguments.txt", []string{"spaces", "get"}, output.ExitUsage, "", true, true},
 
+		{"alias-set-no-arguments.txt", []string{"alias", "set"}, output.ExitUsage, "", true, true},
+		{"alias-set-looks-like-a-space.txt", []string{"alias", "set", "spaces/AAAA", "spaces/BBBB"}, output.ExitUsage, "", true, true},
+		{"alias-set-looks-like-an-address.txt", []string{"alias", "set", "bob@example.test", "spaces/BBBB"}, output.ExitUsage, "", true, true},
+		{"alias-rm-no-such-alias.txt", []string{"alias", "rm", "nothing"}, output.ExitUsage, "", true, true},
+		{"alias-list-empty.txt", []string{"alias", "list"}, output.ExitOK, "", true, true},
+
 		// A malformed space name is deliberately not recorded here. On the only
 		// profile these goldens can configure, a webhook, the capability gate
 		// fires first and the output is byte-identical to the case above, so a
@@ -311,7 +328,7 @@ func TestGoldenOutputContract(t *testing.T) {
 // are the thing being recorded and a helper that parsed them would be a second
 // implementation of the command tree.
 func needsAProfile(name string) bool {
-	for _, prefix := range []string{"send", "spaces-", "messages-"} {
+	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

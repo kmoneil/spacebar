@@ -83,6 +83,18 @@ var readOnlyCommands = map[string]string{
 
 	"spacebar auth": "the group prints help",
 
+	"spacebar alias": "the group prints help",
+
+	// An alias is a line in the configuration file pointing at a space that is
+	// already there, so nothing it does can be seen from inside a space. `set`
+	// is the interesting one: it resolves its target, so it can list spaces
+	// over the network, and listing is still a read. The criterion is whether a
+	// command can change something at the far end, and naming a space locally
+	// cannot.
+	"spacebar alias set":  "writes one line of local configuration, after a read to resolve the target",
+	"spacebar alias list": "reports what is configured, touching neither keyring nor network",
+	"spacebar alias rm":   "deletes one line of local configuration",
+
 	// The criterion is whether a command can put something into a space, and
 	// none of these can. auth login does reach the network, and it has a rule of
 	// its own about --dry-run for that reason: consenting is a side effect at

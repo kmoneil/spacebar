@@ -1,0 +1,4 @@
+exit 0
+--- stdout
+--- stderr
+profile "alerts" has no aliases. Add one with: spacebar alias set NAME spaces/AAAAAAA

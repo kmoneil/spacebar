@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: an alias cannot contain "@", so "bob@example.test" is refused.
+A name containing one is resolved as a person, and an alias of that shape would silently shadow the direct message with them.

@@ -114,10 +114,11 @@ func oneOf(target string, matches []chat.Space, how string) (string, error) {
 		b.WriteString("\n  " + output.Cell(space.Name) + "\t" + output.Cell(space.DisplayName))
 	}
 
-	// It says to name one directly rather than offering an `alias` command,
-	// which m4-02 adds and this build does not have.
+	// Naming the alias command is the point of the second sentence: somebody
+	// hitting this twice wants a name that is never ambiguous, and that is what
+	// an alias is for.
 	return "", output.Usagef("%d spaces %s %q, and this tool does not guess which one you meant:%s\n"+
-		"Name the one you want directly, as in: %s %s",
+		"Name the one you want directly, or give it an alias: %s alias set NAME %s",
 		len(matches), qualifier, target, b.String(), meta.AppName, matches[0].Name)
 }
 

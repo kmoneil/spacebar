@@ -438,3 +438,62 @@ func lineCol(data []byte, offset int64) (int, int) {
 	}
 	return line, col
 }
+
+// maxAliasName bounds an alias, for the same reason maxProfileName bounds a
+// profile: it is typed, stored, and printed in a column beside others.
+const maxAliasName = 64
+
+// CheckAliasName refuses a name that resolution could not reach.
+//
+// The same character set as a profile name, and that is the whole mechanism
+// rather than a coincidence. Resolution tries a literal spaces/XXXX first and an
+// address third, so an alias called "spaces/AAA" would never be consulted and
+// one called "bob@example.com" would silently shadow the direct message lookup
+// for that person. Both are unreachable or surprising, and both are questions
+// about the order of steps in another package.
+//
+// Refusing the characters instead makes the question impossible to ask. No
+// slash means no alias can look like a resource name; no @ means none can look
+// like an address. That is one rule holding two shadowing cases, rather than
+// two special-case refusals that a fifth resolution step would have to
+// remember to extend.
+func CheckAliasName(name string) error {
+	if name == "" {
+		return configErr("an alias needs a name.")
+	}
+	if len(name) > maxAliasName {
+		return configErr("an alias is at most %d characters, and that one is %d.",
+			maxAliasName, len(name))
+	}
+
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			continue
+		case (r == '-' || r == '_' || r == '.') && i > 0:
+			continue
+		}
+		if i == 0 {
+			return configErr("an alias starts with a letter or a digit, and %q starts with %q.",
+				name, string(r))
+		}
+
+		// The two that have a reason worth giving, because somebody typing them
+		// is not making a typo, they are expecting resolution to work a way it
+		// does not.
+		switch r {
+		case '/':
+			return configErr("an alias cannot contain %q, so %q is refused.\n"+
+				"A name beginning %q is resolved as a space directly and an alias of that "+
+				"shape would never be consulted.", "/", name, "spaces/")
+		case '@':
+			return configErr("an alias cannot contain %q, so %q is refused.\n"+
+				"A name containing one is resolved as a person, and an alias of that shape "+
+				"would silently shadow the direct message with them.", "@", name)
+		}
+
+		return configErr("an alias holds letters, digits, and %q, %q or %q, and %q has %q in it.",
+			"-", "_", ".", name, string(r))
+	}
+	return nil
+}
