@@ -1,4 +1,6 @@
-# spacebar
+<p align="center">
+  <img src="docs/assets/spacebar.png" alt="spacebar" width="480">
+</p>
 
 A focused terminal client and MCP server for Google Chat.
 
