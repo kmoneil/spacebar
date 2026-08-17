@@ -37,6 +37,48 @@ human in the loop, through `--json` and through a built-in MCP server.
 | **Built for scripts** | `--json` is NDJSON so it streams, stdout is data and nothing else, and the exit code tells you which kind of failure it was. |
 | **One binary, no cgo** | Six platforms, five direct dependencies, and a licence gate that fails the build over any of them. |
 
+## Quick start
+
+The path that needs no OAuth, no Cloud project, and nobody's approval. In the
+Chat space: **Apps & integrations → Webhooks →** copy the URL.
+
+```sh
+git clone https://github.com/kmoneil/spacebar && cd spacebar && make build
+
+pbpaste | ./bin/spacebar profile set-webhook alerts   # macOS
+./bin/spacebar send "deploy done"
+```
+
+That is the whole setup. The URL goes to your OS keyring, never to a file and
+never onto a command line. To act as yourself instead of as a bot, see
+[Authorize as yourself](#authorize-as-yourself).
+
+## Contents
+
+**Start here** &nbsp;·&nbsp;
+[Install](#install) &nbsp;·&nbsp;
+[Configure a webhook](#configure-a-webhook) &nbsp;·&nbsp;
+[Authorize as yourself](#authorize-as-yourself)
+
+**Use it** &nbsp;·&nbsp;
+[Send](#send) &nbsp;·&nbsp;
+[Read a space](#read-a-space) &nbsp;·&nbsp;
+[Name a space](#name-a-space-without-its-id) &nbsp;·&nbsp;
+[Follow a space](#follow-a-space) &nbsp;·&nbsp;
+[Search](#search-what-was-said)
+
+**For agents** &nbsp;·&nbsp;
+[Serve it to a model](#serve-it-to-a-model) &nbsp;·&nbsp;
+[docs/AGENTS.md](docs/AGENTS.md) &nbsp;·&nbsp;
+[docs/SKILL.md](docs/SKILL.md)
+
+**Everything else** &nbsp;·&nbsp;
+[Why it is shaped this way](#why-it-is-shaped-this-way) &nbsp;·&nbsp;
+[Status](#status) &nbsp;·&nbsp;
+[Development](#development) &nbsp;·&nbsp;
+[SECURITY.md](SECURITY.md) &nbsp;·&nbsp;
+[docs/ADMIN.md](docs/ADMIN.md)
+
 > Google Chat and Google are trademarks of Google LLC. `spacebar` is an
 > independent third-party client. It is not affiliated with, sponsored by, or
 > endorsed by Google, and Google does not support it.
@@ -68,6 +110,9 @@ $ spacebar --help
 `send` needs only a webhook. Everything that reads needs a profile authorized as
 you. `mcp` serves either to a model.
 
+<details>
+<summary><b>How much of this has been run against the real Google Chat API, not a test server</b></summary>
+
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
 API does. Beyond that, the webhook path has been run end to end against a real
@@ -95,6 +140,8 @@ the message's author and deleting is not. The tool had already been written with
 the opposite assumption in its own help text, and the live check is the only
 reason it did not ship that way.
 
+</details>
+
 The plan, in six milestones:
 
 | #   | Deliverable                                               | State    |
@@ -111,6 +158,13 @@ whose org blocks all third-party API access, because that population is large,
 and a tool that is useless to them has a much smaller reach than it looks.
 
 ## Why it is shaped this way
+
+Five decisions that shape everything else: three auth models rather than one,
+narrow OAuth scopes, Chat markup that is not CommonMark, output built for a
+script before a person, and a dependency budget of five.
+
+<details>
+<summary><b>The reasoning behind each, and what it cost to get wrong</b></summary>
 
 **Three auth models, degrading gracefully.** Many users are in locked-down
 Workspace orgs where the full API is simply unavailable. An incoming webhook is
@@ -160,6 +214,8 @@ no. Count what a dependency links rather than what it requires: the MCP SDK is
 one line in `go.mod` and six modules in the binary, more than a third of
 `NOTICE`. The Chat API client is hand-rolled because the generated one is 40k
 lines and drags in a transport chain we would then not control.
+
+</details>
 
 ## Install
 
@@ -255,6 +311,9 @@ Warnings, logs and failures go to stderr, and the exit code says what happened:
 `0` sent, `2` you asked for something impossible, `3` the API said no, `4`
 authorize again, `5` this profile cannot do that, `6` rate limited.
 
+<details>
+<summary><b>Chat markup, threading, idempotency, cards, and what a webhook may not do</b></summary>
+
 **Text is sent exactly as typed.** Chat markup is not CommonMark: bold is one
 asterisk, so `**bold**` arrives with the asterisks showing. `--md` translates,
 and **the translation is one way**. `**bold**` becomes `*bold*`, which read back
@@ -296,6 +355,8 @@ Run 'spacebar auth setup' on its own to see how to create the client.
 A webhook is still the only path that needs nothing from an administrator, which
 is the point of it. Attachments are Milestone 4 even on a profile that can read.
 
+</details>
+
 ## Authorize as yourself
 
 Reading needs an account rather than a webhook, and an account needs an OAuth
@@ -317,6 +378,9 @@ The client secret is read from stdin, never from an argument. Only the
 identifier and the secret are taken out of that file: its endpoints are ignored,
 because a file that could redirect the consent screen would be a file that could
 collect your authorization.
+
+<details>
+<summary><b>Scopes, the seven-day testing-mode limit, and what your admin has to allow</b></summary>
 
 **Scopes are requested narrowly.** `--send-only` asks for
 `chat.messages.create` and nothing else, because a narrower request is one an
@@ -367,6 +431,8 @@ the command line, and [docs/SKILL.md](docs/SKILL.md) covers the MCP server.
 Every example in both is held to the code by a test, because the reader of those
 two cannot tell a stale example from a current one.
 
+</details>
+
 ## Read a space
 
 On a profile authorized as you, rather than a webhook:
@@ -396,6 +462,9 @@ spacebar messages delete spaces/AAAAAAA/messages/BBBBBBB      # asks first
 spacebar react spaces/AAAAAAA/messages/BBBBBBB 👍
 ```
 
+<details>
+<summary><b>Who may edit and delete, and how a reaction is addressed</b></summary>
+
 **Editing is limited to messages you sent, and deleting is not.** Measured, not
 assumed: editing your own message answers 200 and editing somebody else's
 answers 403, a second apart on the same token, while a delete of somebody
@@ -412,6 +481,8 @@ stale.
 than the oldest ones in a space's history. Reading a conversation in the order
 it happened is what `tail` will be for.
 
+</details>
+
 ## Name a space without its ID
 
 Every command that takes a `SPACE` also takes a display name or an address, and
@@ -423,6 +494,9 @@ spacebar messages list 'ops' --limit 20       # case does not matter
 spacebar send 'Ops' 'deploy done'
 spacebar spaces get someone@example.com       # the direct message with them
 ```
+
+<details>
+<summary><b>How a name is resolved, and why an ambiguous one is a failure rather than a guess</b></summary>
 
 **Four steps, in order, and the last one never guesses.** A literal
 `spaces/XXXX` passes straight through and costs nothing. Then a profile alias.
@@ -481,6 +555,8 @@ could never be consulted is worse than one that is refused.
 A webhook profile can use an alias, because an alias is a local map and needs no
 permission. The last two steps need to read and are refused on one.
 
+</details>
+
 ## Follow a space
 
 ```sh
@@ -515,6 +591,9 @@ exchanged for a token, and the token is what a message can carry. The upload
 goes first, so a file that fails to upload does not become a message with the
 text and no file.
 
+<details>
+<summary><b>Why a server-supplied filename is flattened, and why no download URL is published</b></summary>
+
 **A downloaded file lands inside `--out` and nowhere else.** The name comes
 from whoever posted the message, so an attachment called
 `../../.ssh/authorized_keys` is written as `.._.._.ssh_authorized_keys` in the
@@ -528,6 +607,8 @@ credential.
 
 A Drive attachment is listed and skipped: Chat returns a reference rather than
 the bytes, and fetching it is Drive's API rather than this one.
+
+</details>
 
 ### Watching, which is not tailing
 
@@ -576,6 +657,9 @@ up a new one. A space that goes away, or that turns out not to be readable, is
 dropped with a line on stderr saying which and why, and the others carry on. If
 every space is dropped the exit is non-zero, because a watch that is watching
 nothing has not finished, it has been abandoned.
+
+<details>
+<summary><b>What an event payload contains, the Chat app requirement, and how time windows work</b></summary>
 
 **`--json` carries the API's own event payload**, unaltered, under `payload`.
 That is a departure from how the other shapes work here, and it is deliberate:
@@ -684,6 +768,8 @@ Authorization: REDACTED
 User-Agent: spacebar/0.0.0-dev (+https://github.com/kmoneil/spacebar)
 ```
 
+</details>
+
 ## Search what was said
 
 There is no message search API for an ordinary user. `spaces.search` is
@@ -696,6 +782,9 @@ spacebar sync eng --limit 5000            # or one space, a bit at a time
 spacebar search "deploy"
 spacebar search "deploy" --space eng --since 30d --json
 ```
+
+<details>
+<summary><b>How sync resumes, what search will not look in, and the numbers behind the design</b></summary>
 
 **`sync` is resumable and holds no cursor.** The index knows the window it
 covers, so a run fetches everything newer than the newest message it holds and
@@ -733,6 +822,8 @@ messages, 1.52s at 250,000, crossing one second at roughly 175,000. SQLite with
 FTS5 was priced and declined; the reasoning and the conditions for revisiting it
 are in SPEC.md §12.2.
 
+</details>
+
 ## Serve it to a model
 
 `spacebar mcp` speaks MCP on stdin and stdout. It is not a command to run by
@@ -748,6 +839,9 @@ Five read tools: `list_spaces`, `get_space`, `list_members`, `list_messages`,
 unless you ask for them. And `search_messages`, which appears only when this
 machine has a local index. They return the same shapes `--json` does, because
 both come from one place.
+
+<details>
+<summary><b>Tool registration, the write gates, the audit line, and untrusted message text</b></summary>
 
 **A tool this profile cannot serve is not registered at all.** A model that
 cannot see a tool cannot argue itself into calling it; one that can see a broken
@@ -797,6 +891,8 @@ can silence is missing exactly when somebody has a reason to silence it.
 that asks the model to do something is still a message. That is why writing over
 MCP is off by default and why the confirmation sentence is in the tool's own
 description rather than only in a document somebody might not read.
+
+</details>
 
 ## The rest of it
 
