@@ -65,7 +65,7 @@ The plan, in six milestones:
 | 1   | Skeleton, licensing, CI gates                             | **done** |
 | 2   | Webhook transport: `send` with no OAuth at all            | **done** |
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
-| 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | most     |
+| 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | **done** |
 | 5   | MCP server                                                | most     |
 | 6   | Local index and search                                    |          |
 
@@ -115,10 +115,14 @@ distinguish "your authorization expired" from "that space does not exist". The
 tool never blocks on a prompt when stdin is not a terminal, because a hung agent
 is strictly worse than a failed one.
 
-**A small dependency tree, on purpose.** One direct dependency today, and at
-most five ever; each one has to argue for its place. The Chat API client is
-hand-rolled because the generated one is 40k lines and drags in a transport
-chain we would then not control.
+**A small dependency tree, on purpose.** Five direct dependencies, which is the
+ceiling this project set itself and has now reached: cobra and pflag for the
+command tree, go-keyring for the credential store, `x/oauth2` for the token
+exchange, and the MCP SDK. A sixth needs an argument, and the answer is usually
+no. Count what a dependency links rather than what it requires: the MCP SDK is
+one line in `go.mod` and six modules in the binary, more than a third of
+`NOTICE`. The Chat API client is hand-rolled because the generated one is 40k
+lines and drags in a transport chain we would then not control.
 
 ## Install
 

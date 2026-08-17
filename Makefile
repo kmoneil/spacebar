@@ -184,7 +184,7 @@ contract: golden ## Regenerate the goldens and fail if any of them moved
 	fi
 
 .PHONY: ci
-ci: fmt-check vet lint test vuln license-check license-headers-check build ## Everything the gate runs
+ci: fmt-check vet lint test vuln license-check licenses-current license-headers-check build ## Everything the gate runs
 
 ## ---------------------------------------------------------------------------
 ## licensing (SPEC.md §2)
@@ -193,6 +193,17 @@ ci: fmt-check vet lint test vuln license-check license-headers-check build ## Ev
 .PHONY: licenses
 licenses: ## Regenerate THIRD_PARTY_LICENSES
 	@scripts/third-party-licenses.sh
+
+.PHONY: licenses-current
+licenses-current: ## Regenerate the notices and fail if anything moved
+	@scripts/third-party-licenses.sh
+	@if ! git diff --quiet -- THIRD_PARTY_LICENSES NOTICE; then \
+		git --no-pager diff --stat -- THIRD_PARTY_LICENSES NOTICE; \
+		echo; \
+		echo "The dependency set changed and the notices were not regenerated."; \
+		echo "They have been regenerated now. Read the diff and commit it."; \
+		exit 1; \
+	fi
 
 .PHONY: license-check
 license-check: ## Fail if any dependency's licence is not on the allowlist

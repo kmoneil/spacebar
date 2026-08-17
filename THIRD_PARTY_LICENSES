@@ -971,9 +971,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------------
 golang.org/x/sys
-  version: v0.41.0
+  version: v0.44.0
   licence: BSD-3-Clause
-  source:  https://cs.opensource.google/go/x/sys/+/v0.41.0:LICENSE
+  source:  https://cs.opensource.google/go/x/sys/+/v0.44.0:LICENSE
 --------------------------------------------------------------------------------
 
 Copyright 2009 The Go Authors.
@@ -1006,9 +1006,9 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 --------------------------------------------------------------------------------
 golang.org/x/sys/cpu
-  version: v0.41.0
+  version: v0.44.0
   licence: BSD-3-Clause
-  source:  https://cs.opensource.google/go/x/sys/+/v0.41.0:LICENSE
+  source:  https://cs.opensource.google/go/x/sys/+/v0.44.0:LICENSE
 --------------------------------------------------------------------------------
 
 Copyright 2009 The Go Authors.

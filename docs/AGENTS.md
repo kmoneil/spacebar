@@ -40,7 +40,7 @@ anything. The codes never change meaning; new conditions get new codes.
 | 0 | Success | Parse stdout |
 | 1 | A failure with nothing more specific to say | Report it |
 | 2 | Bad flag, bad argument, or a target that resolved to nothing | Fix the invocation; do not retry it unchanged |
-| 3 | A network or API failure that outlived the retry policy | Retry only if the command was read-only |
+| 3 | An API or network failure | Retry a read; never retry a write. A 400, 403 or 404 is also 3 and retrying it never helps |
 | 4 | Missing or expired authorization | `spacebar auth login --profile NAME` |
 | 5 | The profile's transport cannot do this at all | Use a different profile; retrying never helps |
 | 6 | Rate limited beyond the backoff | Wait, then retry |
