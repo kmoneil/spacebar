@@ -85,8 +85,7 @@ never onto a command line. To act as yourself instead of as a bot, see
 
 ## Status
 
-**All six milestones are done.** Nothing is released yet, and the whole command
-surface works:
+Nothing is released yet. Everything below works:
 
 ```console
 $ spacebar --help
@@ -116,21 +115,6 @@ webhook path, browser OAuth against a client in a Workspace organization, all
 five read endpoints, and posting, editing, reacting and deleting as the account.
 Those live runs found two bugs no test in the tree could have caught, which is
 the argument for doing them.
-
-The plan, in six milestones:
-
-| #   | Deliverable                                               | State    |
-| --- | --------------------------------------------------------- | -------- |
-| 1   | Skeleton, licensing, CI gates                             | **done** |
-| 2   | Webhook transport: `send` with no OAuth at all            | **done** |
-| 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
-| 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | **done** |
-| 5   | MCP server                                                | **done** |
-| 6   | Local index and search                                    | **done** |
-
-Milestone 2 is the real proof point. It has to be genuinely useful to somebody
-whose org blocks all third-party API access, because that population is large,
-and a tool that is useless to them has a much smaller reach than it looks.
 
 ## Why it is shaped this way
 
@@ -264,7 +248,7 @@ Run 'spacebar auth setup' on its own to see how to create the client.
 ```
 
 A webhook is still the only path that needs nothing from an administrator, which
-is the point of it. Attachments are Milestone 4 even on a profile that can read.
+is the point of it.
 
 </details>
 

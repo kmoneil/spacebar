@@ -12,15 +12,13 @@ affiliated with, sponsored by, or endorsed by Google.
 
 ## Status of this document
 
-Pre-1.0, and the six milestones this is planned in are still landing.
+Pre-1.0, and nothing is released yet.
 
-Every claim below is either **held by a test**, in which case the test is
-named, or a **requirement on the milestone that implements it**, in which case
-it carries that milestone: `(M4)`, `(M5)`. A claim with neither is a bug in
-this document, and should be reported as one.
+**Every claim below is held by a test, and the test is named.** A claim here
+with no test behind it is a bug in this document, and should be reported as one.
 
-The distinction matters. A security document that describes an intention in the
-present tense is how a gap survives review: everybody reads it, everybody
+That rule is the whole point. A security document that describes an intention in
+the present tense is how a gap survives review: everybody reads it, everybody
 believes it, and nobody checks.
 
 A `SPEC.md §N` citation, here and in the source comments, points at the design
@@ -196,9 +194,9 @@ Three child processes exist, and only the first is limited to authentication:
   themselves.
 - **The macOS keyring helper.** `zalando/go-keyring` calls `/usr/bin/security`
   on darwin, once per credential read or write. On Windows it uses the
-  credential API in-process and starts nothing. This happens from Milestone 2,
-  not Milestone 3: the webhook URL is a credential and lives in the keyring
-  like any other.
+  credential API in-process and starts nothing. This applies to a webhook
+  profile as much as to an authorized one: a webhook URL is a credential and
+  lives in the keyring like any other.
 
   The secret is passed to that helper on stdin rather than in an argument, so
   it does not appear in the process list. It is base64-encoded on the way, and
@@ -391,10 +389,10 @@ did not happen. `TestACacheThatCannotBeRemovedIsAWarningRatherThanAFailure`.
 
 ### The message index, which is a real change to what is on your disk
 
-Milestone 6 added `spacebar sync`, and with it the one thing in this tool that
-stores message content at rest. It is stated at length because it is the
-largest change to this threat model since the credential store, and because it
-is the kind of change somebody discovers rather than reads.
+`spacebar sync` is the one thing in this tool that stores message content at
+rest. It is stated at length because it is the largest change to this threat
+model since the credential store, and because it is the kind of change
+somebody discovers rather than reads.
 
 `internal/store` writes one file per space at
 `<data dir>/spaces/<spaceID>.ndjson`, under `XDG_DATA_HOME`,
@@ -654,8 +652,8 @@ therefore a decision the operator makes, with `rm`, knowing what it costs.
   and refuses a leading dot, and a profile name only reaches the cache after
   being looked up in the validated file. `NewCache` now refuses the name
   itself, because a first layer that needs the layer below it to be safe is not
-  a first layer. A space ID reaching a filename is Milestone 6's store, and it
-  gets its own claim if that lands.
+  a first layer. A space ID reaches a filename in the message index, and that
+  has its own claim: `FuzzAnIndexPathStaysUnderItsRoot`.
 
 ## Refusing, confirming, and the MCP surface
 
@@ -752,7 +750,7 @@ read. It is gated more tightly than the CLI, on purpose.
   A command still has to render what comes back, and forgetting to is the one
   thing that could go wrong. `TestEveryCommandIsClassifiedAsWritingOrNot` walks
   the command tree and fails when a command is in neither the writing nor the
-  read-only list, so a command added in a later milestone cannot be merged
+  read-only list, so a command added later cannot be merged
   without somebody deciding in writing whether it can put something into a
   space; `TestEveryWriteCommandHonoursDryRun` then runs each writing one against
   a server that fails the test if it is ever reached. Verified by planting a new
@@ -796,7 +794,7 @@ read. It is gated more tightly than the CLI, on purpose.
 
   `TestTheDefaultGrantCoversWhatTheMatrixClaims` is the other half, and it
   points the opposite way: a capability the matrix claims that no default scope
-  permits fails the build unless it is recorded as owed by a named milestone. A
+  permits fails the build unless it is recorded as deliberately owed. A
   command shipped against a capability nobody can be granted is the failure this
   pair exists to prevent, and it is invisible to every other test in the tree,
   because the matrix and the scope list had never been compared to each other.
@@ -1002,7 +1000,3 @@ Update this file in the same change that alters what the tool treats as
 hostile, adds a way for a credential or a request to leave the process, changes
 the confirmation or capability gates, or changes the disclosure process.
 
-When a milestone lands, the `(Mn)` markers it covers are replaced by the names
-of the tests that now hold those claims. A marker that outlives its milestone
-is a claim nobody implemented, which is the failure this convention exists to
-make visible.
