@@ -183,6 +183,70 @@ func (s *NDJSON) LastSeen(ctx context.Context, space string) (time.Time, string,
 	return newest, name, nil
 }
 
+// Bounds is the window a space's index covers, and how many messages are in it.
+//
+// This is what makes `sync` resumable without a cursor file of its own. The
+// card that asked for this assumed one would be needed; it is not, because the
+// index already knows what it holds. A catch-up fetches everything after
+// newest, a backfill everything before oldest, both bounds are exclusive at the
+// API as well as here, and an interrupted run resumes by asking the same
+// question again.
+//
+// The cost of being stateless is one request per run to discover that there is
+// nothing older, which is cheaper than a second file that can disagree with the
+// first.
+//
+// Everything is zero when nothing has been indexed, which is how a sync knows
+// to start from the beginning.
+func (s *NDJSON) Bounds(ctx context.Context, space string) (oldest, newest time.Time, count int, err error) {
+	found, err := s.resolve(ctx, Query{Space: space})
+	if err != nil {
+		return time.Time{}, time.Time{}, 0, err
+	}
+	if len(found) == 0 {
+		return time.Time{}, time.Time{}, 0, nil
+	}
+
+	// resolve answers newest first, so the ends are the ends. A record whose
+	// create time would not parse sorts as the zero time, so oldest is read
+	// from the last one that has a time rather than from the last one.
+	newest = parseTimeOr(found[0].CreateTime)
+	for i := len(found) - 1; i >= 0; i-- {
+		if at := parseTimeOr(found[i].CreateTime); !at.IsZero() {
+			oldest = at
+			break
+		}
+	}
+	return oldest, newest, len(found), nil
+}
+
+// Spaces is every space the index holds something for.
+//
+// Read off the directory rather than the API, because the whole point of the
+// index is that it answers with no network at all. `search` uses it to say
+// which spaces it looked in.
+func (s *NDJSON) Spaces() ([]string, error) {
+	paths, err := s.files("")
+	if err != nil {
+		return nil, err
+	}
+
+	spaces := make([]string, 0, len(paths))
+	for _, path := range paths {
+		id := strings.TrimSuffix(filepath.Base(path), ".ndjson")
+		name := "spaces/" + id
+		if err := chat.CheckSpaceName(name); err != nil {
+			// A file somebody dropped in the directory by hand. Skipped rather
+			// than fatal: it is not this tool's file, and refusing to search
+			// because of it would make a stray file cost a search.
+			continue
+		}
+		spaces = append(spaces, name)
+	}
+	sort.Strings(spaces)
+	return spaces, nil
+}
+
 // Search yields every matching message, newest first.
 //
 // A message that was edited appears once, with the text it has now, and one

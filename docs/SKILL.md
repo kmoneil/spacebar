@@ -50,6 +50,16 @@ To allow writing, and only if you mean it:
 | `get_message` | One message by resource name |
 | `send_message` | Post to a space. Requires `--allow-write` |
 | `react_to_message` | Add an emoji reaction. Requires `--allow-write` |
+| `search_messages` | Search the local index. Registered only when an index exists |
+
+`search_messages` is the one tool gated on something other than a capability:
+it appears only when this machine has a local index with something in it,
+because there is no message search API and an empty index would answer every
+search with nothing, which reads as "nobody said that" rather than as "nobody
+synced anything". It needs no capability at all, so a webhook profile can search
+what a user-authorized one copied down. Its results carry `searched`, the list
+of spaces the index actually holds, because an answer over an index is bounded
+by what somebody remembered to sync.
 
 **A tool this profile cannot serve is not registered at all.** It is not
 registered-and-failing: it is absent from the tool list and absent from the

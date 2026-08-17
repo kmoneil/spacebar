@@ -30,6 +30,8 @@ import (
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/profile"
+	"github.com/kmoneil/spacebar/internal/rows"
+	"github.com/kmoneil/spacebar/internal/store"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
@@ -1055,5 +1057,87 @@ func TestAReactionOutsideTheAllowlistIsRefusedBeforeTheRequest(t *testing.T) {
 	}
 	if reacted.reactions != 1 {
 		t.Errorf("the allowed reaction was made %d times", reacted.reactions)
+	}
+}
+
+// TestTheSearchToolIsGatedOnAnIndexRatherThanACapability.
+//
+// §14.1's one tool whose gate is a fact about this machine rather than about
+// the credential. The rule it follows is the same as every other tool's: a
+// model is never shown one that cannot answer. An index with nothing in it
+// would answer every search with nothing, which a model reads as "nobody said
+// that" rather than as "nobody has synced anything", and those are different
+// answers to different questions.
+func TestTheSearchToolIsGatedOnAnIndexRatherThanACapability(t *testing.T) {
+	// No index at all.
+	none := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+	})
+	if slices.Contains(advertised(t, none), "search_messages") {
+		t.Error("search_messages was registered with no index")
+	}
+
+	// An index that exists but holds nothing, which is what a machine that ran
+	// sync and found no spaces looks like.
+	empty := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		Index:   store.NewNDJSON(t.TempDir()),
+	})
+	if slices.Contains(advertised(t, empty), "search_messages") {
+		t.Error("search_messages was registered against an empty index")
+	}
+
+	// And one with something in it.
+	dir := t.TempDir()
+	index := store.NewNDJSON(dir)
+	if err := index.Append(context.Background(), "spaces/AAAATestSpace", []rows.Message{
+		{Name: "spaces/AAAATestSpace/messages/AAA", CreateTime: "2026-08-17T09:00:00Z", Text: "deploy done"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	full := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		Index:   index,
+	})
+	if !slices.Contains(advertised(t, full), "search_messages") {
+		t.Error("search_messages was not registered against an index holding a message")
+	}
+}
+
+// TestTheSearchToolNeedsNoCapabilityAtAll.
+//
+// A webhook can post and can do nothing else, and it can still search what a
+// user-authorized profile copied down, because the answer is on disk and no
+// request is made. That is the case worth holding: this project exists for the
+// population whose only credential is a webhook.
+func TestTheSearchToolNeedsNoCapabilityAtAll(t *testing.T) {
+	dir := t.TempDir()
+	index := store.NewNDJSON(dir)
+	if err := index.Append(context.Background(), "spaces/AAAATestSpace", []rows.Message{
+		{Name: "spaces/AAAATestSpace/messages/AAA", CreateTime: "2026-08-17T09:00:00Z", Text: "deploy done"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	session := connectWith(t, Options{
+		Profile: &profile.Open{
+			Name:      "alerts",
+			Transport: &fake{kind: config.TransportWebhook, caps: transport.CapabilitiesFor(config.TransportWebhook)},
+		},
+		Index: index,
+	})
+	if got := advertised(t, session); !slices.Equal(got, []string{"search_messages"}) {
+		t.Fatalf("a webhook with an index serves %v, want exactly search_messages", got)
+	}
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_messages",
+		Arguments: map[string]any{"query": "deploy"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("the search failed on a webhook profile: %+v", result.Content)
 	}
 }

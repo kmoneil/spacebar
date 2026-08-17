@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: sync needs a space, or --all.
+  spacebar sync spaces/AAAAAAA
+  spacebar sync --all

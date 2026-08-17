@@ -42,6 +42,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/profile"
+	"github.com/kmoneil/spacebar/internal/store"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
@@ -71,6 +72,9 @@ type Server struct {
 	// as a set because the check runs on every write.
 	allowed map[string]bool
 
+	// index is the local message index, nil when there is none. See indexed.
+	index *store.NDJSON
+
 	audit func(string)
 }
 
@@ -93,6 +97,17 @@ type Options struct {
 	// Audit receives one line per tool call. Never nil in the command; a nil
 	// one here means a test that is not asserting on the log.
 	Audit func(string)
+
+	// Index is the local message index, and search_messages is registered only
+	// when it holds something. That makes it the one tool in SPEC.md §14.1
+	// gated on a fact about this machine rather than on a capability of the
+	// credential, and the rule is the same either way: a model is never shown a
+	// tool that cannot answer. An index with no spaces in it would answer every
+	// search with nothing, which reads to a model as "there is no such message"
+	// rather than as "nobody has synced anything".
+	//
+	// Nil means no index, which is what a caller that has not built one passes.
+	Index *store.NDJSON
 }
 
 // New builds a server with exactly the tools this profile can serve.
@@ -120,6 +135,7 @@ func New(opts Options) (*Server, error) {
 		}, nil),
 		profile: opts.Profile,
 		allowed: allowed,
+		index:   opts.Index,
 		audit:   opts.Audit,
 	}
 
@@ -137,6 +153,14 @@ func New(opts Options) (*Server, error) {
 	if opts.AllowWrite {
 		register(s, caps, transport.CanSend, sendMessageTool, s.sendMessage)
 		register(s, caps, transport.CanReact, reactToMessageTool, s.reactToMessage)
+	}
+
+	// The index tool, gated on there being an index rather than on a
+	// capability. It needs no transport at all: a webhook profile can search
+	// what a user-authorized one copied down, because the answer is on disk.
+	if s.indexed() {
+		mcp.AddTool(s.srv, searchMessagesTool, s.searchMessages)
+		s.tools = append(s.tools, searchMessagesTool.Name)
 	}
 
 	if len(s.tools) == 0 {
@@ -409,4 +433,18 @@ func truncate(value string) string {
 		return value
 	}
 	return string(runes[:maxAuditedValue]) + "..."
+}
+
+// indexed reports whether the local index holds anything worth searching.
+//
+// Anything, not merely existing: a directory with no spaces in it answers every
+// search with nothing, and a model handed an empty answer reads it as "nobody
+// said that" rather than as "nobody synced this". The distinction is the whole
+// reason the gate is registration and not a runtime error.
+func (s *Server) indexed() bool {
+	if s.index == nil {
+		return false
+	}
+	spaces, err := s.index.Spaces()
+	return err == nil && len(spaces) > 0
 }

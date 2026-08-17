@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: the local index is empty, so there is nothing to search.
+Copy a space down first:
+  spacebar sync --all

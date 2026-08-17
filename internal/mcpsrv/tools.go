@@ -22,8 +22,10 @@ import (
 
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/format"
+	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/rows"
+	"github.com/kmoneil/spacebar/internal/store"
 )
 
 // The tools, and the arguments a model sends them.
@@ -422,4 +424,111 @@ func orderOf(order string) (string, error) {
 		return "", nil
 	}
 	return chat.OrderBy(order)
+}
+
+// The search tool. §14.1 gates it on "index present", which makes it the only
+// tool here whose gate is a fact about this machine rather than about the
+// credential.
+//
+// It is a read and needs no capability at all, which is worth being explicit
+// about: the answer is on disk, so a webhook profile can search what a
+// user-authorized one copied down.
+var searchMessagesTool = &mcp.Tool{
+	Name: "search_messages",
+	Description: "Search the messages copied into this machine's local index. This does NOT search " +
+		"Google Chat: there is no message search API for an ordinary user, so only what `" + meta.AppName + " sync` " +
+		"has already copied can be found, and a space nobody has synced returns nothing rather than an " +
+		"error. Matching is case-folded substring over the message body. A message that was edited is " +
+		"found by the text it has now and one that was deleted is not found at all, so results agree " +
+		"with what somebody would see in the space. Use list_messages instead to read a space directly " +
+		"from the API.",
+}
+
+type searchMessagesIn struct {
+	Query string `json:"query" jsonschema:"the text to look for, matched case-folded anywhere in a message body"`
+	Space string `json:"space,omitempty" jsonschema:"restrict to one space: a resource name, an alias, a display name, or an email address; omit to search every indexed space"`
+	Limit int    `json:"limit,omitempty" jsonschema:"how many messages to return; omit for 25, maximum 200"`
+	Since string `json:"since,omitempty" jsonschema:"only messages created strictly after this RFC 3339 time"`
+	Until string `json:"until,omitempty" jsonschema:"only messages created strictly before this RFC 3339 time"`
+}
+
+type searchMessagesOut struct {
+	Messages []rows.Message `json:"messages"`
+
+	// Searched is which spaces the index actually holds. A model that asked a
+	// question across "everything" is entitled to know what everything was,
+	// because the honest answer to a search over an index is bounded by what
+	// somebody remembered to sync.
+	Searched []string `json:"searched"`
+
+	HasMore bool `json:"has_more,omitempty" jsonschema:"true when more messages match than the limit returned"`
+}
+
+func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in searchMessagesIn) (*mcp.CallToolResult, searchMessagesOut, error) {
+	limit, err := limitOf(in.Limit)
+	if err != nil {
+		return nil, searchMessagesOut{}, err
+	}
+	since, err := whenOf(in.Since)
+	if err != nil {
+		return nil, searchMessagesOut{}, err
+	}
+	until, err := whenOf(in.Until)
+	if err != nil {
+		return nil, searchMessagesOut{}, err
+	}
+
+	target := ""
+	if in.Space != "" {
+		if target, err = s.resolve(ctx, in.Space); err != nil {
+			return nil, searchMessagesOut{}, err
+		}
+	}
+
+	searched, err := s.index.Spaces()
+	if err != nil {
+		return nil, searchMessagesOut{}, err
+	}
+
+	out := searchMessagesOut{Messages: []rows.Message{}, Searched: searched}
+	if target != "" {
+		out.Searched = []string{target}
+	}
+
+	found := 0
+	for m, err := range s.index.Search(ctx, store.Query{
+		Space: target,
+		Text:  in.Query,
+		Since: since,
+		Until: until,
+		Limit: limit + 1,
+	}) {
+		if err != nil {
+			return nil, searchMessagesOut{}, err
+		}
+		if found >= limit {
+			out.HasMore = true
+			break
+		}
+		out.Messages = append(out.Messages, m)
+		found++
+	}
+	return nil, out, nil
+}
+
+// whenOf parses an optional RFC 3339 time from a tool argument.
+//
+// Refused rather than ignored when it will not parse, for the reason every
+// other bad argument is: a model that mistyped a timestamp and got the whole
+// index back would report the wrong answer confidently.
+func whenOf(value string) (time.Time, error) {
+	if value == "" {
+		return time.Time{}, nil
+	}
+	at, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, output.Errorf("USAGE", output.ExitUsage,
+			"%q is not an RFC 3339 time, as in 2026-08-17T09:00:00Z.", value)
+	}
+	return at, nil
 }

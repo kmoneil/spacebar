@@ -84,10 +84,20 @@ something is still a message.`,
 				return err
 			}
 
+			// The index is opened rather than required. A machine that has
+			// never run `sync` has none, and that is a normal state: the
+			// search tool is simply not registered, which is the same answer
+			// every other unavailable tool gets.
+			index, err := openIndex()
+			if err != nil {
+				return err
+			}
+
 			server, err := mcpsrv.New(mcpsrv.Options{
 				Profile:     opened,
 				AllowWrite:  allowWrite,
 				AllowSpaces: allowSpaces,
+				Index:       index,
 				Audit:       r.Audit,
 			})
 			if err != nil {

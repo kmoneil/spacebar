@@ -299,6 +299,16 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"watch-all-unsupported.txt", []string{"watch", "--all"}, output.ExitUnsupported, "", true, true},
 		{"watch-all-and-a-space.txt", []string{"watch", "--all", "spaces/AAAATestSpace"}, output.ExitUsage, "", true, true},
 
+		// sync and search. sync is a read, so a webhook meets the capability
+		// refusal; search touches no network at all, so what it refuses is an
+		// empty index, which is the state every machine starts in and the first
+		// thing a new user will see.
+		{"sync-no-arguments.txt", []string{"sync"}, output.ExitUsage, "", true, true},
+		{"sync-all-and-a-space.txt", []string{"sync", "--all", "spaces/AAAATestSpace"}, output.ExitUsage, "", true, true},
+		{"sync-unsupported.txt", []string{"sync", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
+		{"search-no-arguments.txt", []string{"search"}, output.ExitUsage, "", true, true},
+		{"search-empty-index.txt", []string{"search", "deploy"}, output.ExitUsage, "", true, true},
+
 		// The MCP server's refusals. Both are reached before a session starts,
 		// so they are deterministic: one is a profile that can serve nothing,
 		// and the other is an allowlist entry that is not a space name.
@@ -377,7 +387,7 @@ func TestGoldenOutputContract(t *testing.T) {
 // are the thing being recorded and a helper that parsed them would be a second
 // implementation of the command tree.
 func needsAProfile(name string) bool {
-	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-", "watch-", "mcp-"} {
+	for _, prefix := range []string{"send", "spaces-", "messages-", "alias-", "tail-", "react-", "watch-", "mcp-", "sync-", "search-"} {
 		if strings.HasPrefix(name, prefix) {
 			return true
 		}

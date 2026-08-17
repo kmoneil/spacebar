@@ -129,6 +129,17 @@ var readOnlyCommands = map[string]string{
 
 	"spacebar alias": "the group prints help",
 
+	// Reads from the API and writes to this machine's own index. It puts
+	// nothing into a space, which is the question this list asks, and the fact
+	// that it writes a great deal to disk is a different property: --dry-run
+	// has no request of its own to show, because every request it makes is a
+	// read somebody could have made with `messages list`.
+	"spacebar sync": "copies messages down and writes only to the local index",
+
+	// Touches no network at all. It is the one read command that works on a
+	// webhook profile, because the answer is already on disk.
+	"spacebar search": "reads the local index and makes no request",
+
 	// Polls messages.list forever and puts nothing anywhere. It is the one
 	// read-only command that does not terminate on its own, which is a
 	// different property from this one and is why the entry says so: --dry-run

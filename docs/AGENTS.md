@@ -203,6 +203,31 @@ place the tombstone exists, and `messages get` on that name answers nothing.
 `go`, `os` and `arch` are the machine, and are elided in the recorded contract
 rather than frozen.
 
+## Searching
+
+**`search` reads a local index, not Google Chat.** There is no message search
+API for an ordinary user, so the only thing that can be searched is what
+`spacebar sync` has already copied to this machine. A space nobody has synced is
+not searched.
+
+That means a result count is bounded by what somebody remembered to sync, so
+**`search` names the spaces it did not look in, on stderr**, comparing the index
+against the profile's cached space list. It costs no request. Read that line
+before treating a result set as complete:
+
+```console
+$ spacebar search "deploy"
+warning: searched 1 of 5 spaces. Not searched, because they are not in the index: spaces/BBB spaces/CCC
+```
+
+`sync` is resumable and holds no cursor. It fetches everything newer than the
+newest message it holds and everything older than the oldest, so an interrupted
+run resumes by being run again, with nothing fetched twice and no gap. `--limit`
+bounds one run rather than truncating the result.
+
+A message that was edited is found by the text it has now, and one that was
+deleted is not found at all, because the index records both.
+
 ## Capabilities
 
 A profile has one of three transports, and what it can do follows from that
@@ -273,6 +298,10 @@ spacebar messages get spaces/AAAAAAA/messages/BBB --json
 spacebar tail spaces/AAAAAAA --json                    # new messages, until Ctrl-C
 spacebar watch spaces/AAAAAAA --json                   # every event, not just messages
 spacebar watch --all --json                            # every space it can reach
+
+spacebar sync --all                                    # copy messages down
+spacebar search "deploy" --json                        # search what was copied
+spacebar search "deploy" --space eng --limit 10 --json
 ```
 
 `tail` and `watch` stream until interrupted, and **ending on a signal is exit
