@@ -36,6 +36,8 @@ package rows
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/kmoneil/spacebar/internal/chat"
@@ -334,11 +336,14 @@ func textOf(payload json.RawMessage) string {
 	if err := json.Unmarshal(payload, &wrapper); err != nil {
 		return ""
 	}
-	for _, value := range wrapper {
+	// Sorted, for the reason internal/chat sorts the same shape: ranging a map
+	// is not ordered, so with two candidate keys the same bytes produce a
+	// different column on different runs of the same build.
+	for _, key := range slices.Sorted(maps.Keys(wrapper)) {
 		var subject struct {
 			Text string `json:"text"`
 		}
-		if err := json.Unmarshal(value, &subject); err == nil && subject.Text != "" {
+		if err := json.Unmarshal(wrapper[key], &subject); err == nil && subject.Text != "" {
 			return subject.Text
 		}
 	}

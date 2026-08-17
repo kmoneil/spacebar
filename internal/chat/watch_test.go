@@ -16,6 +16,7 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -220,4 +221,45 @@ func filterOf(t *testing.T, uri string) string {
 		t.Fatalf("parsing %q: %v", uri, err)
 	}
 	return values.Get("filter")
+}
+
+// TestAnAmbiguousPayloadDecodesTheSameWayEveryTime.
+//
+// Ranging a map is unordered, and three places took the first match out of one:
+// the field ending in EventData, the key inside it carrying a name, and the key
+// carrying a text. The API sends exactly one of each, measured across three
+// event types, so today there is nothing to order.
+//
+// The day it sends two, an unsorted walk answers differently for the same bytes
+// on the same build. Before this was sorted, 200 decodes of the event below
+// produced 162 of one subject and 38 of the other. That is the worst kind of
+// wrong to hand somebody, because re-running it disagrees with the report and
+// there is nothing to blame.
+//
+// It has to decode repeatedly. **A test that decodes once passes on the broken
+// build**, roughly four times in five, which is how a map-ordering bug survives
+// a test suite.
+func TestAnAmbiguousPayloadDecodesTheSameWayEveryTime(t *testing.T) {
+	raw := []byte(`{"name":"spaces/AAAATestSpace/spaceEvents/1",
+		"eventType":"google.workspace.chat.message.v1.created",
+		"messageCreatedEventData":{"message":{"name":"spaces/AAAATestSpace/messages/AAA","text":"first"}},
+		"batchMessageCreatedEventData":{"messages":{"name":"spaces/AAAATestSpace/messages/BBB","text":"second"}}}`)
+
+	subjects := map[string]int{}
+	payloads := map[string]int{}
+	for range 200 {
+		var e SpaceEvent
+		if err := json.Unmarshal(raw, &e); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		subjects[e.Subject]++
+		payloads[string(e.Payload)]++
+	}
+
+	if len(subjects) != 1 {
+		t.Errorf("200 decodes of one event produced %d different subjects: %v", len(subjects), subjects)
+	}
+	if len(payloads) != 1 {
+		t.Errorf("200 decodes of one event produced %d different payloads", len(payloads))
+	}
 }
