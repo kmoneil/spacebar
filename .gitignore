@@ -16,12 +16,7 @@ _tmp/
 *.swo
 *~
 .idea/
-# Everything under .vscode is local except the one setting the repository has
-# an opinion about, so the directory is excluded by its contents rather than by
-# itself: git does not descend into an excluded directory, and a negation
-# inside one never matches.
-.vscode/*
-!.vscode/settings.json
+.vscode/
 
 # Claude
 .claude/
