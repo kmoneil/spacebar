@@ -298,6 +298,37 @@ it is pasted rather than as a `400` about an API key days later.
   name removal does not walk is the bug above, and it can now only be written
   by editing the list.
 
+  **And a removal that could not happen is a failure rather than a success.**
+  `TestARemovalThatCouldNotWriteSaysSo` and, for the exit code a script sees,
+  `TestARemovalThatCouldNotHappenExitsNonZero`.
+
+  `Store.Delete` used to answer "no credential is stored for X" whenever neither
+  backend removed anything, and returned that sentence just as readily when
+  neither backend could be **read**. Both callers discarded it, so with no
+  keyring and the fallback file at mode `0644`, `profile rm` and `auth logout`
+  each printed their success line, exited 0, and left the credential in a
+  world-readable file. Reading that same file refuses loudly; removing from it
+  succeeded silently, and the silent one is what somebody runs when they want
+  the credential gone.
+
+  The contract now: **nothing to remove is success, and something that could
+  not be removed is a failure.** No caller has to branch, which is the point.
+  The fallback file is the store this tool can see, so it decides: its backend
+  has exactly one answer meaning absent, and everything else is a file that
+  exists and could not be dealt with, returned unchanged because it already
+  names the file and says `chmod 0600`.
+
+  **The keyring is best-effort here, and that is a stated limit rather than an
+  oversight.** A machine with no keyring answers every keyring call with an
+  error, and that machine is a container, a CI runner or a headless server,
+  which is the population the fallback exists for. Failing there would make
+  `profile rm` fail on every one of them, including for a secret that was never
+  stored: a webhook profile has no token and no client secret, and removal walks
+  all three. So a keyring that could not be asked is a warning saying that if it
+  held the credential it still does, and a keyring that answers "not found" is
+  not worth a line at all. `TestARemovalOfSomethingAbsentIsNotAFailure` and
+  `TestAKeyringThatHasNothingIsNotWorthAWarning`.
+
   **Removal is local and is not revocation.** Neither `profile rm` nor
   `auth logout` tells Google to forget anything, and that is deliberate rather
   than owed: revoking needs a network call in a command that otherwise touches

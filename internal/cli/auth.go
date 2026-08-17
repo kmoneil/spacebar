@@ -374,6 +374,10 @@ authorizing again needs no other setup.
 There is no confirmation, unlike removing a profile: an authorization is
 recoverable by consenting again, and a webhook URL is not.
 
+A token this cannot delete is a failure rather than a quiet success, so a
+non-zero exit here means the token is still on disk and the message says what to
+do about it. A token that was not there is not a failure.
+
 This does not tell Google to forget anything. Revoking the grant is done from
 your Google account's security settings, and it is the thing to do if a machine
 is lost rather than retired.`,
@@ -404,15 +408,26 @@ func runAuthLogout(cmd *cobra.Command, opts *Options) error {
 		return err
 	}
 
-	// A token that was not there is not a failure. The profile is unauthorized
-	// either way, which is what was asked for, and reporting "there was nothing
-	// to delete" would make an interrupted logout impossible to finish.
+	// A token that was not there is not a failure, and Store.Delete says so by
+	// returning nil for one. The profile is unauthorized either way, which is
+	// what was asked for, and reporting "there was nothing to delete" would make
+	// an interrupted logout impossible to finish.
 	//
 	// That reasoning holds for a profile that could have held one, which is why
 	// the transport is checked above rather than folded in here. "There was no
 	// token" and "this kind of profile never has one" look identical from this
 	// line and mean different things to the person who typed it.
-	_ = store.DeleteToken(name)
+	//
+	// A token that could not be removed is a different thing again and is no
+	// longer discarded. The result used to be thrown away entirely, so a
+	// fallback file at the wrong mode meant this printed "logged out" over a
+	// refresh token that was still on disk. Somebody logging out is doing it
+	// because they want the credential gone, and telling them it is when it is
+	// not is the failure this whole command is supposed to prevent.
+	if err := store.DeleteToken(name); err != nil {
+		r.Warnings(store.Warnings())
+		return err
+	}
 	r.Warnings(store.Warnings())
 	forgetSpaces(r, name)
 

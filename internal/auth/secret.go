@@ -207,6 +207,37 @@ func (s *Store) Set(ref, value string) error {
 // Both, unconditionally, and a failure in either is ignored when the other
 // succeeded. A logout that leaves the credential in the fallback file because
 // the keyring answered first has not logged anybody out.
+//
+// **Nothing to remove is success.** That is the contract, and it is chosen so
+// that no caller has to remember anything: an absent secret and a removed one
+// leave the same world behind, which is what `profile rm` and `auth logout` are
+// both asking for, and an interrupted removal has to be finishable by running
+// the command again.
+//
+// **A secret that could not be removed is a failure**, and that is the half
+// this did not have. It returned missingSecret whenever neither backend
+// answered, which reads "no credential is stored for X" and was returned just
+// as readily when neither backend could be *read*. `RemoveProfile` then
+// discarded it, so with no keyring and the fallback file at mode 0644,
+// `profile rm` printed "removed", exited 0, and left the credential in a
+// world-readable file. Reading that same file refuses loudly; removing from it
+// succeeded silently, and the silent one is the one somebody runs when they
+// want the credential gone.
+//
+// The file is the store this tool can see, so it is the one that decides. Its
+// backend has exactly one answer meaning absent, errNotInFile, and everything
+// else is a file that exists and could not be dealt with: the wrong mode,
+// unparseable, or a write that failed. That error is returned as it is, because
+// it already says what is wrong and what to run.
+//
+// The keyring is best-effort, deliberately and consistently with the rest of
+// this package: Get falls through to the file when the keyring fails, and Set
+// falls back to writing it. A machine with no keyring answers every keyring
+// call with an error, and that machine is a container, a CI runner or a
+// headless server, which is the population the fallback exists for. Failing
+// there would make `profile rm` fail on every one of them. So a keyring that
+// could not be asked is a warning rather than a refusal, and the warning says
+// what it means: if the keyring held this, it still does.
 func (s *Store) Delete(ref string) error {
 	service, key, err := parseRef(ref)
 	if err != nil {
@@ -215,8 +246,19 @@ func (s *Store) Delete(ref string) error {
 
 	keyringErr := s.keyring.remove(service, key)
 	fileErr := s.file.remove(service, key)
-	if keyringErr != nil && fileErr != nil {
-		return missingSecret(ref, keyringErr)
+
+	// The file could not be dealt with, so the credential may still be in it.
+	// This is the whole of the fix.
+	if fileErr != nil && !errors.Is(fileErr, errNotInFile) {
+		return fileErr
+	}
+
+	// Neither store had it and the keyring could not be asked, so nothing here
+	// knows whether it is gone. Said rather than returned: on a machine without
+	// a keyring this is every removal of a secret that was never there.
+	if keyringErr != nil && !errors.Is(keyringErr, keyring.ErrNotFound) && fileErr != nil {
+		s.warn("the OS keyring could not be asked to remove %s (%v), so if it holds that credential, it still does.\n"+
+			"It was not in %s either.", ref, redactError(keyringErr, ""), s.file)
 	}
 	return nil
 }
