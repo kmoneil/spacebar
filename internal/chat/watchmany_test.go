@@ -337,3 +337,112 @@ func TestATransientFailureDoesNotCostASpaceForTheRestOfTheRun(t *testing.T) {
 		t.Errorf("%s was polled %d times, so it never came round again", flaky, reached)
 	}
 }
+
+// TestDroppingASpaceDoesNotSpeedUpTheRotation.
+//
+// The gap between one request and the next is the interval over the space
+// count, so each space still comes round once an interval. That arithmetic is
+// only true while the count is what it was: every space that leaves the
+// rotation makes the cycle shorter, and a gap sized for the original count then
+// polls the survivors faster than anybody asked for.
+//
+// The floor is the part that matters. Per-space quota is shared with every
+// other app acting in that space, so a watch that has lost most of its spaces
+// degrades the one it has left for everybody in it, and MinPollInterval exists
+// to make that impossible.
+//
+// Measured off the recorded schedule rather than by timing anything, like every
+// other assertion here. One wait precedes one request, which is what the
+// harness is arranged for, so the two lists zip.
+func TestDroppingASpaceDoesNotSpeedUpTheRotation(t *testing.T) {
+	const spaces = 8
+	const survivor = "spaces/AAAATestSpace000"
+	const asked = 4 * time.Second
+
+	var mu sync.Mutex
+	var polled []string
+	client, recorded, ctx := watcher(t, 60, func(_ int, w http.ResponseWriter, req *http.Request) {
+		space := strings.TrimSuffix(strings.TrimPrefix(req.URL.Path, "/v1/"), "/spaceEvents")
+
+		mu.Lock()
+		polled = append(polled, space)
+		mu.Unlock()
+
+		if space != survivor {
+			// Gone for good, so the rotation drops it. Seven of the eight.
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = fmt.Fprint(w, `{"error":{"code":404,"status":"NOT_FOUND","message":"gone"}}`)
+			return
+		}
+		noEvents(w)
+	})
+
+	for range client.WatchMany(ctx, WatchManyRequest{
+		Types:    watchTypes(),
+		Spaces:   spaceList(spaces),
+		Interval: asked,
+	}) {
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	waited := recorded.all()
+	if len(waited) < len(polled) {
+		t.Fatalf("%d waits for %d requests, so the two do not pair", len(waited), len(polled))
+	}
+
+	// The simulated clock at each request, which is every wait up to and
+	// including the one before it.
+	at := make([]time.Duration, len(polled))
+	var elapsed time.Duration
+	for i := range polled {
+		elapsed += waited[i]
+		at[i] = elapsed
+	}
+
+	var last time.Duration = -1
+	gaps := 0
+	for i, space := range polled {
+		if space != survivor {
+			continue
+		}
+		if last >= 0 {
+			gaps++
+			gap := at[i] - last
+			if gap < MinPollInterval {
+				t.Errorf("the surviving space was polled again after %s, under the %s floor.\n"+
+					"Seven of eight spaces were dropped and the gap between requests was never "+
+					"recomputed, so the rotation kept the pace it had when it was eight.",
+					gap, MinPollInterval)
+			}
+			if gap < asked {
+				t.Errorf("the surviving space was polled again after %s, and %s was asked for",
+					gap, asked)
+			}
+		}
+		last = at[i]
+	}
+
+	if gaps < 2 {
+		t.Fatalf("the surviving space came round %d times, so there is no interval to check", gaps+1)
+	}
+
+	// The process-wide rate, which is the other thing the budget bounds and
+	// which a shrinking rotation could break in the same way. Recomputing can
+	// only lengthen a gap, so this should never fire; it is here because that
+	// is an argument and this is a measurement.
+	fastest := time.Second / PollBudget
+	for i, gap := range waited {
+		if gap < fastest {
+			t.Errorf("wait %d was %s, which is more than %d requests a second", i, gap, PollBudget)
+		}
+	}
+
+	// And it ends up at the pace a watch of one space would have had all along.
+	// A rotation that shrank to one and kept any other pace is one that
+	// remembers a count it no longer has.
+	if want := tickFor(asked, 1); waited[len(waited)-1] != want {
+		t.Errorf("the last wait was %s, and a watch of one space waits %s", waited[len(waited)-1], want)
+	}
+}

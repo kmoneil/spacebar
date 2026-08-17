@@ -288,6 +288,10 @@ asked somebody.
 with every other app in that space. A value that was quietly rounded up would
 leave a script with timing it believes and cannot verify.
 
+The same holds while `watch --all` runs. Spaces are dropped from the rotation
+when they go away or stop being readable, and the pace is recomputed each time,
+so the ones left are never polled faster than the interval you gave.
+
 ## Worked invocations
 
 ```sh
