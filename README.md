@@ -64,7 +64,7 @@ The plan, in six milestones:
 | 2   | Webhook transport: `send` with no OAuth at all            | **done** |
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
 | 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | most     |
-| 5   | MCP server                                                | reads    |
+| 5   | MCP server                                                | most     |
 | 6   | Local index and search                                    |          |
 
 Milestone 2 is the real proof point. It has to be genuinely useful to somebody
@@ -318,6 +318,10 @@ possibility, and it stops for good once a refresh proves the limit does not
 apply to you. A client with an Internal user type is not subject to it at all.
 
 [docs/ADMIN.md](docs/ADMIN.md) is the page to hand an administrator.
+[docs/AGENTS.md](docs/AGENTS.md) is the one to hand a script or an agent driving
+the command line, and [docs/SKILL.md](docs/SKILL.md) covers the MCP server.
+Every example in both is held to the code by a test, because the reader of those
+two cannot tell a stale example from a current one.
 
 ## Read a space
 

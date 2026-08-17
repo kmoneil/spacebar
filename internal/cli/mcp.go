@@ -33,8 +33,10 @@ func newMCPCmd(opts *Options) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Serve this profile's read paths to a model over MCP",
-		Long: `Serve this profile's read paths to a model over MCP, on stdin and stdout.
+		Short: "Serve this profile to a model over MCP",
+		Long: `Serve this profile to a model over MCP, on stdin and stdout.
+
+Reading only, unless --allow-write is given.
 
 Not a command to run by hand. An MCP client starts it, speaks JSON-RPC to it
 over the pipe, and stops it when the session ends. In a client's configuration

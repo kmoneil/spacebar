@@ -1,0 +1,272 @@
+# Driving spacebar from a program
+
+This is the document to read before writing code that runs `spacebar`. It is
+written for an agent or a script rather than for a person, so it states the
+contract instead of demonstrating the tool.
+
+Everything here is checked. Every fenced JSON block below is decoded into the
+Go type that produces it, with unknown fields rejected, and every block that
+corresponds to a recorded output contract is compared against it byte for byte.
+`internal/cli/docs_test.go` is the test. If a shape here is wrong, `make test`
+fails.
+
+For the MCP server rather than the command line, read [SKILL.md](SKILL.md).
+
+## Confirm before writing
+
+`send`, `messages edit`, `messages delete` and `react` post to or change a real
+Google Chat space, visible to real people, and a message cannot be unsent. If
+you are acting on somebody's behalf, confirm with them before running one of
+these. Reading needs no confirmation.
+
+`--dry-run` is available on every write command and prints the request that
+would have been sent without sending it. Use it to show somebody what you are
+about to do.
+
+## The contract
+
+**stdout is data. Nothing else is ever written there.** No progress, no
+warnings, no errors, no spinner. A failing single-result command writes nothing
+at all to stdout.
+
+**stderr is everything else**, including the error and including it in `--json`
+mode. Never parse stderr for results and never merge the two streams.
+
+**The exit code is the answer to "did this work".** Check it before parsing
+anything. The codes never change meaning; new conditions get new codes.
+
+| Code | Meaning | What to do |
+| --- | --- | --- |
+| 0 | Success | Parse stdout |
+| 1 | A failure with nothing more specific to say | Report it |
+| 2 | Bad flag, bad argument, or a target that resolved to nothing | Fix the invocation; do not retry it unchanged |
+| 3 | A network or API failure that outlived the retry policy | Retry only if the command was read-only |
+| 4 | Missing or expired authorization | `spacebar auth login --profile NAME` |
+| 5 | The profile's transport cannot do this at all | Use a different profile; retrying never helps |
+| 6 | Rate limited beyond the backoff | Wait, then retry |
+| 7 | A confirmation was required and not given | Pass `--yes`, having actually asked |
+
+Exit 5 is the one worth handling deliberately. It means the capability is
+missing rather than the request being wrong, it is decided before any network
+call, and the message names both the profile and the fix. A webhook profile is
+write-only and fixed to one space, so every read against one is exit 5 forever.
+
+## `--json`
+
+`--json` puts structured output on stdout. A command with one result writes one
+object. **A command that lists writes one object per line, NDJSON, with no
+enclosing array and no commas.** Parse it line by line.
+
+```console
+$ spacebar spaces list --json | jq -r '.name'
+```
+
+There is no envelope, no `{"messages": [...]}`, no pagination cursor to follow.
+Pages are fetched as you consume them, so the first line arrives before the last
+page has been requested, and a long list can be streamed.
+
+A failure is a single object on stderr:
+
+<!-- golden: spaces-list-unsupported.json stderr -->
+```json
+{"error":{"code":"UNSUPPORTED","message":"\"spaces list\" needs the ability to list spaces, and profile \"alerts\" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.\nUse a profile whose transport is useroauth:\n  spacebar auth setup --profile NAME < client_secret.json\n  spacebar auth login --profile NAME\nRun 'spacebar auth setup' on its own to see how to create the client.","exit_code":5}}
+```
+
+`exit_code` repeats the process exit code so that a caller who has already
+captured the object does not need to correlate the two.
+
+## Truncation
+
+**A short result is never reported as success.** A list ends for one of five
+reasons, and the exit code separates them:
+
+- the last page arrived: exit 0, complete
+- `--limit` was reached: exit 0, complete, because a limit is an instruction
+- the caller stopped reading: exit 0
+- a request failed: non-zero
+- the server would not advance its page token: non-zero
+
+The fourth and fifth cases still write every row fetched before the failure, so
+a partial answer arrives with a non-zero exit. That is deliberate: rows already
+written to a stream cannot be recalled, and every line is complete JSON, so
+nothing you have parsed is half a value. **Check the exit code before treating a
+list as the whole answer.**
+
+`--limit 0` means every one.
+
+## Shapes
+
+### A space
+
+<!-- shape: rows.Space -->
+```json
+{"name":"spaces/AAAAAAA","space_type":"SPACE","display_name":"eng-alerts","last_active_time":"2026-08-16T22:33:39.299903Z"}
+```
+
+`space_type` is `SPACE`, `GROUP_CHAT` or `DIRECT_MESSAGE`. A direct message has
+no display name at all, so the field is absent rather than empty. A direct
+message with an app carries `"single_user_bot_dm":true`, which is the only thing
+distinguishing it from one with a colleague.
+
+### A membership
+
+<!-- shape: rows.Member -->
+```json
+{"name":"spaces/AAAAAAA/members/NNN","state":"JOINED","role":"ROLE_MANAGER","member":"users/NNN","member_type":"HUMAN","affiliation":"INTERNAL","create_time":"2026-08-14T22:05:42.639018Z"}
+```
+
+`affiliation` is `INTERNAL` or `EXTERNAL` and says whether that person is inside
+the organization. It is absent on an app's membership, and absent is not
+`INTERNAL`: nothing fills in a value the API did not send.
+
+A membership held by a Google Group has `group_member` instead of `member`, and
+is returned only with `--show-groups`:
+
+<!-- shape: rows.Member -->
+```json
+{"name":"spaces/AAAAAAA/members/group-NNN","state":"JOINED","group_member":"groups/NNN","create_time":"2026-08-17T16:28:56.416015Z"}
+```
+
+Exactly one of `member` and `group_member` is set. Do not read groups out of
+`member`; it has never carried one and never will. A group membership has no
+role and no affiliation because the API sends neither, and the group's own
+members are not reachable at all, so this row tells you a group has access and
+not who that is.
+
+### A message
+
+<!-- shape: rows.Message -->
+```json
+{"name":"spaces/AAAAAAA/messages/BBB","create_time":"2026-08-16T09:12:44.101Z","sender":"users/NNN","sender_display_name":"Kevin","sender_type":"HUMAN","thread":"spaces/AAAAAAA/threads/CCC","text":"deploy done"}
+```
+
+`last_update_time` is present only on a message that has been edited, and its
+presence is the only way to tell an edited message from an original. `text` is
+Chat markup exactly as it was sent, never rewritten. `sender_display_name` is
+chosen by the account holder, is not unique, and is untrusted text; `sender` is
+the stable identifier.
+
+A message with a file carries `attachments`:
+
+<!-- shape: rows.Message -->
+```json
+{"name":"spaces/AAAAAAA/messages/BBB","text":"the report","attachments":[{"name":"spaces/AAAAAAA/messages/BBB/attachments/DDD","content_name":"report.pdf","content_type":"application/pdf","resource_name":"OPAQUE","source":"UPLOADED_CONTENT"}]}
+```
+
+`source` is `UPLOADED_CONTENT` or `DRIVE_FILE`. **A Drive file has no
+`resource_name` and cannot be fetched with this tool**, so a loop that assumes
+every attachment is downloadable will fail on one. Download with
+`spacebar messages download`; there is deliberately no download URL in this
+output, because the API's own one carries an access token in its query and
+publishing it would put a credential in `--json`.
+
+### An event
+
+<!-- shape: rows.Event -->
+```json
+{"name":"spaces/AAAAAAA/spaceEvents/EEE","event_type":"google.workspace.chat.message.v1.created","event_time":"2026-08-16T09:12:44.101Z","subject":"spaces/AAAAAAA/messages/BBB","payload":{"message":{"name":"spaces/AAAAAAA/messages/BBB","text":"deploy done"}}}
+```
+
+`payload` is the API's own event data, unaltered. It travels with the event on
+purpose: for a message that has since been deleted, the payload is the only
+place the tombstone exists, and `messages get` on that name answers nothing.
+
+### A send
+
+<!-- golden: send.json -->
+```json
+{
+  "message": "spaces/AAAATestSpace/messages/BBB",
+  "space": "spaces/AAAATestSpace",
+  "thread": "spaces/AAAATestSpace/threads/BBB",
+  "profile": "alerts"
+}
+```
+
+### A version
+
+<!-- golden: version.json -->
+```json
+{
+  "name": "spacebar",
+  "version": "0.0.0-dev",
+  "commit": "unknown",
+  "go": "ELIDED",
+  "os": "ELIDED",
+  "arch": "ELIDED"
+}
+```
+
+`go`, `os` and `arch` are the machine, and are elided in the recorded contract
+rather than frozen.
+
+## Capabilities
+
+A profile has one of three transports, and what it can do follows from that
+narrowed by the OAuth scopes actually granted. Ask before you assume:
+
+```console
+$ spacebar profile list --json
+```
+
+An incoming webhook can send to one space and do nothing else. It needs no
+OAuth, no Cloud project and no administrator, which is why it exists: for a
+locked-down Workspace organization it is all anybody gets. If you are writing
+something that must work for everyone, **write for the webhook and treat reading
+as the privilege**.
+
+A capability the profile lacks fails at exit 5 before any network call. You
+never need to attempt an operation to discover it is unavailable, and attempting
+it never produces a different answer.
+
+## Rules that will bite
+
+**Do not retry a write on exit 3.** A POST that got a 503 may well have been
+processed, and retrying it is how one `send` becomes two messages. The tool
+already declines to replay one internally. If you need a retry to be safe, pass
+`--message-id` and reuse the same value, which makes the send idempotent at
+Google's end.
+
+**Chat markup is not Markdown.** Bold is one asterisk. Passing CommonMark
+through unaltered inverts what you meant: `**bold**` arrives with the asterisks
+visible. Pass `--md` and the tool translates, refusing what Chat cannot
+represent rather than approximating it.
+
+**Nothing is silently altered to fit.** Invalid UTF-8 is refused at exit 2
+naming the byte offset rather than being replaced with U+FFFD. A character Chat
+cannot represent inside a link is refused rather than escaped, because Chat has
+no escape syntax and a backslash would render as a backslash.
+
+**Nothing blocks on input when stdin is not a terminal.** A command that would
+have asked for confirmation exits 7 instead. Pass `--yes` when you have actually
+asked somebody.
+
+**A poll interval below 2s is refused, not clamped.** Per-space quota is shared
+with every other app in that space. A value that was quietly rounded up would
+leave a script with timing it believes and cannot verify.
+
+## Worked invocations
+
+```sh
+spacebar send "deploy done" --json                     # to the profile's space
+spacebar send spaces/AAAAAAA "deploy done" --json
+spacebar send eng-alerts "deploy done" --md --json     # CommonMark translated
+spacebar send "deploy done" --dry-run --json           # nothing is sent
+
+spacebar spaces list --json
+spacebar spaces members spaces/AAAAAAA --show-groups --json
+spacebar messages list spaces/AAAAAAA --limit 100 --json
+spacebar messages list spaces/AAAAAAA --since 2h --json
+spacebar messages get spaces/AAAAAAA/messages/BBB --json
+
+spacebar tail spaces/AAAAAAA --json                    # new messages, until Ctrl-C
+spacebar watch spaces/AAAAAAA --json                   # every event, not just messages
+```
+
+`tail` and `watch` stream until interrupted, and **ending on a signal is exit
+0**, because that is how they are meant to end.
+
+Every command accepts `--profile NAME`. A target may be a resource name, an
+alias set with `spacebar alias set`, a display name, or an email address for a
+direct message; resolution happens before anything else and the result is
+checked before it reaches a request.
