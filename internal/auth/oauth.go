@@ -88,7 +88,13 @@ const DefaultFlowTimeout = 180 * time.Second
 // encode to 86, comfortably inside that, and SPEC.md §6.3 asks for 64.
 const verifierBytes = 64
 
-// stateBytes is the length of the state value before encoding (SPEC.md §6.3).
+// stateBytes is the length of the state value before encoding.
+//
+// The state parameter is what ties a callback to the request that started it,
+// so a value somebody else can guess is a value somebody else can forge a
+// callback for: RFC 6749 §10.12 requires it to be non-guessable for exactly
+// that reason. 32 random bytes is 256 bits, which encodes to 43 characters and
+// is far past anything worth attacking. SPEC.md §6.3 asks for 32.
 const stateBytes = 32
 
 // Reporter receives what the flow has to tell a person while it runs.
