@@ -27,7 +27,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/kmoneil/spacebar/internal/auth"
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -140,6 +142,81 @@ func configured(t *testing.T) *space {
 		t.Fatalf("configuring: exit %d\n%s", got.exit, got.stderr)
 	}
 	return s
+}
+
+// userOAuthProfile is the name configuredUserOAuth gives the profile it makes.
+const userOAuthProfile = "authorized"
+
+// configuredUserOAuth configures a profile authorized as a user, pointed at
+// nothing.
+//
+// It exists because the walk that holds --dry-run could only ever configure a
+// webhook, so every command needing read access was recorded as exit 5 and its
+// dry run was never reached. `send --file` is the one that cost something: it
+// makes two requests rather than one, the first of them was the only place a
+// *chat.DryRun could arrive unhandled, and the command exited 1 printing
+// nothing for four milestones.
+//
+// There is no server, and there cannot be one. chat.BaseURL is a constant so
+// that no environment variable can redirect where a credential goes, which
+// internal/cli/dryrun_test.go already records as the reason its walk covered
+// one transport. What makes this usable anyway is that a dry run never reaches
+// the network: the client stops on the line before the send.
+//
+// So "it stops" is what the proxy below turns from a hope into a property. Any
+// request that did escape dials 127.0.0.1:1 and fails there, so this test talks
+// to nobody even on the day the dry-run stop regresses, and the command fails
+// loudly instead. The token is fake and expires in 2099, which is what keeps
+// x/oauth2 from trying to refresh it: a refresh is the one network call that
+// would happen before the stop.
+func configuredUserOAuth(t *testing.T) {
+	t.Helper()
+	isolate(t)
+
+	// Nothing may leave this machine. ProxyFromEnvironment is what net/http's
+	// default transport consults, and every client this tool builds uses it.
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:1")
+	t.Setenv("NO_PROXY", "")
+
+	store, err := auth.New()
+	if err != nil {
+		t.Fatalf("opening the credential store: %v", err)
+	}
+	if err := store.SaveToken(userOAuthProfile, &auth.Token{
+		AccessToken: "ya29.not-a-real-access-token",
+		TokenType:   "Bearer",
+
+		// Far enough out that x/oauth2 hands it back rather than refreshing it.
+		Expiry: time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC),
+
+		// Everything this build asks for, so that a capability gate is never
+		// what stops a command the walk means to reach the dry run.
+		Scopes:     append(append([]string{}, auth.DefaultScopes...), auth.ScopeReactions),
+		ObtainedAt: time.Now(),
+
+		// Otherwise every invocation carries the seven-day warning on stderr,
+		// which is true and is noise in a walk asserting on output.
+		BeyondTestingWindow: true,
+	}); err != nil {
+		t.Fatalf("storing the token: %v", err)
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("loading the configuration: %v", err)
+	}
+	if cfg.Profiles == nil {
+		cfg.Profiles = map[string]config.Profile{}
+	}
+	cfg.Profiles[userOAuthProfile] = config.Profile{
+		Transport: config.TransportUserOAuth,
+		ClientID:  "not-a-real-client.apps.googleusercontent.com",
+	}
+	cfg.DefaultProfile = userOAuthProfile
+	if err := cfg.Save(); err != nil {
+		t.Fatalf("saving the configuration: %v", err)
+	}
 }
 
 // TestTheZeroCeremonyCaseWorks is goal number one of the whole project, and it

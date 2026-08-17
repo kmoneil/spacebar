@@ -16,7 +16,9 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -44,17 +46,38 @@ var writeCommands = map[string]struct {
 	args     []string
 	needsURL bool
 
-	// refusedOnAWebhook says this command needs a capability a webhook does not
-	// have, so the walk below cannot reach its dry run: the gate fires first,
-	// which is correct and is not what that test is about.
+	// variants are further invocations of the same command that change the
+	// requests it makes, run under --dry-run beside the one above.
 	//
-	// These tests can configure exactly one kind of profile, because a
+	// One entry today and it is the reason this field exists. `send --file`
+	// uploads before it posts, so it is two requests rather than one, and the
+	// first was the only place in the tree a *chat.DryRun could arrive
+	// unhandled. Walking commands does not reach it, because it is a flag on a
+	// command the walk already had: `send` was covered and `send --file` was a
+	// different code path with the same name.
+	//
+	// A flag belongs here when it changes which requests are made, and not when
+	// it changes what is in one. --md and --mention alter a body; --file adds a
+	// request.
+	variants []dryRunVariant
+
+	// refusedOnAWebhook says this command needs a capability a webhook does not
+	// have, so on that profile the gate fires before the dry run, which is
+	// correct and is not what this test is about.
+	//
+	// It used to mean the dry run was never reached at all. The reasoning was
+	// that these tests can configure exactly one kind of profile, because a
 	// user-OAuth one would need a client pointed at a test server and
 	// chat.BaseURL is a constant on purpose: an environment variable that
 	// redirects the API base is a lever for sending a credential somewhere
-	// else. So the walk asserts the refusal for these, which is also a claim
-	// worth holding, and the dry-run stop itself is held in internal/chat where
-	// it actually lives, against a server that fails the test if it is reached.
+	// else.
+	//
+	// The constant still holds and there is still no server. What was wrong is
+	// the conclusion: a dry run never reaches the network, so it needs no
+	// server to be pointed at. configuredUserOAuth builds the profile without
+	// one, and every command here now has its dry run reached on the transport
+	// that can carry it. That gap is how `send --file` shipped exiting 1 and
+	// printing nothing for four milestones.
 	refusedOnAWebhook bool
 
 	// silent says this command prints no request preview, so the two
@@ -63,7 +86,17 @@ var writeCommands = map[string]struct {
 	// pipe it says nothing at all, which is correct rather than a gap.
 	silent bool
 }{
-	"spacebar send": {args: []string{"send", "deploy done"}},
+	"spacebar send": {
+		args: []string{"send", "deploy done"},
+		variants: []dryRunVariant{{
+			// The one this card was written for. It is refused on a webhook,
+			// which has no CanUpload, so it is only ever reached on the
+			// user-OAuth profile, which is why nothing reached it at all.
+			name:              "--file",
+			args:              []string{"send", "spaces/AAAATestSpace", "deploy done", "--file", attachmentPlaceholder},
+			refusedOnAWebhook: true,
+		}},
+	},
 
 	// A verification message is a real message in a real space, so this is a
 	// write even though the command is named for configuration.
@@ -224,29 +257,225 @@ func TestEveryCommandIsClassifiedAsWritingOrNot(t *testing.T) {
 // message somebody's colleagues can see.
 func TestEveryWriteCommandHonoursDryRun(t *testing.T) {
 	for path, cmd := range writeCommands {
-		t.Run(path, func(t *testing.T) {
-			s := configuredRefusing(t)
+		for _, v := range append([]dryRunVariant{{
+			args:              cmd.args,
+			refusedOnAWebhook: cmd.refusedOnAWebhook,
+			silent:            cmd.silent,
+			needsURL:          cmd.needsURL,
+		}}, withDefaults(cmd.variants, cmd)...) {
+			name := path
+			if v.name != "" {
+				name += " " + v.name
+			}
 
-			got := runCLIIn(t, s.stdinFor(cmd.needsURL), append([]string{"--dry-run"}, cmd.args...)...)
+			t.Run(name+" on a webhook", func(t *testing.T) {
+				s := configuredRefusing(t)
+				args := append([]string{"--dry-run"}, resolvePlaceholders(t, v.args)...)
+				got := runCLIIn(t, s.stdinFor(v.needsURL), args...)
 
-			// Either it printed the request it would have made, or it refused
-			// before building one. Both are the claim this walk is for: no write
-			// command reaches the network with --dry-run set, whatever else it
-			// does.
-			want := output.ExitOK
-			if cmd.refusedOnAWebhook {
-				want = output.ExitUnsupported
+				// Either it printed the request it would have made, or it
+				// refused before building one. Both are the claim this walk is
+				// for: no write command reaches the network with --dry-run set,
+				// whatever else it does.
+				want := output.ExitOK
+				if v.refusedOnAWebhook {
+					want = output.ExitUnsupported
+				}
+				assertDryRun(t, got, want, v.silent || v.refusedOnAWebhook)
+
+				// The request count is the assertion this half has and the
+				// other half cannot: the webhook is pointed at a server that
+				// fails the test if it is reached.
+				if s.count() != 0 {
+					t.Fatalf("--dry-run made %d requests", s.count())
+				}
+			})
+
+			if !v.refusedOnAWebhook || v.needsURL {
+				// Two reasons to stop here, and they are different.
+				//
+				// A command the webhook could carry has had its dry run reached
+				// already, and a second transport would run the same code: the
+				// stop is in the client either way.
+				//
+				// A command that reads a webhook URL from stdin builds its own
+				// transport out of it and pays no attention to the active
+				// profile, so running it here would test the webhook path
+				// again while claiming to test the other one.
+				continue
 			}
-			if got.exit != want {
-				t.Fatalf("exit = %d, want %d\n%s", got.exit, want, got.stderr)
-			}
-			if s.count() != 0 {
-				t.Fatalf("--dry-run made %d requests", s.count())
-			}
-			if !cmd.refusedOnAWebhook && !cmd.silent && got.stdout == "" {
-				t.Errorf("--dry-run printed nothing to stdout, so there is nothing to check")
-			}
-		})
+
+			t.Run(name+" as an authorized user", func(t *testing.T) {
+				configuredUserOAuth(t)
+				args := append([]string{"--dry-run"}, resolvePlaceholders(t, v.args)...)
+				got := runCLIIn(t, "", args...)
+
+				// No request count here, and it is worth being plain about why.
+				// There is no server to count at, because chat.BaseURL is a
+				// constant. What holds "nothing was sent" on this half is that
+				// nothing could be: an escaping request dials the unreachable
+				// proxy configuredUserOAuth sets and fails there, so a regressed
+				// dry-run stop shows up as a non-zero exit rather than as a
+				// message in somebody's space. The stop itself is held in
+				// internal/chat, against a server that fails if it is reached.
+				assertDryRun(t, got, output.ExitOK, v.silent)
+			})
+		}
+	}
+}
+
+// dryRunVariant is one invocation of a write command under --dry-run.
+type dryRunVariant struct {
+	// name distinguishes this from the command's plain form in the test output.
+	// Empty for the plain form itself.
+	name string
+
+	args              []string
+	needsURL          bool
+	refusedOnAWebhook bool
+	silent            bool
+}
+
+// attachmentPlaceholder stands in for a path only the test can know, because
+// the file has to exist and live in a directory the test owns.
+const attachmentPlaceholder = "<attachment>"
+
+// resolvePlaceholders swaps in the paths that cannot be written in a table.
+func resolvePlaceholders(t *testing.T, args []string) []string {
+	t.Helper()
+
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, arg := range out {
+		if arg != attachmentPlaceholder {
+			continue
+		}
+		path := filepath.Join(t.TempDir(), "report.txt")
+		if err := os.WriteFile(path, []byte("an attachment\n"), 0o600); err != nil {
+			t.Fatalf("writing the attachment: %v", err)
+		}
+		out[i] = path
+	}
+	return out
+}
+
+// withDefaults fills a variant's unset fields from the command it belongs to,
+// so a table entry only says what differs.
+func withDefaults(variants []dryRunVariant, cmd struct {
+	args              []string
+	needsURL          bool
+	variants          []dryRunVariant
+	refusedOnAWebhook bool
+	silent            bool
+},
+) []dryRunVariant {
+	out := make([]dryRunVariant, 0, len(variants))
+	for _, v := range variants {
+		if !v.needsURL {
+			v.needsURL = cmd.needsURL
+		}
+		if !v.silent {
+			v.silent = cmd.silent
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// assertDryRun holds what every dry run owes its caller: exit 0 and a request
+// on stdout, or a refusal that reached no request at all.
+func assertDryRun(t *testing.T, got result, want output.ExitCode, silent bool) {
+	t.Helper()
+
+	if got.exit != want {
+		t.Fatalf("exit = %d, want %d\n%s", got.exit, want, got.stderr)
+	}
+	if want != output.ExitOK || silent {
+		return
+	}
+	if got.stdout == "" {
+		t.Errorf("--dry-run printed nothing to stdout, so there is nothing to check.\nstderr:\n%s", got.stderr)
+	}
+}
+
+// TestADryRunOfASendWithAFileShowsTheUploadAndSaysWhatFollows holds the
+// decision, which the walk above does not: it asserts that a dry run happened,
+// and this asserts what it said.
+//
+// A send with an attachment is two requests. The second carries an upload token
+// this API returns from the first, so there is no way to show it without making
+// the first, and the choice was between printing one exact request and saying
+// what follows it, or printing an approximation of a request that would not be
+// sent in that form. This tool does not approximate.
+func TestADryRunOfASendWithAFileShowsTheUploadAndSaysWhatFollows(t *testing.T) {
+	configuredUserOAuth(t)
+
+	// Recognisable bytes, so that "the file was not printed" is a claim about
+	// this file rather than about the absence of something.
+	const marker = "PRETEND-THIS-IS-A-PNG"
+	path := filepath.Join(t.TempDir(), "diagram.png")
+	if err := os.WriteFile(path, []byte(strings.Repeat(marker, 100)), 0o600); err != nil {
+		t.Fatalf("writing the attachment: %v", err)
+	}
+
+	got := runCLIIn(t, "", "--dry-run", "send", "spaces/AAAATestSpace", "deploy done", "--file", path)
+	if got.exit != output.ExitOK {
+		t.Fatalf("exit = %d, want 0\n%s", got.exit, got.stderr)
+	}
+
+	// The request that would actually be sent first, exactly.
+	for _, want := range []string{
+		"POST https://chat.googleapis.com/upload/v1/spaces/AAAATestSpace/attachments:upload",
+		"uploadType=multipart",
+		"Content-Type: multipart/related",
+	} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("the upload request does not carry %q:\n%s", want, got.stdout)
+		}
+	}
+
+	// And the file is described rather than printed. A two-hundred-megabyte
+	// attachment is allowed, and printing one is not showing a request, it is
+	// copying a file to stdout.
+	if strings.Contains(got.stdout, marker) {
+		t.Errorf("the attachment's bytes were printed to stdout:\n%.500s", got.stdout)
+	}
+	if !strings.Contains(got.stdout, "bytes, not shown") {
+		t.Errorf("the body is not described:\n%s", got.stdout)
+	}
+
+	// The count is of the request body, which is the multipart document and so
+	// is larger than the file inside it. Asserted as that relationship rather
+	// than as a number, because a number here would be recording the length of
+	// a boundary and the metadata part.
+	size := regexp.MustCompile(`<(\d+) bytes, not shown`).FindStringSubmatch(got.stdout)
+	if size == nil {
+		t.Fatalf("the description carries no byte count:\n%s", got.stdout)
+	}
+	counted, err := strconv.Atoi(size[1])
+	if err != nil {
+		t.Fatalf("the byte count is not a number: %q", size[1])
+	}
+	if fileSize := len(marker) * 100; counted <= fileSize {
+		t.Errorf("the body is %d bytes and the file alone is %d, so the count is not of the request",
+			counted, fileSize)
+	}
+
+	// Saying so is the other half of the decision. A caller who sees one
+	// request and is not told a second would follow has been told half of what
+	// would happen.
+	if !strings.Contains(got.stderr, "first of two requests") {
+		t.Errorf("stderr does not say a second request would follow:\n%s", got.stderr)
+	}
+	if !strings.Contains(got.stderr, "Nothing was uploaded and nothing was sent") {
+		t.Errorf("stderr does not say nothing happened:\n%s", got.stderr)
+	}
+
+	// stdout is the request and nothing else, which is the rule every other dry
+	// run follows: the notes above are on stderr precisely so a caller piping
+	// stdout into a parser is handed one document.
+	if strings.Contains(got.stdout, "first of two requests") {
+		t.Errorf("a note reached stdout:\n%s", got.stdout)
 	}
 }
 

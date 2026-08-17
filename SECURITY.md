@@ -835,6 +835,40 @@ read. It is gated more tightly than the CLI, on purpose.
   a server that fails the test if it is ever reached. Verified by planting a new
   command and watching the first fail.
 
+  **That walk covered one transport, and forgetting to render is exactly what
+  went wrong in the gap.** It could only configure a webhook, so every command
+  needing read access was recorded as exit 5 and its dry run was never reached.
+  `send --file` uploads before it posts, and the upload was the one place a dry
+  run's answer arrived unhandled: the command exited 1 with
+  `dry run: the request below was not sent` and nothing below it, for four
+  milestones. It failed safe, and it failed dishonestly.
+
+  The walk now runs each command on the transport that can carry it. There is
+  still no server for the user-OAuth half and there cannot be one, because
+  `chat.BaseURL` is a constant so that no environment variable can redirect
+  where a credential goes; what makes that half safe is that any request which
+  did escape dials an unreachable loopback proxy the test sets, so it talks to
+  nobody even on the day the stop regresses. Verified by breaking the stop
+  deliberately and watching the request die at `127.0.0.1:1`.
+
+  It also covers `send --file` explicitly, because walking commands never
+  reaches it: `--file` is a flag on a command the walk already had, and it is a
+  different code path with the same name. A flag earns an entry when it changes
+  which requests are made rather than what is in one.
+
+  **A dry run of a send with an attachment shows the upload and says the message
+  would follow.** Two requests, and the second carries an upload token this API
+  returns from the first, so there is no way to show it without making the
+  first. One exact request and a sentence about what comes next is the honest
+  answer; a rendering of a request that would not be sent in that form is not.
+  `TestADryRunOfASendWithAFileShowsTheUploadAndSaysWhatFollows`.
+
+  The upload's body is the file, and it is described with its exact size rather
+  than printed. Printing it is not showing a request, it is copying a file to
+  stdout, and an attachment may be 200MB. Described rather than truncated: the
+  rule is that a value is never *silently* altered, and a count saying how many
+  bytes it stands in for is not silent.
+
   A dry run of a command that writes locally means the whole command.
   `spacebar profile set-webhook --dry-run` stores nothing, because the other
   reading, where it saves the credential and only declines to send, is a
