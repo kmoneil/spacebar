@@ -592,9 +592,9 @@ SOFTWARE.
 
 --------------------------------------------------------------------------------
 github.com/spf13/cobra
-  version: v1.10.1
+  version: v1.10.2
   licence: Apache-2.0
-  source:  https://github.com/spf13/cobra/blob/v1.10.1/LICENSE.txt
+  source:  https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt
 --------------------------------------------------------------------------------
 
                                 Apache License
