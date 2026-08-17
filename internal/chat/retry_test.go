@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -413,6 +415,22 @@ func TestParseRetryAfter(t *testing.T) {
 		{"a date ahead", now.Add(90 * time.Second).Format(http.TimeFormat), 90 * time.Second},
 		{"a date behind", now.Add(-90 * time.Second).Format(http.TimeFormat), 0},
 		{"nonsense", "soon", 0},
+
+		// The overflow, and the number is not arbitrary. A time.Duration is an
+		// int64 of nanoseconds, and 1e9 is 2^9 x 5^9, so the greatest common
+		// divisor with 2^64 is 512 and a server can pick a delta-seconds whose
+		// product wraps onto any multiple of 512ns it likes. This one was solved
+		// for 512ns exactly, and before the bound it produced 512ns, which delay
+		// honoured as sent, with no jitter, four times over.
+		//
+		// It saturates now, which delay declines rather than waits for.
+		{"a value chosen to wrap to 512ns", "20211507185753197", math.MaxInt64},
+
+		// The two ends of the bound, so that a later change to it cannot move
+		// the boundary without this saying so.
+		{"the largest that does not wrap", "9223372036", 9223372036 * time.Second},
+		{"one past it", "9223372037", math.MaxInt64},
+		{"the largest an int64 holds", "9223372036854775807", math.MaxInt64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := parseRetryAfter(tc.value, now); got != tc.want {
@@ -458,4 +476,64 @@ func equalDurations(got, want []time.Duration) bool {
 		}
 	}
 	return true
+}
+
+// FuzzRetryAfterIsAlwaysSaneOrIgnored states the property, because the cases
+// somebody thinks of are `0`, `-1` and `abc`, and none of those is the one that
+// bites.
+//
+// Two claims, and the first is the one the overflow broke. A delta-seconds
+// header is read faithfully or saturated, never wrapped: a larger number can
+// therefore never produce a smaller wait, which is exactly what wrapping did.
+// `20211507185753197` seconds became 512 nanoseconds.
+//
+// The second is weaker and is still worth stating: whatever the bytes, the
+// result is never negative. A negative duration would be a wait the loop treats
+// as absent, which is survivable, and it is the same arithmetic fault wearing a
+// different sign.
+//
+// What is deliberately not claimed is that every positive result is at least a
+// second. It is not, and it should not be: an HTTP-date names an instant, `now`
+// has sub-second precision, and a header saying 09:00:01 at 09:00:00.700 means
+// 300ms and is honoured as such. The card for this asked for that claim; it was
+// false before this change and after it, and the server asking for 300ms is not
+// the same fault as arithmetic inventing 512ns.
+func FuzzRetryAfterIsAlwaysSaneOrIgnored(f *testing.F) {
+	for _, seed := range []string{
+		"", "0", "-1", "5", "  5  ", "soon",
+		"20211507185753197", "9223372036", "9223372037", "9223372036854775807",
+		"Mon, 17 Aug 2026 09:00:01 GMT",
+	} {
+		f.Add(seed)
+	}
+
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+
+	f.Fuzz(func(t *testing.T, value string) {
+		got := parseRetryAfter(value, now)
+
+		if got < 0 {
+			t.Fatalf("parseRetryAfter(%q) = %v, which is a wait in the past", value, got)
+		}
+
+		// Where the header is delta-seconds, the answer is exact rather than
+		// merely sane, and exactness is what makes wrapping impossible: there
+		// is one right value and this is it.
+		seconds, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil {
+			return
+		}
+		want := time.Duration(0)
+		switch {
+		case seconds <= 0:
+			want = 0
+		case int64(seconds) > maxRetryAfterSeconds:
+			want = math.MaxInt64
+		default:
+			want = time.Duration(seconds) * time.Second
+		}
+		if got != want {
+			t.Fatalf("parseRetryAfter(%q) = %v, want %v", value, got, want)
+		}
+	})
 }

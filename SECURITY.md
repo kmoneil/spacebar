@@ -1135,7 +1135,24 @@ against. It can make requests slow or expensive, bounded by four things and
 nothing else: `--timeout`, which bounds one attempt rather than the command;
 the five-attempt limit; the 32-second cap on a backoff, which also caps how
 long a `Retry-After` will be honoured for before the loop reports instead; and
-the limit on how large a response body may be. It can serve an attachment whose
+the limit on how large a response body may be.
+
+It cannot make that cap answer the other way. `Retry-After` in delta-seconds
+became a `time.Duration` by multiplying, and a `time.Duration` is an int64 of
+nanoseconds, so the product wrapped for a large enough value. Not merely wrapped:
+1e9 is 2^9 x 5^9, so the greatest common divisor with 2^64 is 512 and the far
+end could **choose** which multiple of 512 nanoseconds the result landed on.
+`Retry-After: 20211507185753197` produced 512ns, which is positive and under the
+cap, so it was honoured exactly as sent, with no jitter, on each of the four
+retries. What that removed was the jitter, which exists so that several apps
+backing off from one burst in a space do not come back together. The value is
+bounded before the multiply now and saturates instead, which is what the
+HTTP-date form of the header already did through `time.Time.Sub`, so both forms
+answer the same way for values that mean the same thing.
+`TestParseRetryAfter` carries the crafted value and the arithmetic behind it,
+and `FuzzRetryAfterIsAlwaysSaneOrIgnored` states it over arbitrary header bytes:
+a delta-seconds header is read faithfully or saturated, never wrapped, so a
+larger number can never produce a shorter wait. It can serve an attachment whose
 *contents* are hostile;
 `spacebar` writes bytes to the path you named and never opens them.
 
