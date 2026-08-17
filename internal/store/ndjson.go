@@ -19,11 +19,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kmoneil/spacebar/internal/chat"
@@ -53,10 +56,41 @@ const maxLine = 256 * 1024
 // NDJSON is one file per space under DataDir (SPEC.md §12.1).
 type NDJSON struct {
 	root string
+
+	// mu guards warnings. `search` over MCP is served concurrently, which is
+	// the same reason internal/auth's store carries one.
+	mu       sync.Mutex
+	warnings []string
 }
 
 // NewNDJSON opens the index rooted at dir.
 func NewNDJSON(dir string) *NDJSON { return &NDJSON{root: dir} }
+
+// Warnings is what the caller has to print, once, deduplicated.
+//
+// Returned rather than printed, for the reason internal/auth returns its own:
+// only internal/output writes to a process stream, so a warning built here and
+// printed there is escaped by the one package that knows how.
+//
+// There is one warning today and it is about a record this package refused to
+// answer with. Refusing silently would be the failure `search` exists not to
+// have: an index is the only copy of a message that no longer exists anywhere
+// else, so a message it holds and will not return is worth a sentence.
+func (s *NDJSON) Warnings() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.warnings...)
+}
+
+func (s *NDJSON) warn(format string, a ...any) {
+	msg := fmt.Sprintf(format, a...)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !slices.Contains(s.warnings, msg) {
+		s.warnings = append(s.warnings, msg)
+	}
+}
 
 // record is one line of the log.
 //
@@ -254,22 +288,14 @@ func (s *NDJSON) Bounds(ctx context.Context, space string) (oldest, newest time.
 // index is that it answers with no network at all. `search` uses it to say
 // which spaces it looked in.
 func (s *NDJSON) Spaces() ([]string, error) {
-	paths, err := s.files("")
+	found, err := s.files("")
 	if err != nil {
 		return nil, err
 	}
 
-	spaces := make([]string, 0, len(paths))
-	for _, path := range paths {
-		id := strings.TrimSuffix(filepath.Base(path), ".ndjson")
-		name := "spaces/" + id
-		if err := chat.CheckSpaceName(name); err != nil {
-			// A file somebody dropped in the directory by hand. Skipped rather
-			// than fatal: it is not this tool's file, and refusing to search
-			// because of it would make a stray file cost a search.
-			continue
-		}
-		spaces = append(spaces, name)
+	spaces := make([]string, 0, len(found))
+	for _, file := range found {
+		spaces = append(spaces, file.space)
 	}
 	sort.Strings(spaces)
 	return spaces, nil
@@ -323,8 +349,8 @@ func (s *NDJSON) resolve(ctx context.Context, q Query) ([]rows.Message, error) {
 
 	latest := map[string]record{}
 	when := map[string]time.Time{}
-	for _, path := range files {
-		if err := s.scan(ctx, path, latest, when); err != nil {
+	for _, file := range files {
+		if err := s.scan(ctx, file, latest, when); err != nil {
 			return nil, err
 		}
 	}
@@ -341,8 +367,39 @@ func (s *NDJSON) resolve(ctx context.Context, q Query) ([]rows.Message, error) {
 	return found, nil
 }
 
+// belongs reports whether a record was read from the file that holds its space.
+//
+// Both halves of a record say where it came from, and they have to agree with
+// the file as well as with each other: the Space field, which Append writes,
+// and the space inside the message's own resource name, which the API assigned.
+// The file name is the one with checked provenance, because path derives it
+// from a space that has been through chat.CheckSpaceName.
+//
+// A record that does not belong is not a hypothetical. It arrives from a
+// restored backup, a file copied between machines, or a directory somebody
+// tidied by hand, which is exactly why every line carries its own space: the
+// comment on that field says a line "that has been copied, concatenated, or
+// recovered from a backup should still say what it is". Nothing read it until
+// now.
+//
+// What it cost is more than a wrong row in a search. `--space` selects a file
+// rather than filtering, so a foreign record answered a search scoped to a
+// space it was never in. And Bounds reads the same file to decide where `sync`
+// resumes, so a foreign record with a later timestamp moves the watermark
+// forward and the next sync silently skips every real message before it. That
+// is the truncation rule broken by a stray line.
+func belongs(r record, space string) bool {
+	if r.Space != space {
+		return false
+	}
+	within, err := chat.SpaceOfMessage(r.Message.Name)
+	return err == nil && within == space
+}
+
 // scan reads one file into the newest-record-per-name map.
-func (s *NDJSON) scan(ctx context.Context, path string, latest map[string]record, when map[string]time.Time) error {
+func (s *NDJSON) scan(ctx context.Context, file indexed, latest map[string]record, when map[string]time.Time) error {
+	path := file.path
+
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -351,6 +408,17 @@ func (s *NDJSON) scan(ctx context.Context, path string, latest map[string]record
 		return storeErr("cannot read %s: %v", path, err)
 	}
 	defer func() { _ = f.Close() }()
+
+	foreign := 0
+	defer func() {
+		if foreign > 0 {
+			s.warn("%s holds %d record(s) belonging to another space, which were not searched.\n"+
+				"Nothing here writes one, so the file has been copied, restored, or edited. "+
+				"They are skipped rather than answered with, because a record read from the wrong "+
+				"file would answer for a space it was never in and would move where a sync resumes.",
+				path, foreign)
+		}
+	}()
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLine)
@@ -363,29 +431,49 @@ func (s *NDJSON) scan(ctx context.Context, path string, latest map[string]record
 		if len(line) == 0 {
 			continue
 		}
-
-		var r record
-		if err := json.Unmarshal(line, &r); err != nil {
-			// A record that will not decode is skipped rather than fatal. The
-			// likeliest cause is a process killed mid-append leaving a partial
-			// last line, and refusing to search a whole space because of one
-			// torn record would make a crash cost more than it already did.
-			continue
+		if absorb(line, file.space, latest, when) {
+			foreign++
 		}
-		if r.Message.Name == "" {
-			continue
-		}
-
-		// Every record is kept, matching or not. Filtering here was the first
-		// shape of this and it was wrong: an edit whose new text does not match
-		// the query would never supersede the old record that did, so a search
-		// for a word somebody removed would still find it. Supersession is a
-		// fact about the log and the query is a question asked afterwards.
-		latest[r.Message.Name] = r
-		when[r.Message.Name] = parseTimeOr(r.Message.CreateTime)
 	}
 
 	return scanErr(scanner, path)
+}
+
+// absorb reads one line into the newest-record-per-name maps, and reports
+// whether it was skipped for belonging to another space.
+//
+// Split from scan for the complexity ceiling, and the split is where the two
+// jobs already were: scan opens a file and decides what a failure to read it
+// means, and this decides what one line of it is worth.
+//
+// The two skips it does not count are not the same as the one it does. A line
+// that will not decode, or that names no message, is damage this cannot
+// describe; a line that belongs to another space is intact and says so, which
+// is why that one is worth telling somebody about.
+func absorb(line []byte, space string, latest map[string]record, when map[string]time.Time) (foreign bool) {
+	var r record
+	if err := json.Unmarshal(line, &r); err != nil {
+		// A record that will not decode is skipped rather than fatal. The
+		// likeliest cause is a process killed mid-append leaving a partial
+		// last line, and refusing to search a whole space because of one
+		// torn record would make a crash cost more than it already did.
+		return false
+	}
+	if r.Message.Name == "" {
+		return false
+	}
+	if !belongs(r, space) {
+		return true
+	}
+
+	// Every record is kept, matching or not. Filtering here was the first
+	// shape of this and it was wrong: an edit whose new text does not match
+	// the query would never supersede the old record that did, so a search
+	// for a word somebody removed would still find it. Supersession is a
+	// fact about the log and the query is a question asked afterwards.
+	latest[r.Message.Name] = r
+	when[r.Message.Name] = parseTimeOr(r.Message.CreateTime)
+	return false
 }
 
 // scanErr is the half of the long-line defence that actually holds.
@@ -410,14 +498,35 @@ func scanErr(scanner *bufio.Scanner, path string) error {
 	return storeErr("cannot read %s: %v", path, err)
 }
 
+// indexed is one space and the file this index keeps it in.
+//
+// The pair travels together because a file's name is what says which space it
+// holds, and scan needs that to tell a record that belongs here from one that
+// does not. Reading the space back off each record instead would be trusting
+// the thing being checked.
+type indexed struct {
+	space string
+	path  string
+}
+
 // files is the set of files a query has to read.
-func (s *NDJSON) files(space string) ([]string, error) {
+//
+// The unscoped case is the one that was wrong. It took every *.ndjson in the
+// directory, while Spaces ran chat.CheckSpaceName over the same listing and
+// skipped what did not pass, so a search read files it would not name: a stray
+// file was searched and its records answered, and the count on stderr said one
+// space when two files had been opened. A search that reports its own coverage
+// has to be right about it in both directions, and the honest half was the only
+// one anybody had written.
+//
+// One filter now, in one place, and Spaces is a projection of this.
+func (s *NDJSON) files(space string) ([]indexed, error) {
 	if space != "" {
 		path, err := s.path(space)
 		if err != nil {
 			return nil, err
 		}
-		return []string{path}, nil
+		return []indexed{{space: space, path: path}}, nil
 	}
 
 	dir := filepath.Join(s.root, "spaces")
@@ -429,13 +538,21 @@ func (s *NDJSON) files(space string) ([]string, error) {
 		return nil, storeErr("cannot list %s: %v", dir, err)
 	}
 
-	var paths []string
+	var found []indexed
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".ndjson") {
-			paths = append(paths, filepath.Join(dir, e.Name()))
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".ndjson") {
+			continue
 		}
+		name := "spaces/" + strings.TrimSuffix(e.Name(), ".ndjson")
+		if err := chat.CheckSpaceName(name); err != nil {
+			// A file somebody dropped in the directory by hand. Skipped rather
+			// than fatal: it is not this tool's file, and refusing to search
+			// because of it would make a stray file cost a search.
+			continue
+		}
+		found = append(found, indexed{space: name, path: filepath.Join(dir, e.Name())})
 	}
-	return paths, nil
+	return found, nil
 }
 
 // parseTimeOr is parseTime for the places a zero time is the right answer for

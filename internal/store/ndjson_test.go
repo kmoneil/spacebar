@@ -502,3 +502,179 @@ func TestASpaceWithNoMessagesStillCountsAsLookedAt(t *testing.T) {
 		t.Error("Visit accepted a name that is not a space")
 	}
 }
+
+// plant writes raw lines into the file for a space, bypassing Append.
+//
+// Every case below is a file this package would not have written, which is the
+// point: they arrive from a restored backup, a directory copied between
+// machines, or somebody tidying by hand. Append cannot produce one, so a test
+// that went through it would be testing nothing.
+func plant(t *testing.T, dir, filename string, lines ...string) {
+	t.Helper()
+
+	spaces := filepath.Join(dir, "spaces")
+	if err := os.MkdirAll(spaces, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	body := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(spaces, filename), []byte(body), 0o600); err != nil {
+		t.Fatalf("planting %s: %v", filename, err)
+	}
+}
+
+// line is one record as it appears on disk.
+func line(t *testing.T, space, name, text string) string {
+	t.Helper()
+
+	body, err := json.Marshal(record{
+		Space:   space,
+		Message: rows.Message{Name: name, CreateTime: at(0), Text: text},
+	})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	return string(body)
+}
+
+// TestASearchReadsExactlyTheSpacesItReports.
+//
+// `search` prints the spaces it looked in, and the whole care in that is about
+// being honest regarding coverage. It was honest in one direction only: Spaces
+// ran chat.CheckSpaceName over the directory listing and skipped what did not
+// pass, and the search read every *.ndjson there was. So a stray file was
+// searched and answered with, and the count on stderr said one space while two
+// files had been opened.
+//
+// A search that reports its own scope has to be right about it both ways, or
+// the report is decoration.
+func TestASearchReadsExactlyTheSpacesItReports(t *testing.T) {
+	dir := t.TempDir()
+	index := NewNDJSON(dir)
+
+	plant(t, dir, "AAAATestSpace.ndjson",
+		line(t, testSpace, testSpace+"/messages/A", "deploy done"))
+
+	// Not a space name, so Spaces refuses to name it. It must not be searched
+	// either.
+	plant(t, dir, "not a space!.ndjson",
+		line(t, "spaces/NOTASPACE", testSpace+"/messages/B", "deploy from a stray file"))
+
+	named, err := index.Spaces()
+	if err != nil {
+		t.Fatalf("Spaces: %v", err)
+	}
+	if len(named) != 1 || named[0] != testSpace {
+		t.Fatalf("Spaces = %v, want just %s", named, testSpace)
+	}
+
+	found := collect(t, index, Query{Text: "deploy"})
+	if len(found) != 1 {
+		t.Fatalf("a search found %d messages across %d reported spaces:\n%v",
+			len(found), len(named), found)
+	}
+	if found[0].Name != testSpace+"/messages/A" {
+		t.Errorf("the search answered with %q, which came from a file Spaces will not name", found[0].Name)
+	}
+}
+
+// TestARecordInTheWrongFileDoesNotAnswerForAnotherSpace.
+//
+// Every line carries its own space, and the comment on that field says a line
+// "that has been copied, concatenated, or recovered from a backup should still
+// say what it is". Nothing read it, so a record sitting in the wrong file was
+// answered with as though it belonged there.
+//
+// Two things follow, and the second is the one that is not about searching.
+// `--space` selects a file rather than filtering, so a foreign record answered
+// a search scoped to a space it was never in. And Bounds reads that same file
+// to decide where `sync` resumes, so a foreign record with a later timestamp
+// moves the watermark forward and the next sync skips every real message before
+// it, silently.
+func TestARecordInTheWrongFileDoesNotAnswerForAnotherSpace(t *testing.T) {
+	dir := t.TempDir()
+	index := NewNDJSON(dir)
+	other := "spaces/AAAAOtherSpace"
+
+	plant(t, dir, "AAAATestSpace.ndjson",
+		line(t, testSpace, testSpace+"/messages/A", "deploy done"),
+
+		// Says it is another space's, and its message name agrees. It is in the
+		// wrong file, and the file name is the half with checked provenance.
+		line(t, other, other+"/messages/B", "deploy from another space entirely"),
+
+		// Says it belongs here and its message name says otherwise. Both halves
+		// have to agree with the file, or the disagreement is the answer.
+		line(t, testSpace, other+"/messages/C", "deploy with a mismatched name"),
+	)
+
+	scoped := collect(t, index, Query{Space: testSpace, Text: "deploy"})
+	if len(scoped) != 1 {
+		t.Fatalf("a search scoped to %s found %d messages:\n%v", testSpace, len(scoped), scoped)
+	}
+	if scoped[0].Name != testSpace+"/messages/A" {
+		t.Errorf("a search scoped to %s answered with %q", testSpace, scoped[0].Name)
+	}
+
+	// And the unscoped one, which is where a foreign record used to be
+	// attributed to whichever space its own name claimed.
+	if all := collect(t, index, Query{Text: "deploy"}); len(all) != 1 {
+		t.Errorf("a search across every space found %d messages, want 1:\n%v", len(all), all)
+	}
+
+	// The half that is not about searching. Bounds is what `sync` asks where to
+	// resume from, and it reads one file.
+	_, newest, count, err := index.Bounds(context.Background(), testSpace)
+	if err != nil {
+		t.Fatalf("Bounds: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("Bounds counted %d records in %s, want 1", count, testSpace)
+	}
+	if want, _ := time.Parse(time.RFC3339Nano, at(0)); !newest.Equal(want) {
+		t.Errorf("Bounds says the newest message in %s is at %s, want %s", testSpace, newest, want)
+	}
+}
+
+// TestASkippedRecordIsSaidOutLoud.
+//
+// The index is the only copy of a message that no longer exists anywhere else,
+// so a record it holds and will not answer with is worth a sentence. Skipping
+// it silently would be a narrower answer than the question asked, which is the
+// failure `search` names its own coverage to avoid.
+//
+// Deduplicated and per file, because a copied file could hold thousands and a
+// warning somebody has to scroll past is a warning they stop reading.
+func TestASkippedRecordIsSaidOutLoud(t *testing.T) {
+	dir := t.TempDir()
+	index := NewNDJSON(dir)
+	other := "spaces/AAAAOtherSpace"
+
+	plant(t, dir, "AAAATestSpace.ndjson",
+		line(t, testSpace, testSpace+"/messages/A", "deploy done"),
+		line(t, other, other+"/messages/B", "one foreign record"),
+		line(t, other, other+"/messages/C", "another foreign record"),
+	)
+
+	if warnings := index.Warnings(); len(warnings) != 0 {
+		t.Fatalf("the index warned before anything read it: %v", warnings)
+	}
+
+	collect(t, index, Query{Text: "deploy"})
+
+	warnings := index.Warnings()
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want exactly one for the one file:\n%v", len(warnings), warnings)
+	}
+	for _, want := range []string{"AAAATestSpace.ndjson", "2 record(s)", "another space"} {
+		if !strings.Contains(warnings[0], want) {
+			t.Errorf("the warning does not mention %q:\n%s", want, warnings[0])
+		}
+	}
+
+	// A second search says it once, not twice. Two searches in one MCP session
+	// are ordinary.
+	collect(t, index, Query{Text: "deploy"})
+	if again := index.Warnings(); len(again) != 1 {
+		t.Errorf("a second search repeated the warning: %v", again)
+	}
+}

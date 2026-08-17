@@ -105,13 +105,21 @@ they would see.`,
 				return err
 			}
 
-			return finish(r, opened, stream(r, index.Search(cmd.Context(), store.Query{
+			err = stream(r, index.Search(cmd.Context(), store.Query{
 				Space: target,
 				Text:  args[0],
 				Since: from,
 				Until: to,
 				Limit: limit,
-			}), searchRow))
+			}), searchRow)
+
+			// After the rows rather than before them, because the index cannot
+			// know it skipped anything until it has read the files, and a
+			// warning is printed whether or not the search then failed: a
+			// record the index holds and will not answer with is worth saying
+			// either way.
+			r.Warnings(index.Warnings())
+			return finish(r, opened, err)
 		},
 	}
 
