@@ -446,3 +446,59 @@ func TestADeleteRefusesAMessageNameThatIsNotOne(t *testing.T) {
 		}
 	}
 }
+
+// TestASpaceWithNoMessagesStillCountsAsLookedAt.
+//
+// "Never synced" and "synced and empty" are different facts, and the difference
+// reaches a user: `search` names the spaces it did not look in, so without this
+// a space that genuinely has nothing in it is reported as missing from the
+// index and somebody is told to run the sync they just ran.
+//
+// Found by the m6-99 sweep running §18 row 6 against a real account, where two
+// of six spaces were empty and the search warned about one of them.
+func TestASpaceWithNoMessagesStillCountsAsLookedAt(t *testing.T) {
+	index := NewNDJSON(t.TempDir())
+	ctx := context.Background()
+
+	if spaces, err := index.Spaces(); err != nil || len(spaces) != 0 {
+		t.Fatalf("a fresh index holds %v, %v", spaces, err)
+	}
+
+	if err := index.Visit(testSpace); err != nil {
+		t.Fatalf("Visit: %v", err)
+	}
+
+	spaces, err := index.Spaces()
+	if err != nil {
+		t.Fatalf("Spaces: %v", err)
+	}
+	if len(spaces) != 1 || spaces[0] != testSpace {
+		t.Errorf("after Visit the index holds %v, want just %s", spaces, testSpace)
+	}
+
+	// And it is still empty, rather than holding a phantom record.
+	if found := collect(t, index, Query{Space: testSpace}); len(found) != 0 {
+		t.Errorf("Visit invented %d messages", len(found))
+	}
+	if _, _, count, err := index.Bounds(ctx, testSpace); err != nil || count != 0 {
+		t.Errorf("Bounds after Visit = %d, %v, want 0", count, err)
+	}
+
+	// Visiting twice is not an error and does not truncate what is there.
+	if err := index.Append(ctx, testSpace, []rows.Message{
+		{Name: testSpace + "/messages/AAA", CreateTime: at(0), Text: "hello"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := index.Visit(testSpace); err != nil {
+		t.Fatalf("second Visit: %v", err)
+	}
+	if found := collect(t, index, Query{Space: testSpace}); len(found) != 1 {
+		t.Errorf("a second Visit left %d messages, want 1", len(found))
+	}
+
+	// A name that is not a space is refused here too.
+	if err := index.Visit("../escape"); err == nil {
+		t.Error("Visit accepted a name that is not a space")
+	}
+}

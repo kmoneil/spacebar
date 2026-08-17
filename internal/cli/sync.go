@@ -177,6 +177,14 @@ func syncTargets(ctx context.Context, opened *profile.Open, all bool, args []str
 func syncOne(ctx context.Context, r *output.Renderer, opened *profile.Open,
 	index *store.NDJSON, space string, limit int,
 ) (syncResult, error) {
+	// Recorded before anything is fetched, so that a space which turns out to
+	// have no messages still counts as looked at. Otherwise `search` reports it
+	// as missing from the index and tells somebody to run the sync they just
+	// ran.
+	if err := index.Visit(space); err != nil {
+		return syncResult{}, err
+	}
+
 	_, newest, _, err := index.Bounds(ctx, space)
 	if err != nil {
 		return syncResult{}, err

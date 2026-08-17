@@ -19,7 +19,7 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestones 1 to 5 of 6 are done.** `spacebar send` works over an incoming
+**All six milestones are done.** `spacebar send` works over an incoming
 webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
@@ -28,8 +28,9 @@ well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
 work, as do `send --file` and `messages download`, and `watch --all` follows
 every space at once on a request rate budgeted against the project's quota.
 `spacebar mcp` serves the read paths to a model over MCP, and `send_message`
-and `react_to_message` when `--allow-write` says so. Milestones 4 and 5 are
-closed; milestone 6 is the local index and search.
+and `react_to_message` when `--allow-write` says so. `spacebar sync` copies a
+space into a local index and `spacebar search` reads it back, which exists
+because there is no message search API for an ordinary user.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -67,7 +68,7 @@ The plan, in six milestones:
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
 | 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | **done** |
 | 5   | MCP server                                                | **done** |
-| 6   | Local index and search                                    |          |
+| 6   | Local index and search                                    | **done** |
 
 Milestone 2 is the real proof point. It has to be genuinely useful to somebody
 whose org blocks all third-party API access, because that population is large,
@@ -646,6 +647,55 @@ Accept: application/json
 Authorization: REDACTED
 User-Agent: spacebar/1.0.0 (+https://github.com/kmoneil/spacebar)
 ```
+
+## Search what was said
+
+There is no message search API for an ordinary user. `spaces.search` is
+administrator-only and searches spaces rather than messages, so searching means
+keeping a copy:
+
+```sh
+spacebar sync --all                       # copy every reachable space down
+spacebar sync eng --limit 5000            # or one space, a bit at a time
+spacebar search "deploy"
+spacebar search "deploy" --space eng --since 30d --json
+```
+
+**`sync` is resumable and holds no cursor.** The index knows the window it
+covers, so a run fetches everything newer than the newest message it holds and
+everything older than the oldest. An interrupted run resumes by being run again,
+with nothing fetched twice and no gap in the middle.
+
+**`search` says what it did not look in.** A space you have never synced is not
+searched, and a search that skipped it quietly would answer a narrower question
+than you asked:
+
+```console
+$ spacebar search "deploy"
+warning: searched 4 of 6 spaces. Not searched, because they are not in the index: spaces/BBB spaces/CCC
+Run: spacebar sync --all
+```
+
+It compares the index against the space list already cached, so it costs no
+request. `search` makes no network call at all, which means a webhook profile
+can search what a user-authorized one copied down.
+
+**A message that was edited is found by the text it has now**, and one that was
+deleted is not found at all. The index records both, so what you search agrees
+with what you would see in the space.
+
+**The index is plaintext on your disk**, at `0600` in `0700` directories under
+`XDG_DATA_HOME`. It is a copy of what people said, including messages that have
+since been deleted, and nothing removes it: `auth logout` and `profile rm`
+deliberately leave it, because the API will not serve those messages again and
+deleting somebody's only copy is the more surprising behaviour. Nothing in it is
+a credential. [SECURITY.md](SECURITY.md) says all of this at length.
+
+**It is a scan, not a search engine**, and the numbers are written down because
+that is a decision that expires. Measured on this design: 0.34s at 50,000
+messages, 1.52s at 250,000, crossing one second at roughly 175,000. SQLite with
+FTS5 was priced and declined; the reasoning and the conditions for revisiting it
+are in SPEC.md §12.2.
 
 ## Serve it to a model
 

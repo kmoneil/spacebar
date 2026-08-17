@@ -389,6 +389,50 @@ runs, the token is deleted or the profile and its credential are, and reporting
 a failure for the file that is left would tell a script the irreversible part
 did not happen. `TestACacheThatCannotBeRemovedIsAWarningRatherThanAFailure`.
 
+### The message index, which is a real change to what is on your disk
+
+Milestone 6 added `spacebar sync`, and with it the one thing in this tool that
+stores message content at rest. It is stated at length because it is the
+largest change to this threat model since the credential store, and because it
+is the kind of change somebody discovers rather than reads.
+
+`internal/store` writes one file per space at
+`<data dir>/spaces/<spaceID>.ndjson`, under `XDG_DATA_HOME`,
+`%LocalAppData%`, or `~/.local/share`. Files are `0600` in directories created
+`0700`, verified rather than asserted: a real sync produced `drwx------` for
+every directory and `-rw-------` for the file.
+
+**It is plaintext, and it is a copy of what people said.** Message bodies,
+sender resource names, thread names, timestamps, and attachment metadata. It is
+not encrypted, and this tool does not offer to encrypt it: a passphrase prompt
+on a local index would be security theatre on a machine whose disk encryption is
+the operator's own decision and is where this belongs.
+
+So the honest statements are these. Anybody who can read your home directory can
+read every message you have synced, including messages from spaces you have
+since left and messages that have since been deleted, which the API will not
+serve again. On a shared machine, file modes are the whole of the defence, and
+they are the same defence the configuration file has. A backup of your home
+directory now contains other people's words.
+
+**Nothing in it is a credential**, and that was checked rather than assumed. A
+sync of a real space was searched for `downloadUri`, `thumbnailUri`,
+`attachment_token`, `token=`, `key=`, `Bearer`, and both OAuth token prefixes,
+and none appears. The attachment `resource_name` that is stored is base64 of the
+attachment's own resource name and nothing else, decoded to confirm it: it
+identifies bytes and does not grant them, and fetching them still needs the
+credential. The API's `downloadUri` and `thumbnailUri`, which do carry an access
+token, never reach `internal/rows` and so cannot reach the index.
+
+**Nothing removes it.** `auth logout` and `profile rm` delete the space-list
+cache, deliberately, and they do not touch this. That is the opposite decision
+from the one above it and for the opposite reason: the cache can be rebuilt from
+the API at any time and the index cannot, because it holds messages that no
+longer exist anywhere else. Deleting somebody's only copy of a conversation
+because they re-authorized would be the more surprising behaviour, and it is
+irreversible in the direction that cannot be undone. Removing the directory is
+therefore a decision the operator makes, with `rm`, knowing what it costs.
+
 ## Authentication
 
 - **Authorization code with PKCE, loopback redirect, and nothing else.** The

@@ -123,6 +123,34 @@ func (s *NDJSON) Delete(ctx context.Context, space, message string) error {
 	}})
 }
 
+// Visit records that a space has been looked at, whether or not it said
+// anything.
+//
+// "Never synced" and "synced and empty" are different facts and the difference
+// is visible to a user: `search` names the spaces it did not look in, and
+// without this a space that genuinely has no messages is reported as missing
+// from the index, telling somebody to run the sync they just ran. Found by the
+// m6-99 sweep running §18 row 6 against a real account, where two of six spaces
+// were empty.
+//
+// An empty file rather than a marker of its own, so that everything reading the
+// index keeps reading one kind of thing.
+func (s *NDJSON) Visit(space string) error {
+	path, err := s.path(space)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return storeErr("cannot create %s: %v", filepath.Dir(path), err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return storeErr("cannot open %s: %v", path, err)
+	}
+	return f.Close()
+}
+
 func (s *NDJSON) write(ctx context.Context, space string, records []record) error {
 	if len(records) == 0 {
 		return nil
