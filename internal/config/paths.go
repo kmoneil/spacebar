@@ -127,3 +127,40 @@ func CacheDir() (string, error) {
 	}
 	return filepath.Join(home, ".cache", meta.AppName), nil
 }
+
+// DataDir is where this tool keeps what it would be sorry to lose:
+// $XDG_DATA_HOME, then ~/.local/share, then %LocalAppData% on Windows, by the
+// same rules Dir and CacheDir use.
+//
+// A third directory rather than a subdirectory of either, because the
+// guarantees differ again. CacheDir can be deleted at any moment and rebuilt
+// from the API. This cannot: the indexed history of a space includes messages
+// that have since been edited or deleted, and the API will not answer for them
+// a second time. Deleting this loses the only copy.
+//
+// Nothing secret is written here either, for the same reason, and it lands at
+// 0700 with its files at 0600 anyway.
+func DataDir() (string, error) {
+	if v, ok := os.LookupEnv("XDG_DATA_HOME"); ok && v != "" {
+		if !filepath.IsAbs(v) {
+			return "", configErr("XDG_DATA_HOME is not an absolute path, so there is no directory to use.\n"+
+				"Set it to an absolute path, or unset it to use ~/.local/share/%s.", meta.AppName)
+		}
+		return filepath.Join(v, meta.AppName), nil
+	}
+
+	if runtime.GOOS == "windows" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", configErr("cannot locate %%LocalAppData%%: %v", err)
+		}
+		return filepath.Join(base, meta.AppName), nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", configErr("cannot locate the home directory: %v\n"+
+			"Set XDG_DATA_HOME to an absolute path.", err)
+	}
+	return filepath.Join(home, ".local", "share", meta.AppName), nil
+}
