@@ -428,16 +428,27 @@ func newProfileRemoveCmd(opts *Options) *cobra.Command {
 	return &cobra.Command{
 		Use:     "rm NAME",
 		Aliases: []string{"remove"},
-		Short:   "Remove a profile and the credential behind it",
-		Long: `Remove a profile and the credential behind it.
+		Short:   "Remove a profile and every credential behind it",
+		Long: `Remove a profile and every credential behind it.
 
-The credential goes too, from the keyring and from the fallback file, and so
-does the cached list of spaces this profile could reach. That cannot be undone
-from here: a webhook URL is only recoverable from the space it was created in.
+Every one, from the keyring and from the fallback file: the webhook URL, the
+OAuth token, and the client secret. A profile holds up to three and this used
+to delete one of them, so a user-OAuth profile kept its token and its client
+secret while the command reported success.
 
-The cached list goes because a profile name can be used again. Configure this
-name for another account tomorrow, and a list left behind would answer its
-display-name lookups with spaces the new account may not be able to see.`,
+The cached list of spaces this profile could reach goes too, because a profile
+name can be used again. Configure this name for another account tomorrow, and a
+list left behind would answer its display-name lookups with spaces the new
+account may not be able to see.
+
+None of it can be undone from here: a webhook URL is only recoverable from the
+space it was created in.
+
+This does not tell Google to forget anything, and neither does
+` + meta.AppName + ` auth logout. Deleting the token stops this machine using the
+authorization; ending the authorization itself is done from your Google
+account's security settings, and that is the thing to do if a machine is lost
+rather than retired.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -452,8 +463,12 @@ display-name lookups with spaces the new account may not be able to see.`,
 					name, strings.Join(cfg.Names(), ", "))
 			}
 
+			// Plural, because a profile holds up to three and all of them go.
+			// The singular was accurate for a webhook and under-reported a
+			// user-OAuth profile, which is the same shape as the bug this
+			// command had: telling somebody less was removed than there is.
 			if err := r.Confirm(cmd.InOrStdin(),
-				"Remove profile %q and the credential behind it?", name); err != nil {
+				"Remove profile %q and the credentials behind it?", name); err != nil {
 				return err
 			}
 

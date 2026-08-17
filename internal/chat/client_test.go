@@ -759,10 +759,19 @@ func TestPreviewBodyKeepsWhatWouldBeSent(t *testing.T) {
 		{"trailing newline", "{\"text\":\"hi\"}\n", `{"text":"hi"}`},
 		{"empty", "", ""},
 
-		// Not something this tool sends yet. Quoted rather than emitted raw, so
-		// that the output is still a JSON document when media upload arrives
-		// and somebody has not thought about it.
-		{"not json", "--boundary\r\nContent-Type: image/png", `"--boundary\r\nContent-Type: image/png"`},
+		// A media upload, whose body is the file. Described with its exact size
+		// rather than printed, because printing it is not showing a request, it
+		// is copying a file to stdout, and the limit here is 200MB.
+		//
+		// This case used to expect the whole document quoted back, which was
+		// the placeholder left by the comment that said the decision belonged
+		// to "the card that adds it". Media upload landed in Milestone 4 and
+		// nobody took it, and nobody noticed, because the command that produces
+		// one exited before printing anything at all.
+		//
+		// The angle brackets are unescaped on purpose: the encoder writes < as
+		// < by default, and this string exists to be read.
+		{"a file", "--boundary\r\nContent-Type: image/png", `"<35 bytes, not shown: this request carries a file>"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := previewBody([]byte(tc.body))

@@ -176,7 +176,7 @@ pbpaste | spacebar profile set-webhook alerts --verify
 ```sh
 spacebar profile list           # what is configured, without reading a credential
 spacebar profile list --json    # one object per line
-spacebar profile rm alerts      # the profile and the credential behind it
+spacebar profile rm alerts      # the profile and every credential behind it
 ```
 
 On a machine with no keyring, which is every container and most CI runners, the
@@ -233,6 +233,14 @@ The `Authorization` header, when there is one, prints as `REDACTED` rather than
 being left out: an omitted line reads as "no credential was sent", which is a
 different answer to the question a dry run is asked. `--json` gives the same
 thing as an object with a `dry_run` field.
+
+`--file` is the one case where a send is two requests: the bytes are exchanged
+for an upload token and the message carries the token. A dry run shows the
+upload, exactly, and says on stderr that the message would follow, because the
+second request carries a token the first one returns and cannot be shown
+without making it. The upload's body is the file, so it is described with its
+exact size rather than printed: an attachment may be 200MB and printing it is
+not showing a request.
 
 A flag this profile cannot honour fails before the network call, naming the
 capability and the profile rather than pretending the flag does not exist:
@@ -495,6 +503,14 @@ from whoever posted the message, so an attachment called
 directory you asked for. Nothing is overwritten without `--force`, because the
 name is not yours.
 
+That is two claims and both are held. The name cannot leave the directory, and
+neither can the write: a symlink already sitting there under the name an
+attachment happens to have is refused rather than followed, so a download
+cannot write through one into a file outside `--out`. It matters where the
+directory is not only yours, which is a shared CI workspace, `/tmp`, or a
+synced folder. `--force` replaces the name rather than following it, so it
+overwrites the file you can see and not whatever a link points at.
+
 **The API's own download URL is never printed.** It carries an access token in
 its query, which makes it a credential rather than a link, so `--json` gives you
 the attachment's `resource_name` and this tool fetches the bytes with your own
@@ -544,6 +560,13 @@ Below twenty spaces the 2s floor decides and nothing is slowed at all. Above it
 each space comes round less often, thirty spaces every 3s and a hundred every
 10s, and the interval chosen is printed on stderr at startup unless `--quiet` or
 `--json` says the reader is not a person.
+
+The pace is recomputed when a space is dropped, so the ones left are polled no
+faster than you asked for. It looks like a detail and is the floor: the gap
+between requests is the interval divided by the space count, so a rotation that
+loses spaces and keeps its old gap comes round quicker every time, and a watch
+of forty spaces that lost thirty-nine would poll the last one twenty times a
+second.
 
 The list of spaces is taken once. A space created while it runs is not picked
 up, because re-listing spends the quota this is being careful with and a watch

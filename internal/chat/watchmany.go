@@ -145,6 +145,21 @@ type watched struct {
 	since time.Time
 }
 
+// tickFor is the gap between one request and the next, rather than between one
+// poll of a given space and the next. Each space still comes round every
+// IntervalForSpaces, because there are that many of them in the rotation.
+//
+// A function rather than a line in rotate because it is computed twice: once at
+// the start and again whenever a space leaves. Two copies of this arithmetic
+// would be two chances for the pace after a drop to disagree with the pace
+// before it, which is the bug it was written for.
+//
+// spaces has to be at least one. Both callers are inside a loop whose condition
+// is that the rotation is not empty.
+func tickFor(requested time.Duration, spaces int) time.Duration {
+	return IntervalForSpaces(requested, spaces) / time.Duration(spaces)
+}
+
 // rotate is the poll loop, split from WatchMany for the complexity ceiling.
 func (c *Client) rotate(ctx context.Context, req WatchManyRequest, yield func(SpaceEvent, error) bool) {
 	start := req.Since
@@ -157,10 +172,7 @@ func (c *Client) rotate(ctx context.Context, req WatchManyRequest, yield func(Sp
 		live = append(live, watched{space: space, since: start})
 	}
 
-	// The gap between one request and the next, rather than between one poll of
-	// a given space and the next. Each space still comes round every
-	// IntervalForSpaces, because there are that many of them in the rotation.
-	tick := IntervalForSpaces(req.Interval, len(live)) / time.Duration(len(live))
+	tick := tickFor(req.Interval, len(live))
 
 	var stop bool
 	for at := 0; len(live) > 0; {
@@ -170,8 +182,30 @@ func (c *Client) rotate(ctx context.Context, req WatchManyRequest, yield func(Sp
 		if err := c.sleep(ctx, tick); err != nil {
 			return
 		}
+
+		count := len(live)
 		if live, at, stop = c.step(ctx, req, live, at, yield); stop {
 			return
+		}
+
+		// A space left the rotation, so the cycle is shorter and the gap has to
+		// grow to match. Without this the pace stayed the one it had when the
+		// rotation was full, and every survivor was polled faster than anybody
+		// asked for: eight spaces at --interval 4s tick every 500ms, and after
+		// seven of them are dropped the last one is polled every 500ms rather
+		// than every 4s, which is four times under the floor.
+		//
+		// Per-space quota is shared with every other app acting in that space,
+		// so the cost of that lands on everybody in the one space still being
+		// watched. It is the harm MinPollInterval exists to prevent, produced by
+		// the rotation that spends the budget rather than by anybody asking for
+		// it.
+		//
+		// Recomputing can only lengthen the gap. IntervalForSpaces never returns
+		// less than what was asked for, and dividing it by a smaller count gives
+		// a larger tick, so no poll is brought forward by this.
+		if len(live) > 0 && len(live) != count {
+			tick = tickFor(req.Interval, len(live))
 		}
 	}
 
