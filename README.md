@@ -234,6 +234,14 @@ being left out: an omitted line reads as "no credential was sent", which is a
 different answer to the question a dry run is asked. `--json` gives the same
 thing as an object with a `dry_run` field.
 
+`--file` is the one case where a send is two requests: the bytes are exchanged
+for an upload token and the message carries the token. A dry run shows the
+upload, exactly, and says on stderr that the message would follow, because the
+second request carries a token the first one returns and cannot be shown
+without making it. The upload's body is the file, so it is described with its
+exact size rather than printed: an attachment may be 200MB and printing it is
+not showing a request.
+
 A flag this profile cannot honour fails before the network call, naming the
 capability and the profile rather than pretending the flag does not exist:
 

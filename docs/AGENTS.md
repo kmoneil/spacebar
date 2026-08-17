@@ -23,6 +23,14 @@ these. Reading needs no confirmation.
 would have been sent without sending it. Use it to show somebody what you are
 about to do.
 
+One exception is worth knowing before you rely on it. `send --file` is two
+requests, an upload and then the message that carries its token, so a dry run
+of it shows the upload on stdout and says on stderr that the message would
+follow. The second request cannot be shown without making the first, because
+the token comes back from it. The upload's body is the file and is described
+with its size rather than printed. Exit code and redaction are the same as
+every other dry run.
+
 ## The contract
 
 **stdout is data. Nothing else is ever written there.** No progress, no

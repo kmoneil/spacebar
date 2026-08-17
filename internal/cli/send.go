@@ -230,6 +230,9 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 	// right order for it: an attachment that failed to upload should not become
 	// a message with the text and no file.
 	token, err := uploadAttachment(cmd, r, opened, target, flags.file)
+	if dry, ok := errors.AsType[*chat.DryRun](err); ok {
+		return dryRunUpload(r, opened, dry)
+	}
 	if err != nil {
 		return err
 	}
@@ -370,6 +373,36 @@ func messageID(flags *sendFlags, space, text string) string {
 		return ""
 	}
 	return chat.DeriveMessageID(space, text, flags.threadKey)
+}
+
+// dryRunUpload reports the upload a send with --file would have made, and stops
+// there.
+//
+// This is the branch that was missing, and its absence was the whole of the
+// bug: uploadAttachment is the third place a *chat.DryRun can come from, and
+// the only one that did not handle it. The error went back through runSend
+// untouched, reached output.Report, and was rendered as a generic failure at
+// exit 1 with "dry run: the request below was not sent" and nothing below it.
+// Nothing was sent, so it failed safe; what was broken was the report.
+//
+// It stops at one request rather than going on to show the message, and that is
+// the decision rather than an omission. A send with an attachment is two calls,
+// and the second one carries an upload token that this API returns from the
+// first. There is no way to show the real second request without making the
+// first, so the choices are to print an exact request and say what follows it,
+// or to print an approximation of a request that would not be sent in that
+// form. This tool does not approximate, and `profile set-webhook --verify`
+// already set the precedent going the other way: show the request the client
+// actually stopped, and say plainly what else did not happen.
+func dryRunUpload(r *output.Renderer, opened *profile.Open, dry *chat.DryRun) error {
+	r.Note("through profile %q. Nothing was uploaded and nothing was sent.", opened.Name)
+
+	// Said before the request rather than after it, because stdout is the
+	// request and a reader who stops at the end of stdout has stopped reading.
+	r.Note("this is the first of two requests. The message would follow, carrying the " +
+		"upload token this one returns, and it cannot be shown without making this request.")
+
+	return r.Block(dry.Request, dry.Request.Text())
 }
 
 func send(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, req chat.SendRequest) error {

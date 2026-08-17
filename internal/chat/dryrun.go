@@ -15,7 +15,9 @@
 package chat
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http"
 	"slices"
@@ -53,6 +55,9 @@ type Preview struct {
 	// Body is the exact bytes that would be sent, kept raw so that they are
 	// exact and still queryable. Re-encoding them would make the output a
 	// description of the body rather than the body.
+	//
+	// The one exception is a request that carries a file, whose body is the
+	// file. That one is described with its exact size instead. See previewBody.
 	Body json.RawMessage `json:"body,omitempty"`
 }
 
@@ -120,28 +125,61 @@ func (c *Client) preview(req *http.Request, body []byte) *Preview {
 	}
 }
 
-// previewBody keeps the request body exactly as it would be sent.
+// previewBody keeps the request body exactly as it would be sent, unless it is
+// a file.
 //
 // The trailing newline the JSON encoder writes is trimmed, because it is an
 // artefact of the encoder rather than part of the document, and a golden that
 // recorded it would be recording the encoder.
 //
-// A body that is not JSON is not something this tool sends yet. When media
-// upload arrives it will be multipart and megabytes, and printing it verbatim
-// would be the wrong answer; that is a decision for the card that adds it,
-// which is why this refuses to guess rather than quietly producing something
-// unparseable.
+// The other branch is the decision this function's comment deferred. It used to
+// say a non-JSON body "is not something this tool sends yet. When media upload
+// arrives it will be multipart and megabytes, and printing it verbatim would be
+// the wrong answer; that is a decision for the card that adds it." Media upload
+// arrived in Milestone 4 and the decision was not taken, so what was left was
+// the fallback: json.Marshal of the whole multipart document, which for a
+// two-hundred-megabyte attachment is a two-hundred-megabyte line on somebody's
+// terminal. Nobody saw it, because the command that produces one exited before
+// printing anything at all, which is the bug this arrived with.
+//
+// It is described instead, with its exact size. Printing it is not showing a
+// request, it is copying a file to stdout, and the part of an upload a person
+// runs a dry run to check is the method, the URL and the headers rather than
+// the bytes they already have on disk.
+//
+// Described rather than truncated, and the difference is the whole of why this
+// is allowed. The rule is that a value is never *silently* altered; a count
+// that says how many bytes it stands in for is not silent, and there is no
+// prefix of a multipart document that would be more useful than the number.
 func previewBody(body []byte) json.RawMessage {
 	trimmed := strings.TrimRight(string(body), "\n")
 	if trimmed == "" {
 		return nil
 	}
 	if !json.Valid([]byte(trimmed)) {
-		quoted, err := json.Marshal(trimmed)
-		if err != nil {
-			return nil
-		}
-		return quoted
+		return elidedBody(len(body))
 	}
 	return json.RawMessage(trimmed)
+}
+
+// elidedBody stands in for a body that is a file rather than a document.
+//
+// A JSON string, so that --json output stays one parseable object and a
+// consumer reading .body gets something it can print rather than a shape it has
+// to branch on. The angle brackets are what mark it as a placeholder rather
+// than as something the body contained.
+//
+// Encoded with HTML escaping off, for the reason encodeBody and the renderer
+// both turn it off: json.Marshal writes < and > as < and >, which is
+// lossless and unreadable, and this string exists to be read.
+func elidedBody(size int) json.RawMessage {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+
+	if err := enc.Encode(fmt.Sprintf("<%d bytes, not shown: this request carries a file>", size)); err != nil {
+		// Unreachable: the argument is a string this function built.
+		return nil
+	}
+	return json.RawMessage(strings.TrimRight(buf.String(), "\n"))
 }

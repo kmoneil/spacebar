@@ -57,6 +57,16 @@ func isolate(t *testing.T) string {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+
+	// The third directory, and it was missing. config.DataDir holds the message
+	// index, and without this every test that reaches it read and could write
+	// the developer's own ~/.local/share/spacebar. It is not hypothetical: on a
+	// machine that has run `sync`, the golden for `mcp` on a webhook profile
+	// fails, because the real index gives that profile a search_messages tool
+	// and the recorded answer is that it can serve nothing at all. A test whose
+	// result depends on whose machine it runs on is not a test.
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
 	t.Setenv(config.Env("WEBHOOK_URL"), "")
 	keyring.MockInit()
 
