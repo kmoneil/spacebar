@@ -124,14 +124,18 @@ var listMembersTool = &mcp.Tool{
 		"An app's membership has no affiliation at all. This API returns no display names on a " +
 		"user-authorized read, so the resource name is the only identifier. By default only members who " +
 		"have joined are listed; people who were invited and have not accepted are returned only when " +
-		"show_invited is set, and a membership held by a Google Group is not returned at all, so on a " +
-		"space whose access comes through a group this is not the whole answer.",
+		"show_invited is set, and a membership held by a Google Group only when show_groups is. A group " +
+		"membership has group_member set to groups/NNN instead of member, and carries no role and no " +
+		"affiliation because the API sends neither. Everybody in that group is in the space, so without " +
+		"show_groups this is not the whole answer to who can see what is posted there, and even with it " +
+		"the members of the group are not listed and cannot be reached from a Chat scope.",
 }
 
 type listMembersIn struct {
 	Space       string `json:"space" jsonschema:"the space: a resource name like spaces/AAAAAAA, an alias, a display name, or an email address"`
 	Limit       int    `json:"limit,omitempty" jsonschema:"how many memberships to return; omit for 25, maximum 200"`
 	ShowInvited bool   `json:"show_invited,omitempty" jsonschema:"also return people who were invited and have not joined"`
+	ShowGroups  bool   `json:"show_groups,omitempty" jsonschema:"also return memberships held by a Google Group, which grant access to everybody in the group"`
 }
 
 type listMembersOut struct {
@@ -152,6 +156,7 @@ func (s *Server) listMembers(ctx context.Context, _ *mcp.CallToolRequest, in lis
 	found, more, err := collect(s.profile.Transport.Members(ctx, chat.ListMembersRequest{
 		Space:       target,
 		ShowInvited: in.ShowInvited,
+		ShowGroups:  in.ShowGroups,
 		Limit:       limit + 1,
 	}), limit)
 	if err != nil {

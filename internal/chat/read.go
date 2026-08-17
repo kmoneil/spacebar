@@ -119,6 +119,14 @@ type ListMembersRequest struct {
 	// visible rather than silent.
 	ShowInvited bool
 
+	// ShowGroups includes memberships held by a Google Group rather than by a
+	// person.
+	//
+	// A space can grant access to a group, and everybody in that group is then in
+	// the space without a membership of their own. Without this the answer to
+	// "who can see what I post here" omits them silently.
+	ShowGroups bool
+
 	// Limit is how many memberships the caller wants. Zero or less means all.
 	Limit int
 }
@@ -185,6 +193,9 @@ func (c *Client) Members(ctx context.Context, req ListMembersRequest) iter.Seq2[
 	query := url.Values{}
 	if req.ShowInvited {
 		query.Set("showInvited", "true")
+	}
+	if req.ShowGroups {
+		query.Set("showGroups", "true")
 	}
 
 	return paginate(ctx, c, pager[Membership]{

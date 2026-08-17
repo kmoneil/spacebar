@@ -161,6 +161,7 @@ func newSpacesMembersCmd(opts *Options) *cobra.Command {
 	var (
 		limit       int
 		showInvited bool
+		showGroups  bool
 		refresh     bool
 	)
 
@@ -171,9 +172,10 @@ func newSpacesMembersCmd(opts *Options) *cobra.Command {
 
   ` + meta.AppName + ` spaces members spaces/AAAAAAA
   ` + meta.AppName + ` spaces members spaces/AAAAAAA --show-invited
+  ` + meta.AppName + ` spaces members spaces/AAAAAAA --show-groups
 
-Columns are the member's resource name, whether they are a person or an app,
-their state, their role, and their affiliation, separated by a tab.
+Columns are the member's resource name, whether they are a person, an app, or a
+group, their state, their role, and their affiliation, separated by a tab.
 
 Affiliation is INTERNAL or EXTERNAL: whether they are inside your organization
 or outside it. It is the column to read before posting something you would not
@@ -190,8 +192,20 @@ API ever starts sending it.
 
 By default this lists members who have joined. Somebody who has been invited
 and has not accepted is not returned at all unless --show-invited asks for
-them. A membership held by a Google Group is not returned either, and there is
-no flag for it yet.`,
+them, and a membership held by a Google Group is not returned unless
+--show-groups does. Both are the API's own defaults rather than choices made
+here.
+
+--show-groups matters more than it looks. A space can grant access to a group,
+and then everybody in that group is in the space without a membership of their
+own, so on such a space the default list is not the whole answer to "who can
+see what I post here". A group row carries groups/NNN in the first column and
+GROUP in the second. It carries no role and no affiliation, because the API
+sends neither: the column that says who is outside your organization is blank
+on exactly the row that can grant access to the most people, and how many
+people that is, and who they are, is not a question a Chat scope can answer.
+There is no group display name or address either, only groups/NNN, for the same
+reason there is none for a person.`,
 
 		Args: exactlyOne("spaces members needs a space.\n  %s spaces members spaces/AAAAAAA"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -213,6 +227,7 @@ no flag for it yet.`,
 			return finish(r, opened, stream(r, opened.Transport.Members(cmd.Context(), chat.ListMembersRequest{
 				Space:       target,
 				ShowInvited: showInvited,
+				ShowGroups:  showGroups,
 				Limit:       limit,
 			}), rows.ForMember))
 		},
@@ -221,6 +236,7 @@ no flag for it yet.`,
 	f := cmd.Flags()
 	f.IntVar(&limit, "limit", defaultLimit, limitHelp)
 	f.BoolVar(&showInvited, "show-invited", false, "include people who were invited and have not joined")
+	f.BoolVar(&showGroups, "show-groups", false, "include memberships held by a Google Group")
 	addRefreshFlag(cmd, &refresh)
 	return cmd
 }

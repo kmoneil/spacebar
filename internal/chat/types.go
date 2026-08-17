@@ -93,6 +93,17 @@ type User struct {
 	Type string `json:"type,omitempty"`
 }
 
+// Group is a Google Group that holds a membership in a space.
+//
+// One field, because one field is what the API sends. Measured on 2026-08-17
+// against a group added to a real space: a group membership carries
+// {"name": "groups/NNN"} and nothing beside it, so there is no display name and
+// no address to print and no type to tell one kind of group from another.
+type Group struct {
+	// Name is groups/NNN.
+	Name string `json:"name,omitempty"`
+}
+
 // Thread groups messages in a space.
 type Thread struct {
 	// Name is spaces/AAA/threads/CCC.
@@ -153,22 +164,28 @@ type Membership struct {
 	// way would answer "who is in this space" wrongly.
 	State string `json:"state,omitempty"`
 
-	// Role is ROLE_MEMBER or ROLE_MANAGER.
+	// Role is ROLE_MEMBER or ROLE_MANAGER. Absent on a membership held by a
+	// group, measured rather than assumed, and passed through as absent.
 	Role string `json:"role,omitempty"`
 
 	// Member is the person. Absent when this membership is a Google Group,
 	// which arrives as GroupMember instead.
 	Member *User `json:"member,omitempty"`
 
-	// GroupMember is carried through rather than modelled, for the reason
-	// CardsV2 is: nothing in this tool reads inside it yet, and a struct written
-	// now would be a guess reviewed as though it were knowledge.
+	// GroupMember is the Google Group this membership belongs to, when access
+	// comes through a group rather than through a person.
 	//
-	// It cannot arrive at all today, because the API sends a group membership
-	// only when the request sets showGroups and nothing here sets it. That gap
-	// is m4-09's, and it is a gap rather than an oversight: the shape cannot be
-	// observed from any space this account can reach.
-	GroupMember json.RawMessage `json:"groupMember,omitempty"`
+	// It was carried as raw JSON until m4-09, on the grounds that a struct
+	// written from the API reference would be a guess reviewed as though it were
+	// knowledge. It is modelled now because it has been seen: a group was added
+	// to a real space on 2026-08-17 and the response read back. Exactly one of
+	// Member and GroupMember is set on a membership.
+	//
+	// It arrives only when the request sets showGroups, which is what makes the
+	// difference visible rather than silent. Everybody in the group is in the
+	// space, so a list that omits it answers a narrower question than the one
+	// somebody asking "who can see what I post here" meant to ask.
+	GroupMember *Group `json:"groupMember,omitempty"`
 
 	// Affiliation is INTERNAL or EXTERNAL: whether this member is inside the
 	// organization or outside it.
@@ -183,6 +200,12 @@ type Membership struct {
 	// an app is neither inside nor outside an organization. Absent renders as
 	// absent, and nothing anywhere fills in INTERNAL for a membership the API
 	// declined to label.
+	//
+	// A membership held by a group carries none either, observed on 2026-08-17.
+	// That is the uncomfortable case, because it is blank on exactly the row
+	// that can grant access to the most people, and the honest answer is that
+	// the API does not say and neither does this tool. `spaces members --help`
+	// and the README say so where somebody reading the column will see it.
 	//
 	// EXTERNAL has not been observed from this account, so the value is passed
 	// through unaltered and no code here decides what it means.

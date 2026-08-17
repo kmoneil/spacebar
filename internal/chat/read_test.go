@@ -603,6 +603,99 @@ func TestInvitedMembersAreAskedForOnlyWhenTheyAreWanted(t *testing.T) {
 	}
 }
 
+// TestGroupMembershipsAreAskedForOnlyWhenTheyAreWanted.
+//
+// The same shape as the invited case and for the same reason, but the stakes
+// are not the same. An invited person is one person who is not in the space
+// yet. A group is everybody in it, all of whom are in the space, and none of
+// whom appear anywhere in this list. Off by default because that is the API's
+// default and because the parameter is the whole difference between the two
+// questions; documented loudly because the default answer is the narrow one.
+func TestGroupMembershipsAreAskedForOnlyWhenTheyAreWanted(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"memberships": []}`)
+	})
+
+	if _, err := collect(r.client.Members(context.Background(), ListMembersRequest{Space: "spaces/AAA"})); err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+	if _, err := collect(r.client.Members(context.Background(), ListMembersRequest{
+		Space:      "spaces/AAA",
+		ShowGroups: true,
+	})); err != nil {
+		t.Fatalf("Members --show-groups: %v", err)
+	}
+
+	paths := r.paths()
+	if len(paths) != 2 {
+		t.Fatalf("paths = %q", paths)
+	}
+	if strings.Contains(paths[0], "showGroups") {
+		t.Errorf("the default request asked for group memberships: %s", paths[0])
+	}
+	if !strings.Contains(paths[1], "showGroups=true") {
+		t.Errorf("--show-groups did not reach the request: %s", paths[1])
+	}
+}
+
+// TestAGroupMembershipDecodesAsTheAPISendsIt.
+//
+// The body is what spaces/AAAAExampleTwo answered on 2026-08-17, with the ids
+// shortened and nothing else altered. It is here rather than in a comment
+// because the whole argument for modelling GroupMember as a struct is that the
+// shape was observed, and an observation nothing asserts is a memory.
+//
+// Three things it pins. A group membership has no member, so anything reading
+// Member without checking gets nil. It carries state but neither role nor
+// affiliation, and both stay empty rather than being filled in. And groups/NNN
+// is all there is: no display name, no address, nothing to resolve.
+func TestAGroupMembershipDecodesAsTheAPISendsIt(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"memberships": [
+			{"name": "spaces/AAA/members/100000000000000000001", "state": "JOINED",
+			 "member": {"name": "users/100000000000000000001", "type": "HUMAN"},
+			 "createTime": "2026-08-17T16:28:42.882944Z",
+			 "role": "ROLE_MANAGER", "affiliation": "INTERNAL"},
+			{"name": "spaces/AAA/members/group-01examplegroup1", "state": "JOINED",
+			 "createTime": "2026-08-17T16:28:56.416015Z",
+			 "groupMember": {"name": "groups/01examplegroup1"}}]}`)
+	})
+
+	members, err := collect(r.client.Members(context.Background(), ListMembersRequest{
+		Space:      "spaces/AAA",
+		ShowGroups: true,
+	}))
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("members = %+v", members)
+	}
+
+	person, group := members[0], members[1]
+	if person.GroupMember != nil {
+		t.Errorf("a person's membership decoded a groupMember: %+v", person.GroupMember)
+	}
+	if group.Member != nil {
+		t.Errorf("a group's membership decoded a member: %+v", group.Member)
+	}
+	if group.GroupMember == nil {
+		t.Fatal("groupMember was dropped, which is the whole point of showGroups")
+	}
+	if group.GroupMember.Name != "groups/01examplegroup1" {
+		t.Errorf("group name = %q", group.GroupMember.Name)
+	}
+	if group.State != "JOINED" {
+		t.Errorf("state = %q, want what the API sent", group.State)
+	}
+	if group.Role != "" {
+		t.Errorf("a group was given the role %q; the API sends none", group.Role)
+	}
+	if group.Affiliation != "" {
+		t.Errorf("a group was given the affiliation %q; the API sends none", group.Affiliation)
+	}
+}
+
 // TestGetReadsOneResourceAndChecksItsNameFirst.
 func TestGetReadsOneResourceAndChecksItsNameFirst(t *testing.T) {
 	r := newReader(t, func(w http.ResponseWriter, req *http.Request) {

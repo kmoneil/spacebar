@@ -186,6 +186,79 @@ func TestAnAppsMembershipIsNotGivenAnAffiliationItDoesNotHave(t *testing.T) {
 	}
 }
 
+// TestAGroupMembershipDoesNotRenderAsAnEmptyRow.
+//
+// This is the row the card predicted and the live read confirmed. A group
+// membership has no member at all, so the projection that served every human
+// and every app produced four blank cells out of five, carrying JOINED and
+// nothing else. That reads as a rendering fault, and somebody who reads it as
+// one does not learn the thing the row exists to tell them: that access to this
+// space is granted to everybody in a group.
+//
+// So the first column carries groups/NNN and the second says GROUP. Neither is
+// a value invented for a person's row: --json publishes group_member as its own
+// key and member stays absent, which is how the wire itself separates them, and
+// no member_type appears there because the API sends none.
+//
+// Role and affiliation stay blank, because blank is what arrived. The
+// temptation is to fill the affiliation column, since it is the one somebody
+// reads before deciding whether a space is safe to post in, and a guess printed
+// there is indistinguishable from a measurement.
+func TestAGroupMembershipDoesNotRenderAsAnEmptyRow(t *testing.T) {
+	data, cells := ForMember(chat.Membership{
+		Name:        "spaces/AAA/members/group-01examplegroup1",
+		State:       "JOINED",
+		GroupMember: &chat.Group{Name: "groups/01examplegroup1"},
+		CreateTime:  "2026-08-17T16:28:56.416015Z",
+	})
+
+	assertJSON(t, data, `{"name":"spaces/AAA/members/group-01examplegroup1","state":"JOINED",`+
+		`"group_member":"groups/01examplegroup1","create_time":"2026-08-17T16:28:56.416015Z"}`)
+
+	if len(cells) != 5 {
+		t.Fatalf("cells = %q, want 5 columns", cells)
+	}
+	if cells[0] != "groups/01examplegroup1" {
+		t.Errorf("the first column is %q, want the group's resource name", cells[0])
+	}
+	if cells[1] != "GROUP" {
+		t.Errorf("the type column is %q, and it is the only thing saying this is a group", cells[1])
+	}
+	if cells[2] != "JOINED" {
+		t.Errorf("state = %q", cells[2])
+	}
+	if cells[3] != "" || cells[4] != "" {
+		t.Errorf("a group was given a role or an affiliation: %q; the API sends neither", cells)
+	}
+}
+
+// TestAGroupIsNeverMistakenForAPerson.
+//
+// The two kinds share a row and must not share a key. A consumer selecting
+// .member is asking about a person, and the failure this guards against is
+// groups/NNN quietly arriving there: no parse error, no new field to notice,
+// just a value of a kind that key has never carried before.
+func TestAGroupIsNeverMistakenForAPerson(t *testing.T) {
+	group, _ := ForMember(chat.Membership{
+		Name:        "spaces/AAA/members/group-01examplegroup1",
+		GroupMember: &chat.Group{Name: "groups/01examplegroup1"},
+	})
+	if group.Member != "" {
+		t.Errorf("member = %q on a group's membership", group.Member)
+	}
+	if group.MemberType != "" {
+		t.Errorf("member_type = %q, a value the API did not send", group.MemberType)
+	}
+
+	person, _ := ForMember(chat.Membership{
+		Name:   "spaces/AAA/members/100000000000000000001",
+		Member: &chat.User{Name: "users/100000000000000000001", Type: "HUMAN"},
+	})
+	if person.GroupMember != "" {
+		t.Errorf("group_member = %q on a person's membership", person.GroupMember)
+	}
+}
+
 // TestTwoDirectMessagesAreNotTheSameRow.
 //
 // Four direct messages on the test account printed as four identical rows: a

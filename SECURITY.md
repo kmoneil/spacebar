@@ -906,6 +906,17 @@ the limit on how large a response body may be. It can serve an attachment whose
 *contents* are hostile;
 `spacebar` writes bytes to the path you named and never opens them.
 
+A limit rather than an attack, in the same column, and worth stating beside it
+because it is read at the same moment. A space can grant access to a Google
+Group, and then everybody in that group is in the space without a membership of
+their own. `spaces members` does not return that membership unless
+`--show-groups` asks for it, and when it does the row carries no affiliation,
+because the API sends none. The group's own members are not listed and are not
+reachable from a Chat scope at all. So the question "who can see what I post
+here" has an honest answer only as far as the edge of a group: this tool can
+tell you that a group has access and cannot tell you who is in it, and no
+amount of Chat scope would change that.
+
 And it can put text in a message that is written to manipulate whatever reads
 it next. When that reader is a model (over MCP, or through `--json` piped into
 an agent), the message body is untrusted input arriving inside a trusted

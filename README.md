@@ -26,8 +26,8 @@ profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
 `messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
 work, as do `send --file` and `messages download`. `spacebar mcp` serves the
-read paths to a model over MCP. Still missing: watching more than one space at
-a time, and writing over MCP.
+read paths to a model over MCP, and `send_message` as well when `--allow-write`
+says so. Still missing: watching more than one space at a time.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -330,6 +330,7 @@ spacebar spaces get spaces/AAAAAAA
 spacebar spaces get 'Ops'                             # or by display name
 spacebar spaces members spaces/AAAAAAA                # who, kind, state, role, affiliation
 spacebar spaces members spaces/AAAAAAA --show-invited # and anybody asked but not joined
+spacebar spaces members spaces/AAAAAAA --show-groups   # and any Google Group with access
 
 spacebar messages list spaces/AAAAAAA                 # newest 25
 spacebar messages list spaces/AAAAAAA --limit 100
@@ -552,10 +553,31 @@ API did not send.
 
 **`spaces members` lists people who have joined.** Somebody who was invited and
 has not accepted is not returned at all unless `--show-invited` asks for them,
-which is the API's own default rather than a choice made here. A membership held
-by a Google Group is not returned either and has no flag yet, so on a space whose
-access comes through a group, this list is not the whole answer to "who can see
-what I post here".
+and a membership held by a Google Group is not returned unless `--show-groups`
+does. Both are the API's own defaults rather than choices made here.
+
+**`--show-groups` is the one to reach for before posting something sensitive.** A
+space can grant access to a group, and then everybody in that group is in the
+space without a membership of their own, so the default list is not the whole
+answer to "who can see what I post here". A group row carries `groups/NNN` in the
+first column and `GROUP` in the second, and `--json` gives it its own
+`group_member` key rather than putting it in `member`, so nothing that selects
+`.member` starts receiving groups:
+
+```console
+$ spacebar spaces members spaces/AAAAAAA --show-groups
+users/NNN	HUMAN	JOINED	ROLE_MANAGER	INTERNAL
+groups/NNN	GROUP	JOINED
+```
+
+Read that second row for what it does not say. There is no role and no
+affiliation, because the API sends neither, so the column that tells you who is
+outside your organization is blank on exactly the row that can let in the most
+people. There is no group name or address either, only `groups/NNN`, the same
+way a person is only `users/NNN`. And the group's own members are not listed
+anywhere and are not reachable from a Chat scope at all. What this flag tells
+you is that a group has access, which is a different and smaller thing than
+knowing who does.
 
 **A direct message with an app is marked.** Every direct message has a blank
 display name, so without the fourth column a conversation with a colleague and a

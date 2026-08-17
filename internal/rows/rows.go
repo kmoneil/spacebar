@@ -106,6 +106,18 @@ type Member struct {
 	DisplayName string `json:"display_name,omitempty"`
 	MemberType  string `json:"member_type,omitempty"`
 
+	// GroupMember is groups/NNN when a Google Group holds this membership, in
+	// which case Member is empty. Exactly one of the two is set.
+	//
+	// Its own key rather than a value in Member, because that is how the wire
+	// separates them and because a program selecting .member is asking about a
+	// person. Overloading the field would make every existing consumer start
+	// receiving a kind of value it has never seen, silently.
+	//
+	// There is no group display name and no group address to go with it: a
+	// Chat scope reaches groups/NNN and no further, measured on 2026-08-17.
+	GroupMember string `json:"group_member,omitempty"`
+
 	// Affiliation is INTERNAL or EXTERNAL, and absent for an app.
 	Affiliation string `json:"affiliation,omitempty"`
 
@@ -129,6 +141,9 @@ func ForMember(m chat.Membership) (Member, []string) {
 		row.DisplayName = m.Member.DisplayName
 		row.MemberType = m.Member.Type
 	}
+	if m.GroupMember != nil {
+		row.GroupMember = m.GroupMember.Name
+	}
 
 	// The type column is where the display name used to be, and the trade is
 	// deliberate. Measured on 2026-08-16 across seven memberships in five
@@ -137,7 +152,21 @@ func ForMember(m chat.Membership) (Member, []string) {
 	// nothing else, so that column was structurally blank. HUMAN against BOT is
 	// the fact it was standing in front of: it tells a person from an app, which
 	// is the question a blank name was leaving unanswered.
-	return row, []string{row.Member, row.MemberType, m.State, m.Role, m.Affiliation}
+	//
+	// A group membership has no member at all, so without the two lines below it
+	// projects to four blank cells out of five and reads as a rendering fault
+	// rather than as what it is. GROUP is this tool's word and not the API's:
+	// the wire distinguishes the two kinds structurally, by which field it
+	// populates, and sends no type string on a group. --json keeps that
+	// structure and invents no member_type, so nothing there is a value the API
+	// did not send; the column exists because a person scanning a table cannot
+	// see which key was populated.
+	identifier, kind := row.Member, row.MemberType
+	if row.GroupMember != "" {
+		identifier, kind = row.GroupMember, "GROUP"
+	}
+
+	return row, []string{identifier, kind, m.State, m.Role, m.Affiliation}
 }
 
 // Message is the published shape of one message.
