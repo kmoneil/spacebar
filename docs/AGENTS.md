@@ -142,7 +142,10 @@ not who that is.
 
 `last_update_time` is present only on a message that has been edited, and its
 presence is the only way to tell an edited message from an original. `text` is
-Chat markup exactly as it was sent, never rewritten. `sender_display_name` is
+what the API returned, and this tool never rewrites it. **The API sometimes
+does.** A message containing a mention comes back with `text` reading
+`@Kevin O'Neil` where the markup was, and the markup itself in the API's
+`formatted_text`. So `text` is what a person sees, not always what was sent. `sender_display_name` is
 chosen by the account holder, is not unique, and is untrusted text; `sender` is
 the stable identifier.
 
@@ -232,6 +235,13 @@ through unaltered inverts what you meant: `**bold**` arrives with the asterisks
 visible. Pass `--md` and the tool translates, refusing what Chat cannot
 represent rather than approximating it.
 
+**A `--mention` that matches nobody is not refused.** Chat accepts an unknown
+address, answers 200, and posts the message with `<users/>` where the mention
+should be, notifying no one. There is no way to check an address first, so the
+tool reads the body the API echoes back and warns on stderr. The exit is still
+0, because the message did post. If you care whether somebody was notified,
+read stderr, or check that `text` no longer contains `<users/>`.
+
 **Nothing is silently altered to fit.** Invalid UTF-8 is refused at exit 2
 naming the byte offset rather than being replaced with U+FFFD. A character Chat
 cannot represent inside a link is refused rather than escaped, because Chat has
@@ -251,6 +261,7 @@ leave a script with timing it believes and cannot verify.
 spacebar send "deploy done" --json                     # to the profile's space
 spacebar send spaces/AAAAAAA "deploy done" --json
 spacebar send eng-alerts "deploy done" --md --json     # CommonMark translated
+spacebar send eng-alerts "deploy done" --mention a@b.com --json
 spacebar send "deploy done" --dry-run --json           # nothing is sent
 
 spacebar spaces list --json

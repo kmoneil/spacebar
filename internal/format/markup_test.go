@@ -369,3 +369,54 @@ func TestCardsChecksOnlyTheShapeTheAPIRequires(t *testing.T) {
 		})
 	}
 }
+
+// TestAMentionAcceptsAnAddressBecauseChatResolvesOne.
+//
+// SPEC.md §10.3 deferred `--mention` on the belief that an email had to become
+// a users/NNN first. It does not: `<users/someone@example.com>` was sent to a
+// real space on 2026-08-17 and came back with a USER_MENTION annotation naming
+// the numeric id, so Chat resolves the address itself.
+//
+// That belief cost three milestones, which is the argument for measuring a
+// premise rather than reasoning from it.
+func TestAMentionAcceptsAnAddressBecauseChatResolvesOne(t *testing.T) {
+	for _, name := range []string{
+		"users/100000000000000000001",
+		"users/someone@example.test",
+		"users/first.last@sub.example.test",
+		"users/all",
+	} {
+		got, err := Mention(name)
+		if err != nil {
+			t.Errorf("Mention(%q): %v", name, err)
+			continue
+		}
+		if got != "<"+name+">" {
+			t.Errorf("Mention(%q) = %q", name, got)
+		}
+	}
+}
+
+// TestAMentionStillRefusesWhatWouldCloseItsOwnWrapper.
+//
+// Widening the identifier to take an address must not widen it to take a
+// wrapper character. Chat has no escape syntax, so a name carrying one cannot
+// be represented and is refused rather than altered, which is the same rule the
+// link half follows.
+func TestAMentionStillRefusesWhatWouldCloseItsOwnWrapper(t *testing.T) {
+	for _, name := range []string{
+		"users/a>b@example.test",
+		"users/a<b@example.test",
+		"users/a|b@example.test",
+		"users/a b@example.test",
+		"users/a\nb@example.test",
+		"users/",
+		"users",
+		"100000000000000000001",
+		"spaces/AAA",
+	} {
+		if got, err := Mention(name); err == nil {
+			t.Errorf("Mention(%q) built %q instead of refusing it", name, got)
+		}
+	}
+}

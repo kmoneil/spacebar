@@ -88,30 +88,50 @@ func Link(url, display string) (string, error) {
 	return "<" + url + "|" + display + ">", nil
 }
 
-// Mention builds a mention of one user from a resolved user resource name.
+// Mention builds a mention of one user from a user resource name.
 //
 // The name is checked rather than trusted because it reaches a wrapper: it
-// arrives from a directory lookup, which is somewhere else, and a value that
-// can close its own wrapper can write markup of its own.
+// arrives from somewhere else, and a value that can close its own wrapper can
+// write markup of its own.
+//
+// An address is a resource name here, and that is a measurement rather than a
+// convenience. `<users/someone@example.com>` was sent to a real space on
+// 2026-08-17 and came back with a USER_MENTION annotation naming the numeric
+// id: Chat resolves the address server side and normalises the markup. So
+// there is no directory lookup in this path, which is why m4-13 needs no scope
+// and works on a webhook. SPEC.md §10.3 deferred `--mention` on the belief that
+// a resolver was needed first, and that belief was never correct.
+//
+// What the identifier may contain is therefore wider than a numeric id, and no
+// wider than it has to be: an address adds `@` and `.` and nothing else. The
+// rule is still that what goes inside the wrapper cannot close it, and Chat has
+// no escape syntax, so a name that cannot be represented is refused rather than
+// altered.
 func Mention(name string) (string, error) {
-	if !strings.HasPrefix(name, "users/") || !safeResourceName(strings.TrimPrefix(name, "users/")) {
+	if !strings.HasPrefix(name, "users/") || !safeUserName(strings.TrimPrefix(name, "users/")) {
 		return "", output.Errorf("MARKUP", output.ExitUsage,
-			"%q is not a user resource name, which is users/ followed by an identifier.", name)
+			"%q is not a user resource name, which is users/ followed by an address or a numeric identifier.", name)
 	}
 	return "<" + name + ">", nil
 }
 
-// safeResourceName reports whether s is safe to place inside a wrapper without
-// any escaping at all, which is the same standard SPEC.md §15.8 sets for a
-// space name reaching a URL path. Escaping is the second layer and never the
-// only one.
-func safeResourceName(s string) bool {
+// safeUserName reports whether s is safe to place inside a mention's wrapper
+// with no escaping at all, which is the standard SPEC.md §15.8 sets for any
+// value reaching a place it could break out of. Escaping is the second layer
+// and never the only one.
+//
+// An alphanumeric identifier plus `_`, `-`, and the `.` and `@` an address
+// needs. Deliberately no wider: Chat has no escape syntax, so anything not on
+// this list cannot be represented inside a mention and is refused rather than
+// altered.
+func safeUserName(s string) bool {
 	if s == "" {
 		return false
 	}
 	for _, r := range s {
 		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_', r == '-', r == '.', r == '@':
 		default:
 			return false
 		}

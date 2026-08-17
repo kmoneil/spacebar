@@ -768,3 +768,62 @@ func TestATimestampIsPassedThroughRatherThanReformatted(t *testing.T) {
 		t.Errorf("create_time = %q, and the sub-second part is the caller's to keep", result.CreateTime)
 	}
 }
+
+// TestMentionsArePrependedInTheOrderTheyWereGiven.
+//
+// The body is not searched for a place to put them. A message is never
+// rewritten to make a flag fit, so they go in front, in order, and the text
+// somebody wrote arrives unaltered behind them.
+func TestMentionsArePrependedInTheOrderTheyWereGiven(t *testing.T) {
+	got, err := withMentions("deploy done", []string{"a@example.test", "users/123", "b@example.test"})
+	if err != nil {
+		t.Fatalf("withMentions: %v", err)
+	}
+	want := "<users/a@example.test> <users/123> <users/b@example.test> deploy done"
+	if got != want {
+		t.Errorf("withMentions =\n  %q\nwant\n  %q", got, want)
+	}
+
+	// No mentions must not touch the body at all, not even its whitespace.
+	if got, err := withMentions("deploy done", nil); err != nil || got != "deploy done" {
+		t.Errorf("withMentions with no mentions = %q, %v", got, err)
+	}
+}
+
+// TestAMentionThatCannotBeRepresentedIsRefusedBeforeAnythingIsSent.
+//
+// format.Mention is the only place a mention is built, so an address that
+// cannot sit inside the wrapper fails here rather than posting as literal text
+// in front of colleagues.
+func TestAMentionThatCannotBeRepresentedIsRefusedBeforeAnythingIsSent(t *testing.T) {
+	if _, err := withMentions("hi", []string{"a>b@example.test"}); err == nil {
+		t.Fatal("an address carrying a closing bracket was accepted")
+	}
+	if _, err := withMentions("hi", []string{"fine@example.test", "a>b@example.test"}); err == nil {
+		t.Error("a bad address after a good one was accepted")
+	}
+}
+
+// TestAMentionThatMatchedNobodyIsWarnedAbout.
+//
+// Measured on 2026-08-17 against the real API: an address that is nobody is not
+// refused. Chat answers 200 and posts the message with "<users/>" where the
+// mention should be, no annotation, and nobody notified. There is no way to
+// refuse it beforehand, so the failure is read out of the body the API echoes
+// back.
+//
+// A warning and exit 0, matching what --md does when a table cannot be
+// represented: the message was posted, so a non-zero exit would say it was not,
+// and this tool may not write a result to stdout on a failure. What must not
+// happen is silence.
+func TestAMentionThatMatchedNobodyIsWarnedAbout(t *testing.T) {
+	if got := unresolvedMentions("<users/> deploy done"); len(got) != 1 {
+		t.Errorf("a dropped mention produced %d warnings, want 1", len(got))
+	}
+	if got := unresolvedMentions("@Kevin O'Neil deploy done"); got != nil {
+		t.Errorf("a mention that landed warned anyway: %v", got)
+	}
+	if got := unresolvedMentions("deploy done"); got != nil {
+		t.Errorf("a message with no mention warned: %v", got)
+	}
+}

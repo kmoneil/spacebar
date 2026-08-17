@@ -19,7 +19,7 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**Milestones 1 to 3 of 6 are done, and 4 and 5 are most of the way.** `spacebar send` works over an incoming
+**Milestones 1 to 5 of 6 are done.** `spacebar send` works over an incoming
 webhook, with no OAuth, no administrator approval, and no Cloud project: give a
 profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
@@ -203,6 +203,7 @@ spacebar send spaces/AAAAAAA 'deploy done'     # name the space
 spacebar send --md 'deploy **done**'           # translate CommonMark
 echo 'deploy done' | spacebar send -           # body from stdin
 spacebar send --thread-key deploys 'v1.2.3'    # group into a thread
+spacebar send --mention a@b.com 'ship it'       # notify somebody
 spacebar send --dry-run 'deploy done'          # print the request, send nothing
 ```
 

@@ -49,6 +49,7 @@ const maxBodyBytes = 1 << 20
 // sendFlags are what `send` was asked for.
 type sendFlags struct {
 	md         bool
+	mentions   []string
 	threadKey  string
 	messageID  string
 	idempotent bool
@@ -93,6 +94,17 @@ func newSendCmd(opts *Options) *cobra.Command {
   ` + meta.AppName + ` send spaces/AAAAAAA 'deploy done'   # name the space
   ` + meta.AppName + ` send --md 'deploy **done**'         # translate CommonMark
   echo 'deploy done' | ` + meta.AppName + ` send -         # body from stdin
+  ` + meta.AppName + ` send --mention a@b.com 'deploy done'  # notify somebody
+
+--mention takes an address or a users/NNN and puts it in front of the body,
+repeatable, in the order given. Chat resolves the address itself, so nothing is
+looked up here: this needs no extra scope and works on a webhook.
+
+An address that matches nobody is not refused, because the API does not refuse
+it. It answers 200 and posts the message with <users/> where the mention should
+be, notifying nobody, so the only place the failure is visible is the body that
+comes back. That is checked, and it is a warning on stderr rather than a
+failure, because the message did post and a non-zero exit would say it did not.
 
 The target is the first argument when there are two. A webhook profile posts
 to one space and is the only thing that authenticates the request, so on one of
@@ -125,6 +137,8 @@ again.`,
 	f.StringVar(&flags.messageID, "message-id", "", "the message's own name, which makes a resend a duplicate the API refuses")
 	f.BoolVar(&flags.idempotent, "idempotent", false, "derive --message-id from the space, the body, and the thread key")
 	f.StringVar(&flags.cardFile, "card", "", "a JSON file holding cardsV2, sent alongside the text")
+	f.StringArrayVar(&flags.mentions, "mention", nil,
+		"mention somebody by address or users/NNN, prepended to the body; repeatable")
 
 	// Registered rather than left out, and this is a deliberate choice about
 	// what a person learns from a failure. An unregistered flag is exit 2,
@@ -325,6 +339,11 @@ func buildMessage(body string, flags *sendFlags, r *output.Renderer) (chat.Messa
 	}
 	r.Warnings(warnings)
 
+	text, err = withMentions(text, flags.mentions)
+	if err != nil {
+		return chat.Message{}, err
+	}
+
 	message := chat.Message{Text: text}
 	if flags.cardFile == "" {
 		return message, nil
@@ -372,6 +391,8 @@ func send(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, req chat
 	if err != nil {
 		return err
 	}
+
+	r.Warnings(unresolvedMentions(sent.Text))
 
 	result := sendResult{
 		Message:    sent.Name,
@@ -475,4 +496,74 @@ func uploadAttachment(cmd *cobra.Command, r *output.Renderer, opened *profile.Op
 	// takes later, off a message that already carries it.
 	r.Note("uploaded %s (%d bytes)", filepath.Base(path), info.Size())
 	return ref.AttachmentUploadToken, nil
+}
+
+// withMentions prepends a mention of each address to the body.
+//
+// Prepended, and in the order they were given, because that is where a person
+// writing this by hand would put them and because the alternative is deciding
+// where in somebody's sentence they meant. The body is not searched for a place
+// to insert them: a message is never rewritten to make a flag fit.
+//
+// Every one goes through format.Mention, which is the only place a mention is
+// built, so an address that cannot sit inside the wrapper is refused at exit 2
+// before anything is sent rather than posted as literal text.
+//
+// A bare address is accepted as well as a resource name, because that is what
+// somebody will type. Chat resolves it server side: `<users/a@b.com>` comes
+// back as a USER_MENTION annotation naming the numeric id, measured against a
+// real space on 2026-08-17. There is no lookup here, which is why this needs no
+// scope and works on a webhook.
+func withMentions(text string, addresses []string) (string, error) {
+	if len(addresses) == 0 {
+		return text, nil
+	}
+
+	var b strings.Builder
+	for _, address := range addresses {
+		name := address
+		if !strings.HasPrefix(name, "users/") {
+			name = "users/" + name
+		}
+		mention, err := format.Mention(name)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(mention)
+		b.WriteString(" ")
+	}
+	b.WriteString(text)
+	return b.String(), nil
+}
+
+// emptyMention is what Chat leaves behind when a mention names nobody.
+//
+// Measured on 2026-08-17. `--mention nobody@example.com` is accepted, answered
+// 200, and posted: the address is dropped and the body arrives reading
+// "<users/> the rest of the message", with no USER_MENTION annotation and
+// nobody notified.
+const emptyMention = "<users/>"
+
+// unresolvedMentions warns when a mention was asked for and did not land.
+//
+// There is no way to refuse this before sending. Nothing in the Chat API says
+// whether an address is a person, and the only endpoint that would answer
+// needs a scope this does not require and has a side effect of its own. So the
+// failure is detected afterwards, from the body the API echoes back, which is
+// the one place it is visible.
+//
+// A warning and exit 0 rather than a failure, which is the same answer `--md`
+// gives when a table cannot be represented: the message was posted, so a
+// non-zero exit would say it was not, and this tool may not write the result to
+// stdout on a failure. What must not happen is silence. Somebody who asked to
+// notify a colleague and did not is entitled to know before they walk away.
+func unresolvedMentions(text string) []string {
+	if !strings.Contains(text, emptyMention) {
+		return nil
+	}
+	return []string{
+		"a --mention address did not match anybody, so it was dropped: the message posted " +
+			"with " + emptyMention + " in it and nobody was notified. Chat accepts an unknown " +
+			"address and answers 200, so this cannot be refused before sending. Check the address.",
+	}
 }
