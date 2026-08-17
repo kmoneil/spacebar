@@ -338,6 +338,27 @@ it is pasted rather than as a `400` about an API key days later.
   Deleting the token stops this machine using the authorization. Ending the
   authorization is done from the account's security settings, and that is the
   thing to do if a machine is lost rather than retired. Both commands say so.
+- **A webhook URL on an unexpected host is stored, used, and said out loud.**
+  `TestAWebhookOnAnotherHostIsStoredAndSaidOutLoud`,
+  `TestAWebhookOnTheExpectedHostSaysNothing`.
+
+  `CheckWebhookURL` is deliberately loose about the host, and that reasoning
+  stands: Google may change it, and a validator refusing a URL the API would
+  have accepted cannot be fixed from the user's side. So nothing is refused.
+
+  What was missing is the other half. Once the URL is stored, nothing showed the
+  operator where their messages go. The space is read out of the URL's own path,
+  a send reports that as the destination because the URL is the fact rather than
+  the response, and `profile list` prints a name, a transport and whether a
+  credential is recorded. A URL pasted from the wrong place therefore posts
+  every message to somebody else's host while every line this tool prints reads
+  exactly as expected, and the only command that would show them is `--dry-run`,
+  which they have no reason to run because nothing looks wrong.
+
+  So `profile set-webhook` warns once, at the paste, naming the host and not the
+  rest of the URL, which is a credential. Once, because a line on every send is
+  one people learn to scroll past, and at the paste because that is the moment
+  somebody still has the URL in front of them to compare.
 - **A webhook URL is a bearer credential, not a URL.** It carries `key` and
   `token` query parameters that are the entire authentication for posting to
   that space. It is redacted, stored, and refused on the command line exactly
