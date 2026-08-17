@@ -748,3 +748,115 @@ func FuzzTheSpaceOfAMessageIsAlwaysASpaceName(f *testing.F) {
 		}
 	})
 }
+
+// TestSendChecksItsOwnSpaceName.
+//
+// Every other write in this package checks the resource name it is about to put
+// in a path. This one did not, and the comment saying why named a milestone
+// that had shipped four milestones earlier. Nothing was reachable through the
+// gap, because both transports check before calling, which is exactly the
+// arrangement this repository refuses elsewhere: a first layer that needs the
+// layer below it, and its callers remembering, is not a first layer.
+//
+// Empty stays allowed, and only here. That is the webhook, whose URL is already
+// the messages endpoint for one space.
+func TestSendChecksItsOwnSpaceName(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		space string
+		ok    bool
+	}{
+		{"a webhook, which names no space", "", true},
+		{"a real space", "spaces/AAAATestSpace", true},
+
+		{"a walk upwards", "spaces/../../etc", false},
+		{"another host", "https://evil.example/v1/spaces/AAAA", false},
+		{"a second segment", "spaces/AAAA/messages", false},
+		{"not a space at all", "AAAATestSpace", false},
+		{"a control character", "spaces/AAAA\nBBBB", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckSendTarget(tc.space)
+			if tc.ok && err != nil {
+				t.Fatalf("CheckSendTarget(%q) = %v, want it accepted", tc.space, err)
+			}
+			if !tc.ok && err == nil {
+				t.Fatalf("CheckSendTarget(%q) was accepted", tc.space)
+			}
+		})
+	}
+}
+
+// TestASendRefusesABadSpaceWithoutAskingTheAPI holds the same claim through the
+// method, against a server that fails the test if it is reached.
+//
+// The value matters, and the obvious one proves nothing. `spaces/../../etc` was
+// already refused without this check, by checkRelative at the join, which is
+// exactly the second layer the card said this was leaning on: the test passes on
+// the broken build and says the wrong thing about why.
+//
+// This one is refused by the space rule and by nothing else. It has no `..`, no
+// separator to add a segment and no scheme, so checkRelative allows it and
+// sameOrigin allows it: it joins onto the base as /v1/AAAATestSpace/messages,
+// which is a request to a path that is not an endpoint, carrying this profile's
+// credential. That is what the first layer is for.
+func TestASendRefusesABadSpaceWithoutAskingTheAPI(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("a send with a bad space reached the network: %s %s", r.Method, r.URL.Path)
+	})
+
+	if _, err := h.client.SendMessage(context.Background(), SendRequest{
+		Space:   "AAAATestSpace",
+		Message: Message{Text: "hello"},
+	}); err == nil {
+		t.Fatal("a send with a bad space was not refused")
+	}
+	if h.count() != 0 {
+		t.Errorf("the refusal arrived after %d requests", h.count())
+	}
+}
+
+// TestAMessageIDTheAPIWillNotTakeIsRefusedHereRatherThanThere.
+//
+// The CLI refused an id without the prefix and the MCP tool did not, so one
+// value was a usage error through one adapter and a 400 through the other.
+// SPEC.md §4 says neither adapter is where a decision gets made.
+//
+// It matters more than a better error message. A message id is what marks a
+// POST safe to replay, so an id the API will reject is a request marked
+// replayable on the strength of a value that was never going to work.
+func TestAMessageIDTheAPIWillNotTakeIsRefusedHereRatherThanThere(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		id   string
+		ok   bool
+	}{
+		{"none, which is the ordinary send", "", true},
+		{"a derived one", DeriveMessageID("spaces/AAAA", "hi", ""), true},
+		{"one somebody chose with the prefix", MessageIDPrefix + "deploy-42", true},
+
+		{"one without the prefix", "deploy-42", false},
+		{"one that only contains the prefix elsewhere", "my-client-thing", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckMessageID(tc.id)
+			if tc.ok != (err == nil) {
+				t.Fatalf("CheckMessageID(%q) = %v, accepted=%v want accepted=%v", tc.id, err, err == nil, tc.ok)
+			}
+		})
+	}
+
+	// And through the method, so that no adapter can reach the network with one.
+	h := newHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("a send with a bad message id reached the network: %s %s", r.Method, r.URL.Path)
+	})
+	if _, err := h.client.SendMessage(context.Background(), SendRequest{
+		Message:   Message{Text: "hello"},
+		MessageID: "deploy-42",
+	}); err == nil {
+		t.Fatal("a send with a bad message id was not refused")
+	}
+	if h.count() != 0 {
+		t.Errorf("the refusal arrived after %d requests", h.count())
+	}
+}
