@@ -545,6 +545,13 @@ each space comes round less often, thirty spaces every 3s and a hundred every
 10s, and the interval chosen is printed on stderr at startup unless `--quiet` or
 `--json` says the reader is not a person.
 
+The pace is recomputed when a space is dropped, so the ones left are polled no
+faster than you asked for. It looks like a detail and is the floor: the gap
+between requests is the interval divided by the space count, so a rotation that
+loses spaces and keeps its old gap comes round quicker every time, and a watch
+of forty spaces that lost thirty-nine would poll the last one twenty times a
+second.
+
 The list of spaces is taken once. A space created while it runs is not picked
 up, because re-listing spends the quota this is being careful with and a watch
 whose subject changes underneath it is harder to reason about; restart to pick
