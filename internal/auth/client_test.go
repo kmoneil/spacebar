@@ -154,7 +154,7 @@ func TestSaveClientPutsTheSecretInTheKeyringAndTheIdentifierInTheFile(t *testing
 	if profile.ClientID != client.ID {
 		t.Errorf("client_id = %q", profile.ClientID)
 	}
-	if profile.ClientSecretRef != Ref("work", ClientSecretRef) {
+	if profile.ClientSecretRef != Ref("work", ClientSecretName) {
 		t.Errorf("client_secret_ref = %q", profile.ClientSecretRef)
 	}
 	if profile.Transport != config.TransportUserOAuth {
