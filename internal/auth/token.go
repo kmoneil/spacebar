@@ -26,7 +26,11 @@ import (
 
 // TokenSecret names the OAuth token inside a profile's credentials, per
 // SPEC.md §6.6.
-const TokenSecret = "token"
+//
+// The record behind it holds the refresh token as well as the access one, so
+// this is the longest-lived credential this tool stores and the one that most
+// has to go when a profile does. ProfileSecrets is what makes that structural.
+const TokenSecret SecretName = "token"
 
 // TestingWindow is how long a refresh token lives for an application that is
 // still in testing.
