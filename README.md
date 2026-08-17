@@ -1,17 +1,83 @@
 <p align="center">
-  <img src="docs/assets/spacebar.png" alt="spacebar" width="480">
+  <img src="docs/assets/spacebar.png" alt="spacebar" width="440">
 </p>
 
-A focused terminal client and MCP server for Google Chat.
+<p align="center">
+  <b>Google Chat from your terminal, your scripts, and your agents.</b>
+</p>
 
-```
-spacebar send "deploy done"
+<p align="center">
+  <a href="https://github.com/kmoneil/spacebar/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kmoneil/spacebar/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+  <a href="go.mod"><img alt="Go" src="https://img.shields.io/badge/go-1.26.6-00ADD8"></a>
+  <a href="#why-it-is-shaped-this-way"><img alt="Dependencies" src="https://img.shields.io/badge/direct%20dependencies-5-brightgreen"></a>
+  <a href="SECURITY.md"><img alt="CGO" src="https://img.shields.io/badge/CGO__ENABLED-0-brightgreen"></a>
+</p>
+
+```console
+$ spacebar send "deploy done"
+message  spaces/AAAAAAA/messages/BBB
+space    spaces/AAAAAAA
+profile  alerts
 ```
 
 That is the whole point. One line, from a script or a terminal, with no
-ceremony after setup: a webhook profile knows which space it posts to, so
-there is nothing else to say. The same capabilities are available to an agent with no
+ceremony after setup: a webhook profile knows which space it posts to, so there
+is nothing else to say. The same capabilities are available to an agent with no
 human in the loop, through `--json` and through a built-in MCP server.
+
+### What you get
+
+|  | |
+| --- | --- |
+| **Send with no OAuth at all** | An incoming webhook needs no Cloud project, no admin approval, and no consent screen. Paste a URL, send. |
+| **Read, edit, react, follow** | `spaces`, `messages`, `tail`, `watch --all`, `react`, `messages edit`/`delete`, attachments up and back down. |
+| **Search what was said** | There is no message search API for an ordinary user, so `sync` keeps a local copy and `search` reads it back. |
+| **Serve a model** | `spacebar mcp` speaks MCP on stdio. Writes are off by default and the tools a profile cannot serve are never registered. |
+| **Built for scripts** | `--json` is NDJSON so it streams, stdout is data and nothing else, and the exit code tells you which kind of failure it was. |
+| **One binary, no cgo** | Six platforms, five direct dependencies, and a licence gate that fails the build over any of them. |
+
+## Quick start
+
+The path that needs no OAuth, no Cloud project, and nobody's approval. In the
+Chat space: **Apps & integrations → Webhooks →** copy the URL.
+
+```sh
+git clone https://github.com/kmoneil/spacebar && cd spacebar && make build
+
+pbpaste | ./bin/spacebar profile set-webhook alerts   # macOS
+./bin/spacebar send "deploy done"
+```
+
+That is the whole setup. The URL goes to your OS keyring, never to a file and
+never onto a command line. To act as yourself instead of as a bot, see
+[Authorize as yourself](#authorize-as-yourself).
+
+## Contents
+
+**Start here** &nbsp;·&nbsp;
+[Install](#install) &nbsp;·&nbsp;
+[Configure a webhook](#configure-a-webhook) &nbsp;·&nbsp;
+[Authorize as yourself](#authorize-as-yourself)
+
+**Use it** &nbsp;·&nbsp;
+[Send](#send) &nbsp;·&nbsp;
+[Read a space](#read-a-space) &nbsp;·&nbsp;
+[Name a space](#name-a-space-without-its-id) &nbsp;·&nbsp;
+[Follow a space](#follow-a-space) &nbsp;·&nbsp;
+[Search](#search-what-was-said)
+
+**For agents** &nbsp;·&nbsp;
+[Serve it to a model](#serve-it-to-a-model) &nbsp;·&nbsp;
+[docs/AGENTS.md](docs/AGENTS.md) &nbsp;·&nbsp;
+[docs/SKILL.md](docs/SKILL.md)
+
+**Everything else** &nbsp;·&nbsp;
+[Why it is shaped this way](#why-it-is-shaped-this-way) &nbsp;·&nbsp;
+[Status](#status) &nbsp;·&nbsp;
+[Development](#development) &nbsp;·&nbsp;
+[SECURITY.md](SECURITY.md) &nbsp;·&nbsp;
+[docs/ADMIN.md](docs/ADMIN.md)
 
 > Google Chat and Google are trademarks of Google LLC. `spacebar` is an
 > independent third-party client. It is not affiliated with, sponsored by, or
@@ -19,45 +85,37 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**All six milestones are done.** `spacebar send` works over an incoming
-webhook, with no OAuth, no administrator approval, and no Cloud project: give a
-profile a webhook URL and send. On a profile authorized as you, `spaces list`,
-`spaces get`, `spaces members`, `messages list` and `messages get` work as
-well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
-`messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
-work, as do `send --file` and `messages download`, and `watch --all` follows
-every space at once on a request rate budgeted against the project's quota.
-`spacebar mcp` serves the read paths to a model over MCP, and `send_message`
-and `react_to_message` when `--allow-write` says so. `spacebar sync` copies a
-space into a local index and `spacebar search` reads it back, which exists
-because there is no message search API for an ordinary user.
+**All six milestones are done.** Nothing is released yet, and the whole command
+surface works:
 
-One thing worth knowing before you rely on it. Every behaviour described below
-is covered by tests, including against a server that answers the way the Chat
-API does. Beyond that, the webhook path has been run end to end against a real
-Google Chat space, and the Chat markup rules were measured there rather than
-read from documentation. Authorizing with your own OAuth client has been run for
-real too, through a browser, against a client in a Workspace organization.
+```console
+$ spacebar --help
+  alias       Name a space something you will remember
+  auth        Authorize this machine to act as you
+  completion  Generate the autocompletion script for the specified shell
+  licenses    Print the licence of every dependency in this binary
+  mcp         Serve this profile to a model over MCP
+  messages    List and read messages
+  profile     Configure the profiles this tool sends through
+  react       React to a message with an emoji
+  search      Search the local index for what was said
+  send        Post a message to a space
+  spaces      List and inspect spaces
+  sync        Copy a space's messages into the local index
+  tail        Follow a space as messages arrive
+  version     Print the version of this binary
+  watch       Follow everything that happens in a space, not just new messages
+```
 
-Reading has been run against the real API too. `spaces list`, `spaces get`,
-`spaces members`, `messages list` and `messages get` have each fetched from
-Google rather than from a test server, which settled three things that had been
-decoded from the API reference and never watched work: the response shapes,
-that `orderBy` accepts `createTime DESC`, and that `pageSize` is honoured
-exactly. The live run is also what found the two bugs in the set, which is
-worth saying plainly because it is the argument for doing it. `spaces members`
-asked for a scope no authorization requested, so it failed on every profile the
-tool could create, and no test in the tree could have seen it. And every `auth`
-command assumed a profile that could hold a token, so on a webhook one of them
-stored an OAuth client against it and another reported a successful logout of
-something that had never been logged in.
+`send` needs only a webhook. Everything that reads needs a profile authorized as
+you. `mcp` serves either to a model.
 
-Writing has now been run for real as well. A message was posted as the account
-rather than as a bot, edited, reacted to, and deleted, against the live API on
-2026-08-16, and that run is what settled who may do what: editing is limited to
-the message's author and deleting is not. The tool had already been written with
-the opposite assumption in its own help text, and the live check is the only
-reason it did not ship that way.
+Every behaviour described here is covered by tests, and the parts that matter
+have been run against a real Google Chat space rather than a test server: the
+webhook path, browser OAuth against a client in a Workspace organization, all
+five read endpoints, and posting, editing, reacting and deleting as the account.
+Those live runs found two bugs no test in the tree could have caught, which is
+the argument for doing them.
 
 The plan, in six milestones:
 
@@ -76,54 +134,13 @@ and a tool that is useless to them has a much smaller reach than it looks.
 
 ## Why it is shaped this way
 
-**Three auth models, degrading gracefully.** Many users are in locked-down
-Workspace orgs where the full API is simply unavailable. An incoming webhook is
-write-only and appears as a bot, but it needs no OAuth and no admin approval;
-user OAuth does everything but requires a client the org will allow. A command
-that needs a capability the current profile does not have fails _before_ the
-network call, with an exit code that says so and a message naming the fix.
+Five decisions that shape everything else: three auth models rather than one,
+narrow OAuth scopes, Chat markup that is not CommonMark, output built for a
+script before a person, and a dependency budget of five.
 
-What each one can do:
-
-|                      | webhook                | user OAuth                     |
-| -------------------- | ---------------------- | ------------------------------ |
-| Send text            | yes                    | yes                            |
-| Send cards           | yes                    | **no**, a user send is text-only |
-| Read, list, search   | no                     | yes                            |
-| Edit, delete, react  | no                     | yes                            |
-| Threading            | yes, by `threadKey`    | yes                            |
-| Upload an attachment | no                     | yes                            |
-| Appears as           | a bot                  | you                            |
-
-The cards row is not a typo. A card requires app authentication, and a webhook
-*is* an app; a user-authenticated send is you talking, and that is text only.
-It is the one thing the write-only transport can do and the full one cannot.
-
-**Narrow scopes, and bring-your-own OAuth client as a first-class path.**
-Narrower scopes materially improve the odds of admin approval, so
-`auth login --send-only` is a real mode. An Internal-type client in the org's
-own Cloud project avoids both third-party app access controls and the seven-day
-refresh-token expiry that testing-mode apps impose.
-
-**Chat markup is not CommonMark.** Bold is `*one asterisk*`. Passing standard
-Markdown through renders literal asterisks and tildes, which is a real and
-common bug in tools like this. `--md` translates; without it, text is sent
-verbatim.
-
-**Built for a script and an agent, not only for a person.** Structured output
-on stdout, everything else on stderr, NDJSON for lists so it streams. Exit codes
-distinguish "your authorization expired" from "that space does not exist". The
-tool never blocks on a prompt when stdin is not a terminal, because a hung agent
-is strictly worse than a failed one.
-
-**A small dependency tree, on purpose.** Five direct dependencies, which is the
-ceiling this project set itself and has now reached: cobra and pflag for the
-command tree, go-keyring for the credential store, `x/oauth2` for the token
-exchange, and the MCP SDK. A sixth needs an argument, and the answer is usually
-no. Count what a dependency links rather than what it requires: the MCP SDK is
-one line in `go.mod` and six modules in the binary, more than a third of
-`NOTICE`. The Chat API client is hand-rolled because the generated one is 40k
-lines and drags in a transport chain we would then not control.
+Each of those has cost something to get wrong, and the reasoning is in
+[SECURITY.md](SECURITY.md) where it bears on safety and in the source comments
+where it bears on a decision.
 
 ## Install
 
@@ -157,34 +174,20 @@ transport   webhook
 credential  keyring:spacebar/alerts/webhook
 ```
 
-The URL arrives on stdin, or in `SPACEBAR_WEBHOOK_URL`, and never as an
-argument. It carries `key` and `token` query parameters that are the entire
-authentication for that space, so it is a credential rather than an address,
-and an argument lands in the shell history and in the process list. It goes to
-the OS keyring; the configuration file gets the reference above and never the
-value.
+The URL arrives on stdin or in `SPACEBAR_WEBHOOK_URL`, never as an argument: it
+carries `key` and `token` parameters that are the entire authentication for that
+space, so it is a credential, and an argument lands in your shell history. It
+goes to the OS keyring and the config file gets the reference above.
 
 The first profile becomes the default, so nothing after this needs `--profile`.
 
-Add `--verify` to prove it works, which posts a message to the space:
+`--verify` proves it works by posting a message, which is the only way to find
+out: a webhook has no endpoint that reports its own health, so a mistyped URL
+and an org with Chat apps switched off otherwise look the same.
 
 ```sh
 pbpaste | spacebar profile set-webhook alerts --verify
-pbpaste | spacebar profile set-webhook alerts --verify --verify-text 'setting up spacebar'
 ```
-
-```
-profile     alerts
-transport   webhook
-credential  keyring:spacebar/alerts/webhook
-verified    spaces/AAAATestSpace
-```
-
-It is off by default because it puts a real message into a space other people
-are reading. It is worth having because a webhook has no endpoint that reports
-whether it works: posting is the only way to find out, so without it there is no
-way to tell a mistyped URL from an organizational unit that has Chat apps
-switched off. Those two produce different failures and this says which you have.
 
 ```sh
 spacebar profile list           # what is configured, without reading a credential
@@ -218,6 +221,9 @@ profile  alerts
 Warnings, logs and failures go to stderr, and the exit code says what happened:
 `0` sent, `2` you asked for something impossible, `3` the API said no, `4`
 authorize again, `5` this profile cannot do that, `6` rate limited.
+
+<details>
+<summary><b>Chat markup, threading, idempotency, cards, and what a webhook may not do</b></summary>
 
 **Text is sent exactly as typed.** Chat markup is not CommonMark: bold is one
 asterisk, so `**bold**` arrives with the asterisks showing. `--md` translates,
@@ -260,6 +266,8 @@ Run 'spacebar auth setup' on its own to see how to create the client.
 A webhook is still the only path that needs nothing from an administrator, which
 is the point of it. Attachments are Milestone 4 even on a profile that can read.
 
+</details>
+
 ## Authorize as yourself
 
 Reading needs an account rather than a webhook, and an account needs an OAuth
@@ -281,6 +289,9 @@ The client secret is read from stdin, never from an argument. Only the
 identifier and the secret are taken out of that file: its endpoints are ignored,
 because a file that could redirect the consent screen would be a file that could
 collect your authorization.
+
+<details>
+<summary><b>Scopes, the seven-day testing-mode limit, and what your admin has to allow</b></summary>
 
 **Scopes are requested narrowly.** `--send-only` asks for
 `chat.messages.create` and nothing else, because a narrower request is one an
@@ -331,6 +342,8 @@ the command line, and [docs/SKILL.md](docs/SKILL.md) covers the MCP server.
 Every example in both is held to the code by a test, because the reader of those
 two cannot tell a stale example from a current one.
 
+</details>
+
 ## Read a space
 
 On a profile authorized as you, rather than a webhook:
@@ -360,6 +373,9 @@ spacebar messages delete spaces/AAAAAAA/messages/BBBBBBB      # asks first
 spacebar react spaces/AAAAAAA/messages/BBBBBBB 👍
 ```
 
+<details>
+<summary><b>Who may edit and delete, and how a reaction is addressed</b></summary>
+
 **Editing is limited to messages you sent, and deleting is not.** Measured, not
 assumed: editing your own message answers 200 and editing somebody else's
 answers 403, a second apart on the same token, while a delete of somebody
@@ -376,6 +392,8 @@ stale.
 than the oldest ones in a space's history. Reading a conversation in the order
 it happened is what `tail` will be for.
 
+</details>
+
 ## Name a space without its ID
 
 Every command that takes a `SPACE` also takes a display name or an address, and
@@ -387,6 +405,9 @@ spacebar messages list 'ops' --limit 20       # case does not matter
 spacebar send 'Ops' 'deploy done'
 spacebar spaces get someone@example.com       # the direct message with them
 ```
+
+<details>
+<summary><b>How a name is resolved, and why an ambiguous one is a failure rather than a guess</b></summary>
 
 **Four steps, in order, and the last one never guesses.** A literal
 `spaces/XXXX` passes straight through and costs nothing. Then a profile alias.
@@ -445,6 +466,8 @@ could never be consulted is worse than one that is refused.
 A webhook profile can use an alias, because an alias is a local map and needs no
 permission. The last two steps need to read and are refused on one.
 
+</details>
+
 ## Follow a space
 
 ```sh
@@ -479,6 +502,9 @@ exchanged for a token, and the token is what a message can carry. The upload
 goes first, so a file that fails to upload does not become a message with the
 text and no file.
 
+<details>
+<summary><b>Why a server-supplied filename is flattened, and why no download URL is published</b></summary>
+
 **A downloaded file lands inside `--out` and nowhere else.** The name comes
 from whoever posted the message, so an attachment called
 `../../.ssh/authorized_keys` is written as `.._.._.ssh_authorized_keys` in the
@@ -492,6 +518,8 @@ credential.
 
 A Drive attachment is listed and skipped: Chat returns a reference rather than
 the bytes, and fetching it is Drive's API rather than this one.
+
+</details>
 
 ### Watching, which is not tailing
 
@@ -541,112 +569,14 @@ dropped with a line on stderr saying which and why, and the others carry on. If
 every space is dropped the exit is non-zero, because a watch that is watching
 nothing has not finished, it has been abandoned.
 
-**`--json` carries the API's own event payload**, unaltered, under `payload`.
-That is a departure from how the other shapes work here, and it is deliberate:
-for a message that has since been deleted, the payload is the only place its
-tombstone exists, and `messages get` on that name answers nothing.
+**`--json` carries the API's own event payload** under `payload`, unaltered,
+because for a message that has since been deleted the payload is the only place
+its tombstone exists.
 
-**An event's payload is the subject as it is now, not as it was.** Measured: an
-edit event for a message deleted ten minutes later carries the tombstone rather
-than the text the edit set. Watching live gets the text; watching history gets
-the current state.
+**This endpoint needs a Chat app configured** on the Cloud project, which is a
+separate step from enabling the Chat API. Without it the API answers 404 and
+mentions neither; `spacebar` explains it.
 
-**This endpoint needs the Chat app configured**, which is a separate step from
-enabling the Chat API and is the same step every write needs. It is the reason
-the line is not reading against writing.
-
-**A time window is an RFC 3339 timestamp or how long ago**, as in `30m`, `2h`
-or `36h`. Durations have no day unit, so a week is `168h`. Both `--since` and
-`--until` are **strictly** outside the boundary: the API compares `createTime`
-with `>` and `<` and refuses `>=`, so a message posted at exactly the moment
-you name is not returned, and this tool would rather say that than shift your
-timestamp by a nanosecond to hide it. On `messages list` they combine with
-`--filter`, and your expression is parenthesized first so that an `OR` in it
-keeps its meaning. `tail` takes `--since` and refuses it beside `--backfill`,
-because the two disagree about where to start.
-
-Two things it does not do. It does not replay what was already there unless
-`--backfill` asks. And it never corrects itself: a message edited or deleted
-while you are watching is not shown again, because a poll sees new messages and
-an edit does not make one. Seeing mutations needs `spaceEvents`, which is a
-different command still to come.
-
-**`spaces members` identifies people by resource name, not by display name.**
-The Chat API returns a member as `users/NNN` and a type, with no name attached,
-and the sender of a message comes back the same way. That is how a
-user-authorized read answers rather than a gap here, and it is worth knowing
-before you build something that expects a name. `users/NNN` is the stable
-identifier in any case; a display name is chosen by the account holder and is
-not unique. `--json` carries a `display_name` field regardless, so a caller gets
-one for free if the API ever starts sending it.
-
-**The affiliation column says who is outside your organization.** It is
-`INTERNAL` or `EXTERNAL`, and it is the column to read before posting something
-that should not leave the company. An app's membership carries no affiliation at
-all, so that column is blank on those rows, and nothing here fills in a value the
-API did not send.
-
-**`spaces members` lists people who have joined.** Somebody who was invited and
-has not accepted is not returned at all unless `--show-invited` asks for them,
-and a membership held by a Google Group is not returned unless `--show-groups`
-does. Both are the API's own defaults rather than choices made here.
-
-**`--show-groups` is the one to reach for before posting something sensitive.** A
-space can grant access to a group, and then everybody in that group is in the
-space without a membership of their own, so the default list is not the whole
-answer to "who can see what I post here". A group row carries `groups/NNN` in the
-first column and `GROUP` in the second, and `--json` gives it its own
-`group_member` key rather than putting it in `member`, so nothing that selects
-`.member` starts receiving groups:
-
-```console
-$ spacebar spaces members spaces/AAAAAAA --show-groups
-users/NNN	HUMAN	JOINED	ROLE_MANAGER	INTERNAL
-groups/NNN	GROUP	JOINED
-```
-
-Read that second row for what it does not say. There is no role and no
-affiliation, because the API sends neither, so the column that tells you who is
-outside your organization is blank on exactly the row that can let in the most
-people. There is no group name or address either, only `groups/NNN`, the same
-way a person is only `users/NNN`. And the group's own members are not listed
-anywhere and are not reachable from a Chat scope at all. What this flag tells
-you is that a group has access, which is a different and smaller thing than
-knowing who does.
-
-**A direct message with an app is marked.** Every direct message has a blank
-display name, so without the fourth column a conversation with a colleague and a
-conversation with a bot are the same row. `--json` carries it as
-`single_user_bot_dm`, present only when true.
-
-**A list streams.** Pages are fetched as you consume them, so `--json` is NDJSON
-and the first object arrives before the last page has been requested:
-
-```sh
-spacebar spaces list --json | jq -r '.name + "\t" + .display_name'
-spacebar messages list spaces/AAAAAAA --limit 5 --json | jq -r .text
-```
-
-`--limit` is honoured exactly. Asking for five fetches five, rather than
-fetching a page of a thousand and discarding the rest, which matters because the
-per-space quota is shared with every other app acting in that space.
-
-**A list that fails part way through keeps the rows it already wrote** and exits
-non-zero. Every line is a complete object, so a caller that checks the exit code
-is never handed a truncated answer that looks whole. This is the one place the
-"a failing command writes nothing to stdout" rule is narrower than it sounds,
-and it is the price of streaming rather than an oversight.
-
-`--dry-run` works on a read too, printing the request without spending a call
-against the quota:
-
-```
-$ spacebar spaces list --dry-run
-GET https://chat.googleapis.com/v1/spaces?pageSize=25
-Accept: application/json
-Authorization: REDACTED
-User-Agent: spacebar/0.0.0-dev (+https://github.com/kmoneil/spacebar)
-```
 
 ## Search what was said
 
@@ -661,41 +591,19 @@ spacebar search "deploy"
 spacebar search "deploy" --space eng --since 30d --json
 ```
 
-**`sync` is resumable and holds no cursor.** The index knows the window it
-covers, so a run fetches everything newer than the newest message it holds and
-everything older than the oldest. An interrupted run resumes by being run again,
-with nothing fetched twice and no gap in the middle.
+**`sync` is resumable and holds no cursor**: the index knows the window it
+covers, so an interrupted run resumes by being run again, fetching nothing twice
+and leaving no gap.
 
-**`search` says what it did not look in.** A space you have never synced is not
-searched, and a search that skipped it quietly would answer a narrower question
-than you asked:
+**`search` names the spaces it did not look in**, on stderr, from the space list
+already cached. A space you never synced is not searched, and a search that
+skipped it quietly would answer a narrower question than you asked.
 
-```console
-$ spacebar search "deploy"
-warning: searched 4 of 6 spaces. Not searched, because they are not in the index: spaces/BBB spaces/CCC
-Run: spacebar sync --all
-```
+**The index is plaintext on your disk** and nothing removes it, because it holds
+messages the API will not serve again. [SECURITY.md](SECURITY.md) says what that
+costs. It is a scan, not a search engine: 0.34s at 50,000 messages, crossing one
+second at roughly 175,000.
 
-It compares the index against the space list already cached, so it costs no
-request. `search` makes no network call at all, which means a webhook profile
-can search what a user-authorized one copied down.
-
-**A message that was edited is found by the text it has now**, and one that was
-deleted is not found at all. The index records both, so what you search agrees
-with what you would see in the space.
-
-**The index is plaintext on your disk**, at `0600` in `0700` directories under
-`XDG_DATA_HOME`. It is a copy of what people said, including messages that have
-since been deleted, and nothing removes it: `auth logout` and `profile rm`
-deliberately leave it, because the API will not serve those messages again and
-deleting somebody's only copy is the more surprising behaviour. Nothing in it is
-a credential. [SECURITY.md](SECURITY.md) says all of this at length.
-
-**It is a scan, not a search engine**, and the numbers are written down because
-that is a decision that expires. Measured on this design: 0.34s at 50,000
-messages, 1.52s at 250,000, crossing one second at roughly 175,000. SQLite with
-FTS5 was priced and declined; the reasoning and the conditions for revisiting it
-are in SPEC.md §12.2.
 
 ## Serve it to a model
 
@@ -713,54 +621,13 @@ unless you ask for them. And `search_messages`, which appears only when this
 machine has a local index. They return the same shapes `--json` does, because
 both come from one place.
 
-**A tool this profile cannot serve is not registered at all.** A model that
-cannot see a tool cannot argue itself into calling it; one that can see a broken
-tool will call it, be refused, try again differently, and tell you the tool is
-broken. So a profile whose token lacks `chat.memberships.readonly` offers four
-read tools rather than five. This is deliberately the opposite of how flags work
-in the CLI, where a person reading `--help` is served by knowing that `--file`
-exists.
+A model is never shown a tool this profile cannot serve, writes are off until
+`--allow-write` says otherwise, `--allow-space` narrows where they may land, and
+every tool call is one JSON line on stderr that no flag suppresses.
 
-`search_messages` is the exception that proves the shape: its gate is a fact
-about this machine rather than about the credential, because there is no message
-search API and an empty index would answer every search with nothing, which a
-model reads as "nobody said that" rather than as "nobody has synced anything".
-It needs no capability at all, so a webhook profile with an index can search what
-a user-authorized one copied down.
-
-A profile that can serve no tool at all is refused before the session starts
-rather than connected with nothing to offer. For a webhook that means: with no
-index and no `--allow-write`, refused; with `--allow-write`, exactly one tool,
-`send_message`, because a webhook can post and cannot react; with an index,
-`search_messages` as well.
-
-**Writes are off unless you say otherwise.**
-
-```json
-{"command": "spacebar", "args": ["mcp", "--profile", "work", "--allow-write",
-                                 "--allow-space", "spaces/AAAAAAA"]}
-```
-
-Without `--allow-write`, neither write tool is registered at all, so there is no
-tool for a model to talk itself into calling. With it, `--allow-space` narrows
-where they may act, checked against the space a call resolves to rather than
-against the string the model sent, and refused before the request rather than
-after it. A reaction names a message rather than a space, so the space is read
-out of the message name before the same check runs.
-
-Every write tool's description ends with "This posts a visible message to a real
-Google Chat space. Confirm with the user before calling.", which is what the
-model reads before deciding.
-
-**Every tool call is one JSON line on stderr**, and neither `--quiet` nor
-`--json` turns it off. It says which tool, which profile, what the arguments
-were with long strings truncated, and whether it worked. An audit line a flag
-can silence is missing exactly when somebody has a reason to silence it.
-
-**Message text is untrusted input.** It reaches a model as data, and a message
-that asks the model to do something is still a message. That is why writing over
-MCP is off by default and why the confirmation sentence is in the tool's own
-description rather than only in a document somebody might not read.
+**[docs/SKILL.md](docs/SKILL.md) is the full contract**, including the
+confirmation sentence every write tool carries and why message text reaching a
+model is untrusted input.
 
 ## The rest of it
 
@@ -784,26 +651,11 @@ network call or a checkout.
 make hooks     # install the pre-commit and commit-msg hooks
 make tools     # install every pinned tool the gate needs
 make ci        # everything CI runs, in the order CI runs it
-make help      # the rest
 ```
 
-`make ci` is the gate. It runs what the workflow runs, with the same pinned
-tool versions, so a green run locally means a green run there.
-
-Some things that are not obvious:
-
-- **The golden files under `internal/cli/testdata/golden/` are a public
-  contract.** They record what went to stdout, what went to stderr, and the
-  exit code. `make golden` regenerates them; a diff is a change every caller
-  sees.
-- **`internal/lint` holds the repository to its own rules.** It ships no code:
-  every test there asserts something a comment elsewhere claims, like go.mod
-  and the workflows naming the same toolchain patch version.
-- **`make licenses` regenerates `THIRD_PARTY_LICENSES` across all six release
-  platforms**, because the dependency graph is not the same on all of them.
-  `NOTICE` is held to the result by a test.
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+`make ci` is the gate, and a green run locally means a green run there.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest: what fails CI and why, the
+commit message rules, the dependency policy, and the DCO.
 
 ## Licence
 
