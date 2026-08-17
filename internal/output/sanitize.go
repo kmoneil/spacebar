@@ -143,9 +143,52 @@ func escapeRune(r rune, strict bool) (string, bool) {
 		return fmt.Sprintf(`\u%04x`, r), true
 	case bidi[r]:
 		return fmt.Sprintf(`\u%04x`, r), true
+	// The Tags block, which is where hidden text goes. See tagsBlock.
+	case r >= tagsFirst && r <= tagsLast:
+		return fmt.Sprintf(`\U%08x`, r), true
 	}
 	return "", false
 }
+
+// The Unicode Tags block, U+E0000 to U+E007F.
+//
+// Deprecated since Unicode 5.1 and rendered as nothing by every terminal and
+// every font, and it carries a complete ASCII alphabet: U+E0041 is a tag
+// letter A. So a run of them is text that is present in a message, absent from
+// the screen, and perfectly legible to anything reading codepoints. It is the
+// standard carrier for an instruction meant for a model rather than a person.
+//
+// This matters here because of what Milestone 5 changed. A message body used to
+// go to a terminal, where an invisible character is a curiosity: a terminal does
+// not act on one, and the escaping rule above is about a terminal being a
+// program that interprets bytes. A body now also goes to a model, through
+// list_messages, get_message and search_messages, and a model reads codepoints
+// rather than glyphs. Every one of those tools already ends its description with
+// a sentence admitting the risk; this is that risk with the operator's ability
+// to notice it removed.
+//
+// Escaped rather than removed, like everything else here, and escaped visibly:
+// what a reader sees is \U000e0041 where the hidden text is, which is the
+// signal. Removing it would be altering a value to make it printable, which is
+// the one thing this package will not do.
+//
+// **Only this block.** The obvious wider set is a trap. U+200D and U+200C are
+// invisible and are required by real text: a family emoji is zero-width joiners
+// and Persian and several Indic scripts need the non-joiner, so escaping them
+// would mangle ordinary messages, and a defence that garbles what people
+// actually write is one somebody turns off. The Tags block has no legitimate use
+// in a message at all, which is what makes it the one that can be refused
+// without a judgement call.
+//
+// --json and an MCP tool result are deliberately untouched, for the reason they
+// are already exempt from the rest of this file: they hand a program what was
+// actually there. So this makes the terminal honest and changes nothing about
+// what a model receives, which SECURITY.md says out loud rather than leaving to
+// be inferred from a passing escape.
+const (
+	tagsFirst = 0xE0000
+	tagsLast  = 0xE007F
+)
 
 // grow copies the untouched prefix into b the first time something has to be
 // escaped, so that the common case of text needing nothing never allocates.

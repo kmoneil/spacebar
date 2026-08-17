@@ -183,7 +183,15 @@ func TestNothingEscapedKeepsAnEscape(t *testing.T) {
 // FuzzSanitize states the invariant the table cannot: whatever the input,
 // nothing a terminal acts on comes out.
 func FuzzSanitize(f *testing.F) {
-	for _, seed := range append([]string{"", "plain", "one\ttwo\nthree"}, hostile...) {
+	for _, seed := range append([]string{
+		"", "plain", "one\ttwo\nthree",
+
+		// Hidden text, and the two invisible characters real writing needs, so
+		// that a change tightening this has to keep them.
+		"deploy done\U000e0049\U000e0047",
+		"\U0001F468\u200d\U0001F469\u200d\U0001F467",
+		"می\u200cروم",
+	}, hostile...) {
 		f.Add(seed)
 	}
 
@@ -196,6 +204,10 @@ func FuzzSanitize(f *testing.F) {
 				if bidi[r] {
 					t.Fatalf("%s(%q) = %q, which holds the bidi control %U", name, in, got, r)
 				}
+				if r >= tagsFirst && r <= tagsLast {
+					t.Fatalf("%s(%q) = %q, which holds the tag character %U: text that is in the "+
+						"message and not on the screen", name, in, got, r)
+				}
 			}
 		}
 
@@ -205,4 +217,67 @@ func FuzzSanitize(f *testing.F) {
 			t.Fatalf("Cell(%q) = %q, which holds a separator", in, cell)
 		}
 	})
+}
+
+// TestHiddenTextIsShownRatherThanObeyedOrDropped.
+//
+// The Tags block is deprecated, rendered as nothing everywhere, and carries a
+// full ASCII alphabet, so a run of it is text that is in the message, absent
+// from the screen, and perfectly legible to anything reading codepoints. It is
+// the standard carrier for an instruction aimed at a model.
+//
+// What changed to make it matter is not the block. It is that a message body now
+// goes to a model as well as to a terminal, and a model reads codepoints.
+func TestHiddenTextIsShownRatherThanObeyedOrDropped(t *testing.T) {
+	// "IGNORE" in tag letters, which is what this looks like on the wire.
+	var hidden strings.Builder
+	for _, r := range "IGNORE" {
+		hidden.WriteRune(rune(0xE0000) + r)
+	}
+	body := "deploy done" + hidden.String()
+
+	got := Sanitize(body)
+	if strings.ContainsRune(got, 0xE0049) {
+		t.Errorf("a tag character survived into terminal output: %q", got)
+	}
+	if !strings.Contains(got, `\U000e0049`) {
+		t.Errorf("the hidden text is not shown as an escape:\n%q", got)
+	}
+	if !strings.Contains(got, "deploy done") {
+		t.Errorf("the visible text did not survive: %q", got)
+	}
+
+	// Shown rather than dropped. The escape is longer than what it replaced, so
+	// a reader sees that something is there, which is the whole point: removing
+	// it would make the terminal clean and the operator wrong.
+	if len(got) <= len(body) {
+		t.Errorf("the hidden text was removed rather than shown: %q", got)
+	}
+
+	// Cell escapes it too, because a list is where a body is most likely read.
+	if cell := Cell(body); !strings.Contains(cell, `\U000e0049`) {
+		t.Errorf("Cell did not show the hidden text: %q", cell)
+	}
+}
+
+// TestTheCharactersRealTextNeedsAreLeftAlone is the other half, and it is the
+// half that keeps this from being a defence somebody turns off.
+//
+// The obvious wider set of invisible characters is a trap. A zero-width joiner
+// is what makes a family emoji one glyph, and the non-joiner is required by
+// Persian and several Indic scripts. Escaping those would garble ordinary
+// messages written by ordinary people.
+func TestTheCharactersRealTextNeedsAreLeftAlone(t *testing.T) {
+	for _, tc := range []struct{ name, text string }{
+		{"a family emoji, which is zero-width joiners", "\U0001F468\u200d\U0001F469\u200d\U0001F467"},
+		{"a Persian non-joiner", "\u0645\u06cc\u200c\u0631\u0648\u0645"},
+		{"an ordinary sentence", "deploy done"},
+		{"accents and other scripts", "café 日本語 Ελληνικά"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Sanitize(tc.text); got != tc.text {
+				t.Errorf("Sanitize(%q) = %q, and it should have been left alone", tc.text, got)
+			}
+		})
+	}
 }
