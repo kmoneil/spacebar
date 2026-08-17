@@ -16,10 +16,15 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zalando/go-keyring"
 
 	"github.com/kmoneil/spacebar/internal/auth"
 	"github.com/kmoneil/spacebar/internal/config"
@@ -636,5 +641,70 @@ func TestAuthSetupStillCreatesAProfileThatDoesNotExistYet(t *testing.T) {
 	}
 	if !strings.Contains(list.stdout, `"transport":"useroauth"`) {
 		t.Errorf("the profile it created cannot hold the authorization it just set up:\n%s", list.stdout)
+	}
+}
+
+// TestARemovalThatCouldNotHappenExitsNonZero is the exit code a script sees,
+// which is the only part of this a script can act on.
+//
+// `profile rm` and `auth logout` both discarded what the credential store told
+// them, so a fallback file at the wrong mode meant each printed its success
+// line, exited 0, and left the credential on disk. The store-level tests hold
+// the contract; this holds that the contract reaches the process.
+//
+// The keyring is mocked into failing, because that is the machine the fallback
+// file exists for: a container, a CI runner, a headless server. With a working
+// keyring the removal succeeds there and never consults the file at all.
+func TestARemovalThatCouldNotHappenExitsNonZero(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		says string
+	}{
+		{"profile rm", []string{"--yes", "profile", "rm", "work"}, "removed"},
+		{"auth logout", []string{"auth", "logout", "--profile", "work"}, "logged out"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := isolate(t)
+			keyring.MockInitWithError(errors.New("no keyring on this machine"))
+
+			// A configured user-OAuth profile whose credential is in a fallback
+			// file this package will refuse to read.
+			cfg := &config.Config{
+				DefaultProfile: "work",
+				Profiles: map[string]config.Profile{
+					"work": {Transport: config.TransportUserOAuth, ClientID: "x.apps.googleusercontent.com"},
+				},
+			}
+			if err := cfg.SaveTo(path); err != nil {
+				t.Fatalf("writing the configuration: %v", err)
+			}
+
+			creds := filepath.Join(filepath.Dir(path), auth.CredentialsFile)
+			if err := os.WriteFile(creds, []byte(`{"spacebar/work/token":"1//a-refresh-token"}`), 0o644); err != nil {
+				t.Fatalf("writing the fallback file: %v", err)
+			}
+
+			got := runCLIIn(t, "", tc.args...)
+			if got.exit == output.ExitOK {
+				t.Fatalf("exit 0 over a credential that is still on disk\nstdout: %s\nstderr: %s",
+					got.stdout, got.stderr)
+			}
+			if strings.Contains(got.stdout, tc.says) {
+				t.Errorf("stdout says %q for something that did not happen:\n%s", tc.says, got.stdout)
+			}
+			if !strings.Contains(got.stderr, "chmod") {
+				t.Errorf("the failure does not say what to do:\n%s", got.stderr)
+			}
+
+			// And it is still there, which is what makes the failure true.
+			body, err := os.ReadFile(creds)
+			if err != nil {
+				t.Fatalf("reading back: %v", err)
+			}
+			if !strings.Contains(string(body), "a-refresh-token") {
+				t.Error("the test is not exercising what it claims: the secret is gone")
+			}
+		})
 	}
 }

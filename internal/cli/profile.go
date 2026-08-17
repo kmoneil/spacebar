@@ -444,6 +444,11 @@ account may not be able to see.
 None of it can be undone from here: a webhook URL is only recoverable from the
 space it was created in.
 
+A credential this cannot remove is a failure rather than a quiet success, so a
+non-zero exit here means something is still on disk and the message says what
+and what to do about it. Nothing to remove is not a failure: running this twice
+is fine.
+
 This does not tell Google to forget anything, and neither does
 ` + meta.AppName + ` auth logout. Deleting the token stops this machine using the
 authorization; ending the authorization itself is done from your Google

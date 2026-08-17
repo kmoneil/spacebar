@@ -87,21 +87,38 @@ func (s *Store) SetWebhook(cfg *config.Config, profile, rawURL string) error {
 // up with a secret in their keyring that nothing points at, and a delete that
 // only removed what it could see would leave it there for good.
 //
-// A missing credential is not a failure, which is why every result here is
-// discarded. The profile is gone either way, which is what was asked for, and
+// A missing credential is not a failure, and Store.Delete says so by returning
+// nil for one: the profile is gone either way, which is what was asked for, and
 // reporting "there was nothing to delete" as an error would make an interrupted
-// removal impossible to finish. That reasoning covers absence and does not
-// cover a store that could not be written; Store.Delete cannot currently tell
-// those apart, and sec-14 is that.
+// removal impossible to finish.
+//
+// A credential that could not be removed **is** a failure, and this used to
+// discard it. Every result was thrown away, so a fallback file at the wrong
+// mode meant `profile rm` printed "removed", exited 0, and left the credential
+// on disk. That is the same false report this function was fixed for once
+// already, one level further down: the first fix made it delete all three
+// secrets, and this one makes it tell the truth about whether it did.
+//
+// Every secret is still attempted even after one fails, and the first failure
+// is what gets reported. Stopping at the first would leave the rest behind for
+// no reason: they are independent, and a keyring that refuses one has nothing
+// to say about the file that holds another.
 func (s *Store) RemoveProfile(cfg *config.Config, profile string) error {
 	if err := config.CheckProfileName(profile); err != nil {
 		return err
 	}
 
+	var failed error
 	for _, name := range ProfileSecrets {
-		_ = s.Delete(Ref(profile, name))
+		if err := s.Delete(Ref(profile, name)); err != nil && failed == nil {
+			failed = err
+		}
 	}
 
+	// The configuration entry goes whether or not a secret could be removed.
+	// Leaving the profile behind as well would mean a command that failed
+	// halfway leaves nothing removed and no way to retry the half that worked,
+	// and the failure above still says the credential is still there.
 	delete(cfg.Profiles, profile)
 	if cfg.DefaultProfile == profile {
 		// Left set, it names a profile that is not there, and Load refuses a
@@ -110,7 +127,7 @@ func (s *Store) RemoveProfile(cfg *config.Config, profile string) error {
 		// avoid hand-editing.
 		cfg.DefaultProfile = ""
 	}
-	return nil
+	return failed
 }
 
 // CheckWebhookURL reports why raw is not a Chat incoming webhook URL.

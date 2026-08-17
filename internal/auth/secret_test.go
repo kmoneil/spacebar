@@ -21,6 +21,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -327,5 +329,129 @@ func TestASecretIsNeverInAMessage(t *testing.T) {
 	}
 	if !strings.Contains(warnings, Redacted) {
 		t.Errorf("the base64 form of the secret was not scrubbed:\n%s", warnings)
+	}
+}
+
+// TestARemovalThatCouldNotWriteSaysSo is the half of sec-01's fix that sec-01
+// did not have.
+//
+// Store.Delete used to answer missingSecret whenever neither backend removed
+// anything, and that sentence, "no credential is stored for X", was returned
+// just as readily when neither backend could be *read*. RemoveProfile discarded
+// it, so a fallback file at the wrong mode meant `profile rm` printed "removed",
+// exited 0, and left the credential in a world-readable file.
+//
+// The asymmetry is what makes it worth a test rather than a comment: reading
+// that same file refuses loudly, and removing from it succeeded silently. The
+// silent one is what somebody runs when they want the credential gone.
+func TestARemovalThatCouldNotWriteSaysSo(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, CredentialsFile)
+
+	// A real fallback file holding a real secret, at a mode this package
+	// refuses to read.
+	if err := os.WriteFile(path, []byte(`{"spacebar/work/token":"1//a-refresh-token"}`), 0o644); err != nil {
+		t.Fatalf("writing the fallback file: %v", err)
+	}
+
+	// No keyring, which is the machine the fallback exists for.
+	store := &Store{keyring: &fakeKeyring{err: errors.New("no keyring here")}, file: &fileStore{path: path}}
+
+	err := store.Delete(Ref("work", TokenSecret))
+	if err == nil {
+		t.Fatal("a credential that could not be removed was reported as removed")
+	}
+	for _, want := range []string{path, "0644", "chmod"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the failure does not mention %q, so it does not say what to do:\n%v", want, err)
+		}
+	}
+
+	// And it is still there, which is what makes the failure true rather than
+	// merely cautious.
+	body, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("reading back: %v", readErr)
+	}
+	if !strings.Contains(string(body), "a-refresh-token") {
+		t.Error("the test is not exercising what it claims: the secret is gone")
+	}
+}
+
+// TestARemovalOfSomethingAbsentIsNotAFailure holds the other side, and it is
+// the one that would make a careless fix worse than the bug.
+//
+// A machine with no keyring answers every keyring call with an error, and that
+// machine is a container, a CI runner or a headless server. Treating "the
+// keyring could not be asked" as a failure would make `profile rm` fail on
+// every one of them, including for a secret that was never there: a webhook
+// profile has no token and no client secret, and removal walks all three.
+func TestARemovalOfSomethingAbsentIsNotAFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, CredentialsFile)
+
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T)
+	}{
+		{
+			// Nothing has ever been written. load answers with an empty map, so
+			// the file is conclusive: the secret is not there.
+			name: "no fallback file at all",
+			setup: func(t *testing.T) {
+				t.Helper()
+				_ = os.Remove(path)
+			},
+		},
+		{
+			name: "a readable fallback file without this entry",
+			setup: func(t *testing.T) {
+				t.Helper()
+				if err := os.WriteFile(path, []byte(`{"spacebar/other/token":"x"}`), 0o600); err != nil {
+					t.Fatalf("writing: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.setup(t)
+			store := &Store{keyring: &fakeKeyring{err: errors.New("no keyring here")}, file: &fileStore{path: path}}
+
+			if err := store.Delete(Ref("work", TokenSecret)); err != nil {
+				t.Fatalf("removing a secret that was never there failed: %v", err)
+			}
+
+			// Said rather than returned. Nothing here knows whether the keyring
+			// held it, and on this machine nothing can, so the operator is told
+			// once instead of the command failing every time.
+			warnings := store.Warnings()
+			if len(warnings) != 1 {
+				t.Fatalf("got %d warnings, want one saying the keyring could not be asked:\n%v",
+					len(warnings), warnings)
+			}
+			if !strings.Contains(warnings[0], "still does") {
+				t.Errorf("the warning does not say what it means:\n%s", warnings[0])
+			}
+		})
+	}
+}
+
+// TestAKeyringThatHasNothingIsNotWorthAWarning.
+//
+// A keyring that answers ErrNotFound has been asked and has told us. Warning
+// about that would put a line on every removal on every machine that has a
+// working keyring, which is how a warning becomes something people stop
+// reading.
+func TestAKeyringThatHasNothingIsNotWorthAWarning(t *testing.T) {
+	store := &Store{
+		keyring: &fakeKeyring{err: keyring.ErrNotFound},
+		file:    &fileStore{path: filepath.Join(t.TempDir(), CredentialsFile)},
+	}
+
+	if err := store.Delete(Ref("work", TokenSecret)); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if warnings := store.Warnings(); len(warnings) != 0 {
+		t.Errorf("a keyring that said it has nothing produced a warning:\n%v", warnings)
 	}
 }
