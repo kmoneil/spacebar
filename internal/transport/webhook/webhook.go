@@ -187,6 +187,10 @@ func (t *Transport) Watch(context.Context, chat.WatchRequest) iter.Seq2[chat.Spa
 	return transport.Refused[chat.SpaceEvent](t, "watch", transport.CanRead)
 }
 
+func (t *Transport) WatchMany(context.Context, chat.WatchManyRequest) iter.Seq2[chat.SpaceEvent, error] {
+	return transport.Refused[chat.SpaceEvent](t, "watch --all", transport.CanRead)
+}
+
 func (t *Transport) Upload(context.Context, chat.UploadRequest) (*chat.AttachmentDataRef, error) {
 	return nil, transport.Unsupported(t, "send --file", transport.CanUpload)
 }

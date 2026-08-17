@@ -232,6 +232,14 @@ func (t *Transport) Watch(ctx context.Context, req chat.WatchRequest) iter.Seq2[
 	return t.client.Watch(ctx, req)
 }
 
+// WatchMany follows several spaces at once, behind the same capability Watch is.
+func (t *Transport) WatchMany(ctx context.Context, req chat.WatchManyRequest) iter.Seq2[chat.SpaceEvent, error] {
+	if !t.caps.Has(transport.CanRead) {
+		return transport.Refused[chat.SpaceEvent](t, "watch --all", transport.CanRead)
+	}
+	return t.client.WatchMany(ctx, req)
+}
+
 // Upload sends an attachment's bytes, through the second client.
 //
 // A second client rather than a second base on this one, because the upload

@@ -1,0 +1,5 @@
+exit 2
+--- stdout
+--- stderr
+error: watch --all watches every space, so it cannot also take "spaces/AAAATestSpace".
+Ask for one of them.

@@ -81,6 +81,9 @@ func TestEveryOperationIsGatedOnACapability(t *testing.T) {
 		}},
 		{"tail", func() error { return firstErr(none.Tail(ctx, chat.TailRequest{Space: "spaces/AAA"})) }},
 		{"watch", func() error { return firstErr(none.Watch(ctx, chat.WatchRequest{Space: "spaces/AAA"})) }},
+		{"watch --all", func() error {
+			return firstErr(none.WatchMany(ctx, chat.WatchManyRequest{Spaces: []string{"spaces/AAA"}}))
+		}},
 		{"upload", func() error {
 			_, err := none.Upload(ctx, chat.UploadRequest{Space: "spaces/AAA"})
 			return err

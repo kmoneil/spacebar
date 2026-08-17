@@ -1,5 +1,6 @@
 exit 2
 --- stdout
 --- stderr
-error: watch needs a space.
+error: watch needs a space, or --all.
   spacebar watch spaces/AAAAAAA
+  spacebar watch --all

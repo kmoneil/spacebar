@@ -293,6 +293,12 @@ func TestGoldenOutputContract(t *testing.T) {
 		{"watch-interval-below-floor.txt", []string{"watch", "spaces/AAAATestSpace", "--interval", "100ms"}, output.ExitUsage, "", true, true},
 		{"watch-unsupported.txt", []string{"watch", "spaces/AAAATestSpace"}, output.ExitUnsupported, "", true, true},
 
+		// --all is the same capability as watch, so a webhook meets the same
+		// refusal, and the conflict between --all and a named space is refused
+		// before a profile is even loaded.
+		{"watch-all-unsupported.txt", []string{"watch", "--all"}, output.ExitUnsupported, "", true, true},
+		{"watch-all-and-a-space.txt", []string{"watch", "--all", "spaces/AAAATestSpace"}, output.ExitUsage, "", true, true},
+
 		// The MCP server's refusals. Both are reached before a session starts,
 		// so they are deterministic: one is a profile that can serve nothing,
 		// and the other is an allowlist entry that is not a space name.

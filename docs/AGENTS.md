@@ -261,6 +261,7 @@ spacebar messages get spaces/AAAAAAA/messages/BBB --json
 
 spacebar tail spaces/AAAAAAA --json                    # new messages, until Ctrl-C
 spacebar watch spaces/AAAAAAA --json                   # every event, not just messages
+spacebar watch --all --json                            # every space it can reach
 ```
 
 `tail` and `watch` stream until interrupted, and **ending on a signal is exit

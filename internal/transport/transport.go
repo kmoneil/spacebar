@@ -126,6 +126,12 @@ type Transport interface {
 	// about this endpoint worth remembering.
 	Watch(ctx context.Context, req chat.WatchRequest) iter.Seq2[chat.SpaceEvent, error]
 
+	// WatchMany follows several spaces at once, on one budgeted request rate.
+	// The same capability as Watch, and a separate method rather than a slice
+	// on WatchRequest because the rate rule and the dropping of a space that
+	// goes away belong to it and to nothing else.
+	WatchMany(ctx context.Context, req chat.WatchManyRequest) iter.Seq2[chat.SpaceEvent, error]
+
 	// Upload sends an attachment's bytes and returns the handle a send attaches
 	// by. Download fetches them back.
 	Upload(ctx context.Context, req chat.UploadRequest) (*chat.AttachmentDataRef, error)

@@ -67,6 +67,9 @@ func TestAWebhookRefusesEveryOperationItCannotDo(t *testing.T) {
 		}},
 		{"tail", func() error { return firstErr(posting.Tail(ctx, chat.TailRequest{Space: "spaces/AAAA"})) }},
 		{"watch", func() error { return firstErr(posting.Watch(ctx, chat.WatchRequest{Space: "spaces/AAAA"})) }},
+		{"watch --all", func() error {
+			return firstErr(posting.WatchMany(ctx, chat.WatchManyRequest{Spaces: []string{"spaces/AAAA"}}))
+		}},
 		{"upload", func() error {
 			_, err := posting.Upload(ctx, chat.UploadRequest{Space: "spaces/AAAA"})
 			return err

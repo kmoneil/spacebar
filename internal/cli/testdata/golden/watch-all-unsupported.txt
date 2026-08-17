@@ -1,0 +1,8 @@
+exit 5
+--- stdout
+--- stderr
+error: "watch" needs read access, and profile "alerts" is an incoming webhook, which is fixed to one space, write-only, and posts as a bot.
+Use a profile whose transport is useroauth:
+  spacebar auth setup --profile NAME < client_secret.json
+  spacebar auth login --profile NAME
+Run 'spacebar auth setup' on its own to see how to create the client.

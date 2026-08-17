@@ -25,9 +25,11 @@ profile a webhook URL and send. On a profile authorized as you, `spaces list`,
 `spaces get`, `spaces members`, `messages list` and `messages get` work as
 well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
 `messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
-work, as do `send --file` and `messages download`. `spacebar mcp` serves the
-read paths to a model over MCP, and `send_message` as well when `--allow-write`
-says so. Still missing: watching more than one space at a time.
+work, as do `send --file` and `messages download`, and `watch --all` follows
+every space at once on a request rate budgeted against the project's quota.
+`spacebar mcp` serves the read paths to a model over MCP, and `send_message` as
+well when `--allow-write` says so. What is left in both milestones is the exit
+sweep.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -495,6 +497,7 @@ a poll on `createTime` returns new messages and none of those makes one.
 spacebar watch spaces/AAAAAAA
 spacebar watch eng --events message,reaction,membership
 spacebar watch eng --since 2h --json
+spacebar watch --all
 ```
 
 Columns are the time, the kind of event, the resource it happened to, and the
@@ -509,6 +512,28 @@ message text when the event carries one.
 defaults to `message,reaction`, which is the conversation. Membership and space
 updates are administrative and arrive on a different rhythm, so they are opt-in
 rather than noise.
+
+**`--all` watches every space the profile can reach**, and the interesting part
+is the pace it chooses. The spaces are polled one at a time, round robin, at a
+rate this process holds to 10 requests a second however many there are. Google
+allows 3000 a minute for the whole Cloud project, which is fifty a second, and
+that quota belongs to the OAuth client rather than to you: an organization
+following [docs/ADMIN.md](docs/ADMIN.md) shares one, so taking all of it would
+mean the first person to start `--all` denies the second, with nothing in any
+response saying why. A fifth of it leaves room for five.
+
+Below twenty spaces the 2s floor decides and nothing is slowed at all. Above it
+each space comes round less often, thirty spaces every 3s and a hundred every
+10s, and the interval chosen is printed on stderr at startup unless `--quiet` or
+`--json` says the reader is not a person.
+
+The list of spaces is taken once. A space created while it runs is not picked
+up, because re-listing spends the quota this is being careful with and a watch
+whose subject changes underneath it is harder to reason about; restart to pick
+up a new one. A space that goes away, or that turns out not to be readable, is
+dropped with a line on stderr saying which and why, and the others carry on. If
+every space is dropped the exit is non-zero, because a watch that is watching
+nothing has not finished, it has been abandoned.
 
 **`--json` carries the API's own event payload**, unaltered, under `payload`.
 That is a departure from how the other shapes work here, and it is deliberate:
