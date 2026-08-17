@@ -37,5 +37,4 @@ name.
 
 ### Notes
 
-Nothing talks to Google Chat yet. That starts with the webhook transport in
-Milestone 2.
+Nothing talks to Google Chat yet. That starts with the webhook transport.

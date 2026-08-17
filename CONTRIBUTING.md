@@ -87,10 +87,10 @@ from looking.
 - **A new dependency without regenerated notices, or a version bump without
   them.** `make licenses`, and update `NOTICE` in the same commit.
   `make licenses-current` regenerates and fails if anything moved, and it is in
-  `make ci` so that a green local run predicts a green CI run. It was added by
-  the m4-99 sweep, which found `THIRD_PARTY_LICENSES` naming `x/sys v0.41.0`
-  against a `go.mod` that said `v0.44.0`: CI would have caught it on the first
-  push, and `make ci` would not have, while claiming to run everything CI runs.
+  `make ci` so that a green local run predicts a green CI run. It exists because
+  `THIRD_PARTY_LICENSES` was once found naming `x/sys v0.41.0` against a
+  `go.mod` that said `v0.44.0`: CI would have caught it, and `make ci` would
+  not have, while claiming to run everything CI runs.
 - **A changed golden file.** The files under `internal/cli/testdata/golden/`
   record what went to stdout, what went to stderr, and the exit code. They are
   a public contract with the scripts and agents that call this tool. `make
