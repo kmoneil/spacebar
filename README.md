@@ -1,17 +1,41 @@
 <p align="center">
-  <img src="docs/assets/spacebar.png" alt="spacebar" width="480">
+  <img src="docs/assets/spacebar.png" alt="spacebar" width="440">
 </p>
 
-A focused terminal client and MCP server for Google Chat.
+<p align="center">
+  <b>Google Chat from your terminal, your scripts, and your agents.</b>
+</p>
 
-```
-spacebar send "deploy done"
+<p align="center">
+  <a href="https://github.com/kmoneil/spacebar/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kmoneil/spacebar/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
+  <a href="go.mod"><img alt="Go" src="https://img.shields.io/badge/go-1.26.6-00ADD8"></a>
+  <a href="#why-it-is-shaped-this-way"><img alt="Dependencies" src="https://img.shields.io/badge/direct%20dependencies-5-brightgreen"></a>
+  <a href="SECURITY.md"><img alt="CGO" src="https://img.shields.io/badge/CGO__ENABLED-0-brightgreen"></a>
+</p>
+
+```console
+$ spacebar send "deploy done"
+message  spaces/AAAAAAA/messages/BBB
+space    spaces/AAAAAAA
+profile  alerts
 ```
 
 That is the whole point. One line, from a script or a terminal, with no
-ceremony after setup: a webhook profile knows which space it posts to, so
-there is nothing else to say. The same capabilities are available to an agent with no
+ceremony after setup: a webhook profile knows which space it posts to, so there
+is nothing else to say. The same capabilities are available to an agent with no
 human in the loop, through `--json` and through a built-in MCP server.
+
+### What you get
+
+|  | |
+| --- | --- |
+| **Send with no OAuth at all** | An incoming webhook needs no Cloud project, no admin approval, and no consent screen. Paste a URL, send. |
+| **Read, edit, react, follow** | `spaces`, `messages`, `tail`, `watch --all`, `react`, `messages edit`/`delete`, attachments up and back down. |
+| **Search what was said** | There is no message search API for an ordinary user, so `sync` keeps a local copy and `search` reads it back. |
+| **Serve a model** | `spacebar mcp` speaks MCP on stdio. Writes are off by default and the tools a profile cannot serve are never registered. |
+| **Built for scripts** | `--json` is NDJSON so it streams, stdout is data and nothing else, and the exit code tells you which kind of failure it was. |
+| **One binary, no cgo** | Six platforms, five direct dependencies, and a licence gate that fails the build over any of them. |
 
 > Google Chat and Google are trademarks of Google LLC. `spacebar` is an
 > independent third-party client. It is not affiliated with, sponsored by, or
@@ -19,18 +43,30 @@ human in the loop, through `--json` and through a built-in MCP server.
 
 ## Status
 
-**All six milestones are done.** `spacebar send` works over an incoming
-webhook, with no OAuth, no administrator approval, and no Cloud project: give a
-profile a webhook URL and send. On a profile authorized as you, `spaces list`,
-`spaces get`, `spaces members`, `messages list` and `messages get` work as
-well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
-`messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
-work, as do `send --file` and `messages download`, and `watch --all` follows
-every space at once on a request rate budgeted against the project's quota.
-`spacebar mcp` serves the read paths to a model over MCP, and `send_message`
-and `react_to_message` when `--allow-write` says so. `spacebar sync` copies a
-space into a local index and `spacebar search` reads it back, which exists
-because there is no message search API for an ordinary user.
+**All six milestones are done.** Nothing is released yet, and the whole command
+surface works:
+
+```console
+$ spacebar --help
+  alias       Name a space something you will remember
+  auth        Authorize this machine to act as you
+  completion  Generate the autocompletion script for the specified shell
+  licenses    Print the licence of every dependency in this binary
+  mcp         Serve this profile to a model over MCP
+  messages    List and read messages
+  profile     Configure the profiles this tool sends through
+  react       React to a message with an emoji
+  search      Search the local index for what was said
+  send        Post a message to a space
+  spaces      List and inspect spaces
+  sync        Copy a space's messages into the local index
+  tail        Follow a space as messages arrive
+  version     Print the version of this binary
+  watch       Follow everything that happens in a space, not just new messages
+```
+
+`send` needs only a webhook. Everything that reads needs a profile authorized as
+you. `mcp` serves either to a model.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
