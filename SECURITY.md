@@ -274,6 +274,39 @@ it is pasted rather than as a `400` about an API key days later.
   without one would exclude the population this tool is built for, so the
   fallback is a supported path rather than a degraded one, and it says plainly
   that the credential is on disk in plain text.
+- **`profile rm` removes every credential a profile holds**, from the keyring
+  and from the fallback file: the webhook URL, the OAuth token, and the client
+  secret. `auth.ProfileSecrets` is the list and `auth.RemoveProfile` walks it.
+  `TestRemovingAProfileLeavesNoCredentialBehind` and
+  `TestRemovingAUserOAuthProfileTakesTheTokenAndTheClientSecret`.
+
+  It removed one of them until this was written down. `RemoveProfile` deleted
+  the webhook URL by name, so `profile rm` on a user-OAuth profile removed the
+  configuration entry, printed `removed`, exited `0`, and left the OAuth token
+  and the client secret exactly where they were. The token record carries a
+  refresh token, which does not expire with the hourly access token, so what
+  survived was a live credential for that account's Chat scopes on a machine
+  whose owner had been told it was gone. The person it cost is the careful one:
+  retiring a laptop, handing over a shared build box, baking an image.
+
+  Two gates in `internal/lint` keep the list whole rather than trusting anybody
+  to remember it. `TestEverySecretNameIsInProfileSecrets` fails when a
+  `SecretName` constant is declared and not listed, and
+  `TestEveryStoredSecretNamesAConstant` fails when `auth.Ref` is called with
+  anything but one of the listed names, because `SecretName` is a named type
+  and an untyped literal converts to it implicitly. A secret stored under a
+  name removal does not walk is the bug above, and it can now only be written
+  by editing the list.
+
+  **Removal is local and is not revocation.** Neither `profile rm` nor
+  `auth logout` tells Google to forget anything, and that is deliberate rather
+  than owed: revoking needs a network call in a command that otherwise touches
+  only this machine, it needs the refresh token that is being deleted, and
+  Google revokes a grant per OAuth client rather than per machine, so it would
+  silently end the authorization on every other machine using the same client.
+  Deleting the token stops this machine using the authorization. Ending the
+  authorization is done from the account's security settings, and that is the
+  thing to do if a machine is lost rather than retired. Both commands say so.
 - **A webhook URL is a bearer credential, not a URL.** It carries `key` and
   `token` query parameters that are the entire authentication for posting to
   that space. It is redacted, stored, and refused on the command line exactly
@@ -845,9 +878,10 @@ read. It is gated more tightly than the CLI, on purpose.
   pair exists to prevent, and it is invisible to every other test in the tree,
   because the matrix and the scope list had never been compared to each other.
 - **Confirmation that cannot be asked for is refused, not skipped.** Exit code
-  7, `output.ExitRefused`. Two commands ask: `profile rm`, which destroys a
-  credential that is only recoverable from the space it was issued in, and
-  `messages delete`, which destroys a message everybody in a space could see.
+  7, `output.ExitRefused`. Two commands ask: `profile rm`, which destroys every
+  credential a profile holds and at least one of which is only recoverable from
+  the space it was issued in, and `messages delete`, which destroys a message
+  everybody in a space could see.
 
   `messages delete` is the one where the confirmation is the whole defence.
   Editing is limited by the API to messages the account sent, measured on

@@ -25,9 +25,10 @@ import (
 
 // WebhookSecret names the webhook URL inside a profile's credentials.
 //
-// A profile can hold more than one secret: this today, and an OAuth refresh
-// token at Milestone 3. Ref builds the reference from the two.
-const WebhookSecret = "webhook"
+// A profile can hold more than one secret: this, an OAuth token, and the client
+// secret behind that token. Ref builds the reference from the profile and the
+// name, and ProfileSecrets is the whole set, which is what removal walks.
+const WebhookSecret SecretName = "webhook"
 
 // SetWebhook stores url as profile's webhook credential and records the
 // reference in cfg, creating the profile when there is not one.
@@ -65,22 +66,41 @@ func (s *Store) SetWebhook(cfg *config.Config, profile, rawURL string) error {
 	return nil
 }
 
-// RemoveProfile deletes a profile and the credentials behind it.
+// RemoveProfile deletes a profile and every credential behind it.
+//
+// Every one, from ProfileSecrets, and not the one this used to name. It deleted
+// only the webhook URL, which meant `profile rm` on a user-OAuth profile
+// removed the configuration entry, printed "removed", exited 0, and left the
+// OAuth token and the client secret exactly where they were. The token record
+// holds a refresh token, so what survived was a long-lived credential for
+// somebody's Chat account, after the command whose own help says it destroys
+// it.
+//
+// That is the failure this repository already named for `auth logout` and fixed
+// there: a false report to somebody removing their access is worse than a
+// refusal, because the refusal sends them to look and the report sends them
+// away. The person it costs is the careful one, retiring a laptop or baking an
+// image.
 //
 // The credential goes even when the profile was not in the configuration.
 // Somebody removing a profile they half-created is exactly the person who ends
 // up with a secret in their keyring that nothing points at, and a delete that
 // only removed what it could see would leave it there for good.
 //
-// A missing credential is not a failure. The profile is gone either way, which
-// is what was asked for, and reporting "there was nothing to delete" as an
-// error would make an interrupted removal impossible to finish.
+// A missing credential is not a failure, which is why every result here is
+// discarded. The profile is gone either way, which is what was asked for, and
+// reporting "there was nothing to delete" as an error would make an interrupted
+// removal impossible to finish. That reasoning covers absence and does not
+// cover a store that could not be written; Store.Delete cannot currently tell
+// those apart, and sec-14 is that.
 func (s *Store) RemoveProfile(cfg *config.Config, profile string) error {
 	if err := config.CheckProfileName(profile); err != nil {
 		return err
 	}
 
-	_ = s.Delete(Ref(profile, WebhookSecret))
+	for _, name := range ProfileSecrets {
+		_ = s.Delete(Ref(profile, name))
+	}
 
 	delete(cfg.Profiles, profile)
 	if cfg.DefaultProfile == profile {

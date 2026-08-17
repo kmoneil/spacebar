@@ -176,7 +176,7 @@ pbpaste | spacebar profile set-webhook alerts --verify
 ```sh
 spacebar profile list           # what is configured, without reading a credential
 spacebar profile list --json    # one object per line
-spacebar profile rm alerts      # the profile and the credential behind it
+spacebar profile rm alerts      # the profile and every credential behind it
 ```
 
 On a machine with no keyring, which is every container and most CI runners, the

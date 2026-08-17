@@ -43,14 +43,39 @@ import (
 // CredentialsFile is the fallback beside config.json.
 const CredentialsFile = "credentials.json"
 
+// SecretName is which of a profile's secrets a reference points at.
+//
+// A named type rather than a string, so that the set of them is something the
+// compiler and a gate can both see. What it is not is a guarantee on its own:
+// an untyped literal converts implicitly, so Ref(profile, "made-up") still
+// builds. What closes that is the pair of gates in internal/lint, which require
+// every SecretName constant to appear in ProfileSecrets and every call to Ref
+// to name one of those constants rather than a literal.
+type SecretName string
+
+// ProfileSecrets is every name a profile's credential can be stored under.
+//
+// It exists because removing a profile has to remove all of them, and the list
+// was previously implicit: RemoveProfile named one of the three by hand and the
+// other two outlived the command that said it had deleted them. A profile's
+// OAuth token and client secret stayed in the keyring, and the command reported
+// success.
+//
+// The constants stay beside the code that uses them rather than being gathered
+// here, because that is where their reasons are. What makes the distance safe
+// is TestEverySecretNameIsInProfileSecrets, which reads this package's own
+// source: a SecretName declared anywhere in it and missing from this list fails
+// the build.
+var ProfileSecrets = []SecretName{WebhookSecret, TokenSecret, ClientSecretName}
+
 // Ref builds the reference that goes in config.json for one secret.
 //
 // The service is the product name, from meta.AppName, so that a rename stays a
 // change to that constant. The rest names the profile and which secret it is,
-// because a profile can have more than one: a webhook URL now, an OAuth token
-// at Milestone 3.
-func Ref(profile, name string) string {
-	return config.RefScheme + meta.AppName + "/" + profile + "/" + name
+// because a profile can have more than one: a webhook URL, an OAuth token, and
+// the client secret behind that token.
+func Ref(profile string, name SecretName) string {
+	return config.RefScheme + meta.AppName + "/" + profile + "/" + string(name)
 }
 
 // backend is one place a secret can live. Two implement it, and tests
@@ -205,8 +230,13 @@ func parseRef(ref string) (string, string, error) {
 	}
 	service, key, ok := strings.Cut(rest, "/")
 	if !ok || service == "" || key == "" {
+		// The example is built here rather than through Ref, which takes a
+		// SecretName and would be storing under one if it were called with a
+		// placeholder. internal/lint holds every Ref call to the names in
+		// ProfileSecrets, and a message is not a call site that should have to
+		// argue its way past that.
 		return "", "", secretErr("%q is not a credential reference; it has to look like %q.",
-			ref, Ref("<profile>", "<secret>"))
+			ref, config.RefScheme+meta.AppName+"/<profile>/<secret>")
 	}
 	return service, key, nil
 }
