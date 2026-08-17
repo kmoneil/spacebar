@@ -344,6 +344,8 @@ func checkInvocation(t *testing.T, doc, invocation string) {
 		}
 	}
 
+	cmd.InitDefaultHelpFlag()
+
 	for _, field := range fields {
 		if !strings.HasPrefix(field, "--") {
 			continue
