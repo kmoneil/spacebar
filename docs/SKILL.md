@@ -83,11 +83,13 @@ than connected with an empty tool list.
 model has no message-sending tool at all, which is the point: a gate that
 depends on a model choosing not to call something is not a gate.
 
-`--allow-space` narrows it further, and is repeatable. A write to any other
-space is refused before the request is built. It takes space resource names
-rather than aliases, and it is checked **after** the target is resolved rather
-than against what was typed, so an alias that resolves into the allowlist is
-allowed and a display name that resolves out of it is refused.
+`--allow-space` confines the server to the spaces it names, and is repeatable.
+**Reading as well as writing**: a tool call that resolves anywhere else is
+refused before the request is built, `list_spaces` shows only the spaces you
+allowed, and a search across "everything" means everything you allowed. It takes
+space resource names rather than aliases, and it is checked **after** the target
+is resolved rather than against what was typed, so an alias that resolves into
+the allowlist is allowed and a display name that resolves out of it is refused.
 
 These two gates answer different questions. The profile's capability says what
 this credential *could* do. The flags say what the operator agreed to let a

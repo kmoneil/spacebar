@@ -795,9 +795,30 @@ read. It is gated more tightly than the CLI, on purpose.
   the second is a defence. A profile that can serve no tool at all, which today
   is any webhook, is refused before the session starts rather than connected
   and empty: `TestAProfileThatCanServeNothingIsRefusedRatherThanEmpty`.
-- **`--allow-space` restricts writes to an allowlist** of spaces, so that an
-  agent with write access to a scratch space does not have write access to the
-  company-wide announcements space.
+- **`--allow-space` confines the server to an allowlist** of spaces, reading as
+  well as writing, so that an agent given a scratch space has neither write
+  access nor read access to the company-wide announcements space.
+
+  It restricted **writes only** until this was written down, and its own help
+  said it "narrows it further" without saying which half. So an operator who
+  confined a server to one space had confined half of it: every read tool still
+  reached everything the profile could, which is the larger surface of the two.
+  Message bodies are hostile input by the threat model above, and a model talked
+  into something by one is a model that can then read the rest.
+
+  Every tool that names a space is now held to it, and they reach one three
+  different ways: `get_space`, `list_members`, `list_messages` and
+  `search_messages` resolve an argument, `get_message` reads the space out of a
+  message resource name the way `react_to_message` does, and `list_spaces` and an
+  unscoped `search_messages` **filter** rather than refuse, because a model
+  asking what it can reach should be answered with what it can reach and listing
+  a space it may not touch publishes the name of a room it was confined out of.
+  `TestEveryToolThatNamesASpaceIsHeldToTheAllowlist` walks all five and
+  `TestListingSpacesUnderAnAllowlistShowsOnlyThose` holds the filtering.
+
+  The flag was extended rather than a second one added. Two flags that both take
+  space names is the shape somebody sets one of and believes they set both, and
+  nothing is released, so there is no agent whose reach this silently narrows.
   `TestASpaceOutsideTheAllowlistIsRefusedBeforeTheRequest` counts sends rather
   than reading the error, because a refusal that arrives after the POST carries
   the same error as one that arrives before it and only one of them left a
