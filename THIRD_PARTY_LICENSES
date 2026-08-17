@@ -774,9 +774,9 @@ github.com/spf13/cobra
 
 --------------------------------------------------------------------------------
 github.com/spf13/pflag
-  version: v1.0.9
+  version: v1.0.10
   licence: BSD-3-Clause
-  source:  https://github.com/spf13/pflag/blob/v1.0.9/LICENSE
+  source:  https://github.com/spf13/pflag/blob/v1.0.10/LICENSE
 --------------------------------------------------------------------------------
 
 Copyright (c) 2012 Alex Ogier. All rights reserved.
