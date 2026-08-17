@@ -144,11 +144,37 @@ func TestNoDependencyShipsANotice(t *testing.T) {
 			continue
 		}
 		for _, e := range entries {
-			name := strings.ToLower(e.Name())
-			if name == "notice" || name == "notice.txt" || name == "notice.md" {
-				t.Errorf("%s ships a %s; Apache-2.0 §4(d) requires it to be reproduced in NOTICE, "+
-					"which currently claims no dependency has one", path, e.Name())
+			if what := noticeKind(e.Name()); what != "" {
+				t.Errorf("%s ships %s (%s); Apache-2.0 §4(d) requires it to be reproduced in NOTICE, "+
+					"which currently claims no dependency has one", path, e.Name(), what)
 			}
 		}
 	}
+}
+
+// noticeKind reports what sort of notice a filename is, or "" for anything
+// that is not one.
+//
+// The name was the whole test until m6-03, which priced modernc.org/sqlite and
+// found that modernc.org/libc ships its third-party notices as
+// LICENSE-3RD-PARTY.md. A check that only knew the three spellings of NOTICE
+// would have let that through, and the obligation is the same whatever the
+// file is called: somebody else's copyright notice travelling inside a
+// dependency has to travel out of this binary too.
+//
+// Widened while nothing in the tree trips it, which is the only comfortable
+// moment to widen a gate: a rule added at the same time as its first violation
+// gets argued with, and one added while everything passes is just true.
+func noticeKind(filename string) string {
+	name := strings.ToLower(filename)
+
+	switch name {
+	case "notice", "notice.txt", "notice.md":
+		return "a NOTICE"
+	}
+	if strings.Contains(name, "3rd-party") || strings.Contains(name, "3rd_party") ||
+		strings.Contains(name, "third-party") || strings.Contains(name, "third_party") {
+		return "third-party notices"
+	}
+	return ""
 }
