@@ -289,6 +289,10 @@ spacebar send eng-alerts "deploy done" --md --json     # CommonMark translated
 spacebar send eng-alerts "deploy done" --mention a@b.com --json
 spacebar send "deploy done" --dry-run --json           # nothing is sent
 
+spacebar messages edit spaces/AAAAAAA/messages/BBB "corrected" --json
+spacebar messages delete spaces/AAAAAAA/messages/BBB --yes --json
+spacebar react spaces/AAAAAAA/messages/BBB "👍" --json
+
 spacebar spaces list --json
 spacebar spaces members spaces/AAAAAAA --show-groups --json
 spacebar messages list spaces/AAAAAAA --limit 100 --json

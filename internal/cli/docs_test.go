@@ -52,7 +52,24 @@ import (
 // base, which is a lever for sending a credential somewhere else. The decode
 // is what stands in for it, and it covers every shape rather than the seven
 // that have goldens.
-var agentDocs = []string{"AGENTS.md", "SKILL.md"}
+var agentDocs = []string{"docs/AGENTS.md", "docs/SKILL.md"}
+
+// allDocs is every hand-written document that shows a command.
+//
+// Wider than agentDocs because the rule CLAUDE.md states is wider: a change
+// that alters what an invocation does can falsify an example without touching
+// the file it is in, and no generator catches that, because the example is
+// prose that happens to be a command. The shape checks stay on the two files
+// that publish output shapes; the command check covers everything a person or
+// an agent might paste.
+var allDocs = []string{
+	"docs/AGENTS.md",
+	"docs/SKILL.md",
+	"docs/ADMIN.md",
+	"README.md",
+	"CONTRIBUTING.md",
+	"SECURITY.md",
+}
 
 // shapes maps the name a document may claim to a fresh value of that type.
 //
@@ -142,7 +159,7 @@ func TestEveryJSONExampleInTheAgentDocsIsRealJSON(t *testing.T) {
 			}
 			var any any
 			if err := json.Unmarshal([]byte(b.body), &any); err != nil {
-				t.Errorf("docs/%s:%d is fenced as json and does not parse: %v\n%s",
+				t.Errorf("%s:%d is fenced as json and does not parse: %v\n%s",
 					name, b.line, err, b.body)
 			}
 		}
@@ -171,7 +188,7 @@ func TestEveryDocumentedShapeIsTheShapeThisToolPublishes(t *testing.T) {
 
 			build, known := shapes[b.shape]
 			if !known {
-				t.Errorf("docs/%s:%d claims the shape %q, which this test cannot check.\n"+
+				t.Errorf("%s:%d claims the shape %q, which this test cannot check.\n"+
 					"Add it to shapes, or hold the block to a golden file instead.",
 					name, b.line, b.shape)
 				continue
@@ -180,7 +197,7 @@ func TestEveryDocumentedShapeIsTheShapeThisToolPublishes(t *testing.T) {
 			decoder := json.NewDecoder(strings.NewReader(b.body))
 			decoder.DisallowUnknownFields()
 			if err := decoder.Decode(build()); err != nil {
-				t.Errorf("docs/%s:%d does not decode as %s: %v\n%s\n\n"+
+				t.Errorf("%s:%d does not decode as %s: %v\n%s\n\n"+
 					"An agent writes code against this. Fix the document, or the shape.",
 					name, b.line, b.shape, err, b.body)
 			}
@@ -193,7 +210,7 @@ func TestEveryDocumentedShapeIsTheShapeThisToolPublishes(t *testing.T) {
 	// internal/rows should arrive with the paragraph that describes it.
 	for shape := range shapes {
 		if !seen[shape] {
-			t.Errorf("no example anywhere in docs/ claims to be a %s.\n"+
+			t.Errorf("no example anywhere in the agent docs claims to be a %s.\n"+
 				"Every published shape needs a worked example: that is what these files are for.", shape)
 		}
 	}
@@ -215,7 +232,7 @@ func TestEveryDocumentedShapeThatHasAGoldenMatchesIt(t *testing.T) {
 			path := filepath.Join("testdata", "golden", b.golden)
 			recorded, err := os.ReadFile(path)
 			if err != nil {
-				t.Errorf("docs/%s:%d quotes %s, which does not exist: %v", name, b.line, path, err)
+				t.Errorf("%s:%d quotes %s, which does not exist: %v", name, b.line, path, err)
 				continue
 			}
 
@@ -225,13 +242,13 @@ func TestEveryDocumentedShapeThatHasAGoldenMatchesIt(t *testing.T) {
 			}
 			want, ok := section(string(recorded), stream)
 			if !ok {
-				t.Errorf("docs/%s:%d wants the %s of %s, which has no such section",
+				t.Errorf("%s:%d wants the %s of %s, which has no such section",
 					name, b.line, stream, b.golden)
 				continue
 			}
 
 			if strings.TrimSpace(b.body) != strings.TrimSpace(want) {
-				t.Errorf("docs/%s:%d does not match the %s recorded in %s.\n\n"+
+				t.Errorf("%s:%d does not match the %s recorded in %s.\n\n"+
 					"--- the document\n%s\n--- the contract\n%s\n\n"+
 					"The golden is the truth. Copy it in, do not adjust it.",
 					name, b.line, stream, b.golden, b.body, want)
@@ -273,7 +290,7 @@ var spacebarLine = regexp.MustCompile(`(?m)^\s*(?:\$\s+)?spacebar\s+(.+)$`)
 // authorized profile and a network, and a test that talks to anybody is a rule
 // this repository does not bend.
 func TestEveryCommandShownInTheAgentDocsExists(t *testing.T) {
-	for _, name := range agentDocs {
+	for _, name := range allDocs {
 		source := readSource(t, name)
 		for _, match := range spacebarLine.FindAllStringSubmatch(source, -1) {
 			invocation := strings.TrimSpace(match[1])
@@ -302,7 +319,7 @@ func checkInvocation(t *testing.T, doc, invocation string) {
 	// like a flag, which is exactly the walk this needs.
 	cmd, rest, err := root.Find(fields)
 	if err != nil {
-		t.Errorf("docs/%s shows `spacebar %s`, and that command does not exist: %v", doc, invocation, err)
+		t.Errorf("%s shows `spacebar %s`, and that command does not exist: %v", doc, invocation, err)
 		return
 	}
 
@@ -321,7 +338,7 @@ func checkInvocation(t *testing.T, doc, invocation string) {
 			if strings.HasPrefix(leftover, "-") {
 				continue
 			}
-			t.Errorf("docs/%s shows `spacebar %s`, and %q has no %q subcommand.",
+			t.Errorf("%s shows `spacebar %s`, and %q has no %q subcommand.",
 				doc, invocation, cmd.CommandPath(), leftover)
 			break
 		}
@@ -335,7 +352,7 @@ func checkInvocation(t *testing.T, doc, invocation string) {
 		if flag == "" || lookup(cmd, flag) != nil {
 			continue
 		}
-		t.Errorf("docs/%s shows `spacebar %s`, and %q has no --%s flag.\n"+
+		t.Errorf("%s shows `spacebar %s`, and %q has no --%s flag.\n"+
 			"An example that no longer works reads as the tool being broken, "+
 			"by exactly the person who cannot tell the difference.",
 			doc, invocation, cmd.CommandPath(), flag)
@@ -364,17 +381,17 @@ func TestBothAgentDocumentsStateTheConfirmationRequirement(t *testing.T) {
 	for _, name := range agentDocs {
 		source := readSource(t, name)
 		if !strings.Contains(source, "Confirm") {
-			t.Errorf("docs/%s never tells its reader to confirm before writing", name)
+			t.Errorf("%s never tells its reader to confirm before writing", name)
 		}
 		if !strings.Contains(source, "cannot be unsent") {
-			t.Errorf("docs/%s does not say a message cannot be unsent, "+
+			t.Errorf("%s does not say a message cannot be unsent, "+
 				"which is the reason the confirmation exists", name)
 		}
 	}
 
 	// Flattened, because prose wraps and a blockquote carries a marker on every
 	// line. What is being asserted is the sentence, not where the lines break.
-	skill := flatten(readSource(t, "SKILL.md"))
+	skill := flatten(readSource(t, "docs/SKILL.md"))
 	if !strings.Contains(skill, "This posts a visible message to a real Google Chat space. "+
 		"Confirm with the user before calling.") {
 		t.Error("docs/SKILL.md does not quote, word for word, the sentence every write tool's " +
@@ -395,7 +412,7 @@ func flatten(source string) string {
 func readSource(t *testing.T, name string) string {
 	t.Helper()
 
-	path := filepath.Join("..", "..", "docs", name)
+	path := filepath.Join("..", "..", filepath.FromSlash(name))
 	source, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
@@ -406,4 +423,60 @@ func readSource(t *testing.T, name string) string {
 func readBlocks(t *testing.T, name string) []block {
 	t.Helper()
 	return parseBlocks(t, readSource(t, name))
+}
+
+// TestEveryCommandIsDocumentedSomewhere.
+//
+// The other direction from TestEveryCommandShownInTheAgentDocsExists, and the
+// one that catches the opposite mistake: a command that was built and never
+// written about. That is quieter than a broken example, because nothing fails
+// and nobody looking at the documentation knows to ask.
+//
+// Found `version` and `completion` documented nowhere at all, two milestones
+// after they shipped, and both are commands somebody would actually want to
+// know exist. Shell completion in particular is the sort of thing a person
+// never discovers by accident.
+//
+// A group that only prints help is exempt, because there is nothing to say
+// about it that its children do not say better. `help` is cobra's own.
+func TestEveryCommandIsDocumentedSomewhere(t *testing.T) {
+	sources := map[string]string{}
+	for _, name := range allDocs {
+		sources[name] = readSource(t, name)
+	}
+
+	root := New(&Options{})
+
+	// cobra adds `completion` lazily, at execute time rather than at
+	// construction, so a walk over a freshly built root does not see it. That
+	// is not a hypothetical: `completion` was one of the two commands this test
+	// was written to catch, and the first version of it could not, which a
+	// planted violation is what revealed.
+	root.InitDefaultCompletionCmd()
+
+	var walk func(cmd *cobra.Command)
+	walk = func(cmd *cobra.Command) {
+		for _, child := range cmd.Commands() {
+			walk(child)
+		}
+
+		// A group with children and nothing to run is documented by them.
+		if cmd.HasSubCommands() && !cmd.Runnable() {
+			return
+		}
+		path := cmd.CommandPath()
+		if path == "spacebar" || strings.HasPrefix(path, "spacebar help") {
+			return
+		}
+
+		for _, source := range sources {
+			if strings.Contains(source, path) {
+				return
+			}
+		}
+		t.Errorf("%q exists and no hand-written document mentions it.\n"+
+			"A command nobody wrote about is one nobody finds. Add it to the README "+
+			"at least, or to docs/AGENTS.md if an agent would use it.", path)
+	}
+	walk(root)
 }

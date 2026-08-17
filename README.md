@@ -234,7 +234,7 @@ $ spacebar send --dry-run 'deploy done'
 POST https://chat.googleapis.com/v1/spaces/AAAAAAA/messages?key=REDACTED&token=REDACTED
 Accept: application/json
 Content-Type: application/json; charset=UTF-8
-User-Agent: spacebar/1.0.0 (+https://github.com/kmoneil/spacebar)
+User-Agent: spacebar/0.0.0-dev (+https://github.com/kmoneil/spacebar)
 
 {"text":"deploy done"}
 ```
@@ -645,7 +645,7 @@ $ spacebar spaces list --dry-run
 GET https://chat.googleapis.com/v1/spaces?pageSize=25
 Accept: application/json
 Authorization: REDACTED
-User-Agent: spacebar/1.0.0 (+https://github.com/kmoneil/spacebar)
+User-Agent: spacebar/0.0.0-dev (+https://github.com/kmoneil/spacebar)
 ```
 
 ## Search what was said
@@ -708,17 +708,31 @@ command with the profile as an argument.
 ```
 
 Five read tools: `list_spaces`, `get_space`, `list_members`, `list_messages`,
-`get_message`. They return the same shapes `--json` does, because both come
-from one place.
+`get_message`. Two write tools, `send_message` and `react_to_message`, off
+unless you ask for them. And `search_messages`, which appears only when this
+machine has a local index. They return the same shapes `--json` does, because
+both come from one place.
 
 **A tool this profile cannot serve is not registered at all.** A model that
 cannot see a tool cannot argue itself into calling it; one that can see a broken
 tool will call it, be refused, try again differently, and tell you the tool is
 broken. So a profile whose token lacks `chat.memberships.readonly` offers four
-tools rather than five, and a webhook profile, which is write-only, is refused
-before the session starts rather than connected with nothing to offer. This is
-deliberately the opposite of how flags work in the CLI, where a person reading
-`--help` is served by knowing that `--file` exists.
+read tools rather than five. This is deliberately the opposite of how flags work
+in the CLI, where a person reading `--help` is served by knowing that `--file`
+exists.
+
+`search_messages` is the exception that proves the shape: its gate is a fact
+about this machine rather than about the credential, because there is no message
+search API and an empty index would answer every search with nothing, which a
+model reads as "nobody said that" rather than as "nobody has synced anything".
+It needs no capability at all, so a webhook profile with an index can search what
+a user-authorized one copied down.
+
+A profile that can serve no tool at all is refused before the session starts
+rather than connected with nothing to offer. For a webhook that means: with no
+index and no `--allow-write`, refused; with `--allow-write`, exactly one tool,
+`send_message`, because a webhook can post and cannot react; with an index,
+`search_messages` as well.
 
 **Writes are off unless you say otherwise.**
 
@@ -727,11 +741,12 @@ deliberately the opposite of how flags work in the CLI, where a person reading
                                  "--allow-space", "spaces/AAAAAAA"]}
 ```
 
-Without `--allow-write`, `send_message` is not registered at all, so there is no
+Without `--allow-write`, neither write tool is registered at all, so there is no
 tool for a model to talk itself into calling. With it, `--allow-space` narrows
-where it may post, checked against the space a call resolves to rather than
+where they may act, checked against the space a call resolves to rather than
 against the string the model sent, and refused before the request rather than
-after it.
+after it. A reaction names a message rather than a space, so the space is read
+out of the message name before the same check runs.
 
 Every write tool's description ends with "This posts a visible message to a real
 Google Chat space. Confirm with the user before calling.", which is what the
@@ -742,14 +757,26 @@ model reads before deciding.
 were with long strings truncated, and whether it worked. An audit line a flag
 can silence is missing exactly when somebody has a reason to silence it.
 
-A webhook profile is worth a word here: it can post and can do nothing else, so
-`spacebar mcp --allow-write` on one registers exactly one tool, and without the
-flag it is refused before the session starts because there would be nothing to
-offer.
-
 **Message text is untrusted input.** It reaches a model as data, and a message
 that asks the model to do something is still a message. That is why writing over
-MCP will arrive with a confirmation requirement rather than as another tool.
+MCP is off by default and why the confirmation sentence is in the tool's own
+description rather than only in a document somebody might not read.
+
+## The rest of it
+
+```sh
+spacebar version --json                   # name, version, commit, go, os, arch
+spacebar licenses                         # every dependency's licence, from the binary
+spacebar completion zsh > ~/.zsh/_spacebar
+spacebar completion bash > /etc/bash_completion.d/spacebar
+spacebar completion fish > ~/.config/fish/completions/spacebar.fish
+spacebar completion powershell | Out-String | Invoke-Expression
+```
+
+`completion` is why cobra earns its place: the four shells are tedious to
+hand-roll and this is the part a person notices. `licenses` reads a file
+embedded at build time, so the binary can always say what is in it without a
+network call or a checkout.
 
 ## Development
 

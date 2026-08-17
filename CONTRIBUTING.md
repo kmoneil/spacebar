@@ -95,13 +95,16 @@ from looking.
   record what went to stdout, what went to stderr, and the exit code. They are
   a public contract with the scripts and agents that call this tool. `make
   golden` regenerates them; read every diff before committing it.
-- **An example in `docs/AGENTS.md` or `docs/SKILL.md` that is no longer true.**
-  `internal/cli/docs_test.go` decodes every JSON block into the shape it claims
-  to be with unknown fields refused, compares every block that quotes a golden
-  against it, and resolves every `spacebar` command line shown against the real
-  command tree. Those two files are read by agents, which cannot tell a stale
-  example from a current one, so an example there is closer to an interface
-  definition than to prose.
+- **An example in any hand-written document that is no longer true**, or a
+  command nobody wrote about. `internal/cli/docs_test.go` resolves every
+  `spacebar` command line in the README, `CONTRIBUTING.md`, `SECURITY.md` and
+  all three files under `docs/` against the real command tree, flags included,
+  and fails when a command exists that no document mentions. For
+  `docs/AGENTS.md` and `docs/SKILL.md` it also decodes every JSON block into the
+  shape it claims to be with unknown fields refused, and compares every block
+  that quotes a golden against it. Those two are read by agents, which cannot
+  tell a stale example from a current one, so an example there is closer to an
+  interface definition than to prose.
 - **A function over the cognitive complexity ceiling.** Split it. Raising the
   ceiling is not the fix.
 - **`go.mod` and a workflow disagreeing about the Go patch version.** They move
