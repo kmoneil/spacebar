@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 )
 
 // Options are what the global flags mean here.
@@ -47,6 +48,34 @@ type Renderer struct {
 	out  io.Writer
 	errw io.Writer
 	opts Options
+
+	// mu makes one call here one whole line out there.
+	//
+	// The MCP server is the caller that needs it. It serves tool calls
+	// concurrently, which was confirmed in the go-sdk rather than assumed: the
+	// jsonrpc2 dispatch loop hands a request to a goroutine and then waits, and
+	// the MCP layer calls jsonrpc2.Async for every call except initialize,
+	// which releases that wait so the next request starts while this one is
+	// still running. So the audit line for one tool call and the --verbose log
+	// of another are written by two goroutines through this one value.
+	//
+	// It was already safe in production and for a reason nobody had written
+	// down, which is the actual problem. Renderer takes an io.Writer; the
+	// command hands it os.Stderr; internal/poll takes a per-descriptor lock
+	// across a whole write, partial writes included. So concurrent writes to a
+	// *os.File cannot interleave. Tried to make one interleave anyway, with
+	// 60KB lines and a reader slow enough to fill the pipe, and it will not.
+	//
+	// None of that is a property of the type. It is a property of the writer
+	// this type happens to be given, undocumented where it is relied on, and
+	// gone the moment somebody wraps stderr in a bufio.Writer or a tee. The
+	// audit line is a security control by SPEC.md §14.2, promised as one JSON
+	// object per line, and "true because of an implementation detail in a
+	// package we do not import" is not how the rest of these claims are held.
+	//
+	// So the guarantee moves here, where it can be tested against a writer that
+	// has no lock of its own.
+	mu sync.Mutex
 }
 
 func NewRenderer(out, errw io.Writer, opts Options) *Renderer {
@@ -71,6 +100,9 @@ type Fields []Field
 // one line in a terminal. Deriving either from the other produces something bad
 // at both jobs.
 func (r *Renderer) Result(data any, fields Fields) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.opts.JSON {
 		return r.encode(r.out, data, true)
 	}
@@ -100,6 +132,9 @@ func (r *Renderer) Result(data any, fields Fields) error {
 // with one and is unchanged; a message body does not, which is how this was
 // found.
 func (r *Renderer) Block(data any, text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.opts.JSON {
 		return r.encode(r.out, data, true)
 	}
@@ -125,6 +160,9 @@ func (r *Renderer) Block(data any, text string) error {
 // which requires holding every row, which is exactly what a streaming list
 // cannot do. A tab is also what cut and awk expect.
 func (r *Renderer) Item(data any, cells ...string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if r.opts.JSON {
 		return r.encode(r.out, data, false)
 	}
@@ -156,6 +194,12 @@ func (r *Renderer) WarnCode(code, format string, a ...any) {
 	if r.opts.Quiet {
 		return
 	}
+
+	// Warn and Warnings both funnel through here, so this is the only one of
+	// the three that takes the lock. Locking in all three would deadlock.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	message := Sanitize(fmt.Sprintf(format, a...))
 
 	if r.opts.JSON {
@@ -197,6 +241,10 @@ func (r *Renderer) Logf(format string, a ...any) {
 	if r.opts.Quiet {
 		return
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	message := Sanitize(fmt.Sprintf(format, a...))
 
 	if r.opts.JSON {
@@ -284,6 +332,9 @@ func (r *Renderer) writeFields(fields Fields) error {
 // encoding/json has already escaped everything below U+0020. Sanitizing it
 // again would alter a document somebody is going to parse.
 func (r *Renderer) Audit(line string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	_, _ = fmt.Fprintln(r.errw, line)
 }
 
@@ -293,5 +344,9 @@ func (r *Renderer) Note(format string, a ...any) {
 	if r.opts.Quiet || r.opts.JSON {
 		return
 	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	_, _ = fmt.Fprintln(r.errw, r.paint(ansiDim, Sanitize(fmt.Sprintf(format, a...))))
 }
