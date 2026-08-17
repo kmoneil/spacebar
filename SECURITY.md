@@ -1022,6 +1022,38 @@ failure as a truncated list: an answer that looks complete and is not. It is
 also how a hostile server makes a send expensive, so the failure is permanent
 rather than retried. `TestAnOversizeResponseIsRefusedRatherThanTruncated`.
 
+**A search looks in exactly the spaces it says it looked in.** `search` prints
+the ones it read and names the ones the profile can reach that are missing from
+the index, so that an answer of "nothing" can be told from an answer of "nobody
+synced that". That was honest in one direction only: `Spaces` ran
+`chat.CheckSpaceName` over the directory listing and skipped what did not pass,
+and the search read every `*.ndjson` there was, so a stray file was searched and
+answered with while the count on stderr said one space and two files had been
+opened. A report of coverage has to be right in both directions or it is
+decoration. One filter now, and the listing is a projection of it.
+`TestASearchReadsExactlyTheSpacesItReports`.
+
+**A record answers only for the space whose file it is in.** Every line carries
+its own space so that one which has been copied, concatenated or restored still
+says what it is, and nothing read it. Both halves of a record now have to agree
+with the file it was read from: the `space` field and the space inside the
+message's own resource name. The file name is the half with checked provenance.
+`TestARecordInTheWrongFileDoesNotAnswerForAnotherSpace`.
+
+That is a truncation claim rather than a tidiness one. `--space` selects a file
+rather than filtering, so a record in the wrong file answered a search scoped to
+a space it was never in; and `Bounds` reads the same file to decide where `sync`
+resumes, so a foreign record with a later timestamp moves the watermark forward
+and the next sync skips every real message before it, silently. A stray line in
+a copied directory was enough.
+
+A skipped record is said out loud, once per file. The index is the only copy of
+a message that no longer exists anywhere else, so one it holds and will not
+answer with is worth a sentence rather than a silence.
+`TestASkippedRecordIsSaidOutLoud`. `internal/store` returns its warnings rather
+than printing them, for the reason `internal/auth` does: only `internal/output`
+writes to a process stream.
+
 ## Supply chain
 
 - **One direct dependency today**, four more permitted by SPEC.md §3.1 and no

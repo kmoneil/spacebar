@@ -228,6 +228,12 @@ $ spacebar search "deploy"
 warning: searched 1 of 5 spaces. Not searched, because they are not in the index: spaces/BBB spaces/CCC
 ```
 
+The spaces it names are exactly the ones it read, both ways round. It also warns
+if a file in the index holds records belonging to another space, which happens
+when a directory has been copied or restored: those are not answered with, and
+the warning says which file and how many. Read that line too before treating a
+result set as complete.
+
 `sync` is resumable and holds no cursor. It fetches everything newer than the
 newest message it holds and everything older than the oldest, so an interrupted
 run resumes by being run again, with nothing fetched twice and no gap. `--limit`
