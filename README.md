@@ -495,6 +495,14 @@ from whoever posted the message, so an attachment called
 directory you asked for. Nothing is overwritten without `--force`, because the
 name is not yours.
 
+That is two claims and both are held. The name cannot leave the directory, and
+neither can the write: a symlink already sitting there under the name an
+attachment happens to have is refused rather than followed, so a download
+cannot write through one into a file outside `--out`. It matters where the
+directory is not only yours, which is a shared CI workspace, `/tmp`, or a
+synced folder. `--force` replaces the name rather than following it, so it
+overwrites the file you can see and not whatever a link points at.
+
 **The API's own download URL is never printed.** It carries an access token in
 its query, which makes it a credential rather than a link, so `--json` gives you
 the attachment's `resource_name` and this tool fetches the bytes with your own
