@@ -712,3 +712,39 @@ func TestAShortcodeIsRefusedBeforeTheRequest(t *testing.T) {
 		}
 	}
 }
+
+// FuzzTheSpaceOfAMessageIsAlwaysASpaceName states the guarantee as a property
+// rather than as the list of cases somebody thought of.
+//
+// For any string, either SpaceOfMessage refuses it or what comes back is a
+// space name that CheckSpaceName accepts and that the message actually begins
+// with. The second half is what makes it safe to hand to an allowlist: a value
+// that passed the check but named a different space would be an allowlist
+// comparing against the wrong thing, which is worse than no allowlist because
+// the operator believes it worked.
+func FuzzTheSpaceOfAMessageIsAlwaysASpaceName(f *testing.F) {
+	f.Add("spaces/AAA/messages/BBB")
+	f.Add("spaces/AAA/messages/BBB.CCC")
+	f.Add("spaces/AAA/messages/BBB/messages/DDD")
+	f.Add("spaces/../messages/BBB")
+	f.Add("spaces/AAA/messages/")
+	f.Add("/messages/BBB")
+	f.Add("spaces/AAA")
+	f.Add("")
+
+	f.Fuzz(func(t *testing.T, message string) {
+		space, err := SpaceOfMessage(message)
+		if err != nil {
+			if space != "" {
+				t.Errorf("a refusal still returned %q", space)
+			}
+			return
+		}
+		if err := CheckSpaceName(space); err != nil {
+			t.Errorf("SpaceOfMessage(%q) returned %q, which is not a space name: %v", message, space, err)
+		}
+		if !strings.HasPrefix(message, space+"/messages/") {
+			t.Errorf("SpaceOfMessage(%q) returned %q, which the message does not begin with", message, space)
+		}
+	})
+}

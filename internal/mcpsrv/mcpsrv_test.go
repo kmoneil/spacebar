@@ -54,7 +54,8 @@ type fake struct {
 	// sends counts what actually reached the transport, which is what an
 	// allowlist test has to assert on: a refusal after the send carries the
 	// same error as one before it.
-	sends int
+	sends     int
+	reactions int
 }
 
 func (f *fake) Kind() config.Transport               { return f.kind }
@@ -123,8 +124,13 @@ func (f *fake) DeleteMessage(context.Context, string) error {
 	return errors.New("the fake does not delete")
 }
 
-func (f *fake) React(context.Context, chat.ReactRequest) (*chat.Reaction, error) {
-	return nil, errors.New("the fake does not react")
+func (f *fake) React(_ context.Context, req chat.ReactRequest) (*chat.Reaction, error) {
+	f.reactions++
+	return &chat.Reaction{
+		Name:  req.Message + "/reactions/1",
+		Emoji: &chat.Emoji{Unicode: req.Emoji},
+		User:  &chat.User{Name: "users/1"},
+	}, nil
 }
 
 func (f *fake) FindDirectMessage(context.Context, string) (*chat.Space, error) {
@@ -590,7 +596,11 @@ func TestAClientThatDisconnectsEndsTheRunWithoutAnError(t *testing.T) {
 // registration rather than a refusal at call time.
 //
 // Both directions are asserted. Without the flag the tool set is exactly the
-// read tools; with it, send_message joins them and nothing else changes.
+// read tools; with it, the write tools join them and nothing else changes.
+//
+// The want list is spelled out rather than derived from what the server built,
+// which is the whole point: a test that asks the code what it registered and
+// then agrees would pass on the day a tool is registered by mistake.
 func TestAWriteToolIsAbsentWithoutAllowWrite(t *testing.T) {
 	reads := []string{"get_message", "get_space", "list_members", "list_messages", "list_spaces"}
 
@@ -603,7 +613,7 @@ func TestAWriteToolIsAbsentWithoutAllowWrite(t *testing.T) {
 		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
 		AllowWrite: true,
 	})
-	want := append(append([]string(nil), reads...), "send_message")
+	want := append(append([]string(nil), reads...), "send_message", "react_to_message")
 	slices.Sort(want)
 	if got := advertised(t, open); !slices.Equal(got, want) {
 		t.Errorf("with --allow-write the tools are %v, want %v", got, want)
@@ -973,5 +983,77 @@ func TestATargetThatCannotBeResolvedIsAToolErrorRatherThanAProtocolOne(t *testin
 	}
 	if !result.IsError {
 		t.Fatal("a space that does not exist came back as a success")
+	}
+}
+
+// TestTheReactionToolIsGatedTheSameWayTheSendToolIs.
+//
+// react_to_message is a write, so it carries both gates. §14.1 named it and
+// milestone 5 shipped without it, which the m5-99 parity walk found; this is
+// what stops it coming back as a tool that is registered when it should not be.
+func TestTheReactionToolIsGatedTheSameWayTheSendToolIs(t *testing.T) {
+	closed := connect(t, &fake{kind: config.TransportUserOAuth, caps: full()})
+	if slices.Contains(advertised(t, closed), "react_to_message") {
+		t.Error("react_to_message was registered without --allow-write")
+	}
+
+	// A capability the profile lacks keeps it out even with the flag. A webhook
+	// can post and cannot react, so --allow-write on one registers send_message
+	// and nothing else.
+	webhook := connectWith(t, Options{
+		Profile: &profile.Open{
+			Name:      "alerts",
+			Transport: &fake{kind: config.TransportWebhook, caps: transport.CapabilitiesFor(config.TransportWebhook)},
+		},
+		AllowWrite: true,
+	})
+	if slices.Contains(advertised(t, webhook), "react_to_message") {
+		t.Error("a webhook, which cannot react, was given the reaction tool")
+	}
+}
+
+// TestAReactionOutsideTheAllowlistIsRefusedBeforeTheRequest.
+//
+// The gap this closes is quiet rather than loud. --allow-space names spaces and
+// a reaction names a message, so an allowlist that only knew how to compare
+// spaces would not constrain this tool at all: the operator sets the flag,
+// believes writes are confined, and reactions land anywhere the account can
+// reach. The space is read out of the message name for that reason.
+//
+// Counted rather than read out of the error, for the reason the send test is: a
+// refusal arriving after the request carries the same error as one arriving
+// before it, and only one of them touched a real space.
+func TestAReactionOutsideTheAllowlistIsRefusedBeforeTheRequest(t *testing.T) {
+	reacted := &fake{kind: config.TransportUserOAuth, caps: full()}
+	session := connectWith(t, Options{
+		Profile:     &profile.Open{Name: "work", Transport: reacted},
+		AllowWrite:  true,
+		AllowSpaces: []string{"spaces/AAA"},
+	})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "react_to_message",
+		Arguments: map[string]any{"message": "spaces/BBB/messages/CCC", "emoji": "\U0001F44D"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("a reaction in a space outside the allowlist was accepted")
+	}
+	if reacted.reactions != 0 {
+		t.Errorf("the refusal arrived after %d reactions", reacted.reactions)
+	}
+
+	// And a message in the allowed space goes through, because an allowlist that
+	// refuses everything is not an allowlist.
+	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "react_to_message",
+		Arguments: map[string]any{"message": "spaces/AAA/messages/CCC", "emoji": "\U0001F44D"},
+	}); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if reacted.reactions != 1 {
+		t.Errorf("the allowed reaction was made %d times", reacted.reactions)
 	}
 }

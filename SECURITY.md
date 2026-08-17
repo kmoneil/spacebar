@@ -622,9 +622,12 @@ read. It is gated more tightly than the CLI, on purpose.
 - **Writes are off by default.** `spacebar mcp` registers no write tool unless
   `--allow-write` is passed. `TestAWriteToolIsAbsentWithoutAllowWrite` asserts
   both directions against a connected client: without the flag the tool set is
-  exactly the read tools, and with it `send_message` joins them and nothing else
-  changes. A profile that can serve nothing at all is refused before the session
-  starts rather than connected empty.
+  exactly the read tools, and with it `send_message` and `react_to_message` join
+  them and nothing else changes. A profile that can serve nothing at all is
+  refused before the session starts rather than connected empty.
+  `TestTheReactionToolIsGatedTheSameWayTheSendToolIs` holds the second write
+  tool separately, including that a webhook, which can post and cannot react,
+  is given the one and not the other.
 - **A tool whose capability is unavailable is not registered at all**, rather
   than registered and returning an error (SPEC.md §14.1). A model that cannot
   see a tool cannot argue itself into calling it, and a model that can see one
@@ -647,6 +650,17 @@ read. It is gated more tightly than the CLI, on purpose.
   than reading the error, because a refusal that arrives after the POST carries
   the same error as one that arrives before it and only one of them left a
   message in a space.
+
+  A reaction names a message rather than a space, so the space is read out of
+  the message name by `chat.SpaceOfMessage` before the same check runs. Without
+  that step the flag would have been set, believed, and silently not applied to
+  `react_to_message`, which is the worst shape a gate can take: an operator who
+  thinks writes are confined and reactions landing anywhere the account can
+  reach. `TestAReactionOutsideTheAllowlistIsRefusedBeforeTheRequest` counts
+  reactions rather than reading the error, and
+  `FuzzTheSpaceOfAMessageIsAlwaysASpaceName` states the extraction as a
+  property: for any string, either it is refused or what comes back is a space
+  name that the message actually begins with.
 
   The check runs **after** resolution and never before it. An allowlist checked
   against what the caller typed is checked against a string the caller

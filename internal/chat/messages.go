@@ -293,6 +293,38 @@ func CheckMessageName(message string) error {
 	return nil
 }
 
+// SpaceOfMessage is the space a message belongs to.
+//
+// A message name contains its space, so this reads it rather than asking the
+// API, which means it costs nothing and cannot be wrong about a message that
+// has since been deleted.
+//
+// It exists because `--allow-space` has to constrain a reaction as well as a
+// send, and a reaction names a message rather than a space. Without this the
+// allowlist would silently not apply to `react_to_message`: the tool would take
+// a message in a space the operator never allowed and the check would have
+// nothing to compare. Here rather than in `internal/mcpsrv` because a rule that
+// lives in an adapter is a rule the other adapter does not have.
+//
+// Both names are checked, the message on the way in and the space on the way
+// out. The second is not redundant: the message pattern is what guarantees the
+// prefix is a space, and a first layer that needs the layer below it to be safe
+// is not a first layer.
+func SpaceOfMessage(message string) (string, error) {
+	if err := CheckMessageName(message); err != nil {
+		return "", err
+	}
+
+	space, _, found := strings.Cut(message, "/messages/")
+	if !found {
+		return "", clientErr("%q is not a message name.", message)
+	}
+	if err := CheckSpaceName(space); err != nil {
+		return "", err
+	}
+	return space, nil
+}
+
 // EditRequest asks to replace a message's text.
 type EditRequest struct {
 	// Message is spaces/AAA/messages/BBB. Checked before it reaches a path.

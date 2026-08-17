@@ -27,9 +27,9 @@ well, as do `tail`, `watch`, the `alias` group, and `messages edit`,
 `messages delete` and `react`. `auth`, `version`, `licenses` and `completion`
 work, as do `send --file` and `messages download`, and `watch --all` follows
 every space at once on a request rate budgeted against the project's quota.
-`spacebar mcp` serves the read paths to a model over MCP, and `send_message` as
-well when `--allow-write` says so. What is left in both milestones is the exit
-sweep.
+`spacebar mcp` serves the read paths to a model over MCP, and `send_message`
+and `react_to_message` when `--allow-write` says so. Milestones 4 and 5 are
+closed; milestone 6 is the local index and search.
 
 One thing worth knowing before you rely on it. Every behaviour described below
 is covered by tests, including against a server that answers the way the Chat
@@ -66,7 +66,7 @@ The plan, in six milestones:
 | 2   | Webhook transport: `send` with no OAuth at all            | **done** |
 | 3   | User OAuth: `auth`, `spaces`, `messages`                  | **done** |
 | 4   | Full CLI: `tail`, `watch`, `react`, aliases, attachments  | **done** |
-| 5   | MCP server                                                | most     |
+| 5   | MCP server                                                | **done** |
 | 6   | Local index and search                                    |          |
 
 Milestone 2 is the real proof point. It has to be genuinely useful to somebody

@@ -180,12 +180,13 @@ var listMessagesTool = &mcp.Tool{
 }
 
 type listMessagesIn struct {
-	Space  string `json:"space" jsonschema:"the space: a resource name like spaces/AAAAAAA, an alias, a display name, or an email address"`
-	Limit  int    `json:"limit,omitempty" jsonschema:"how many messages to return; omit for 25, maximum 200"`
-	Order  string `json:"order,omitempty" jsonschema:"newest or oldest first; omit for newest"`
-	Since  string `json:"since,omitempty" jsonschema:"only messages created strictly after this time"`
-	Until  string `json:"until,omitempty" jsonschema:"only messages created strictly before this time"`
-	Filter string `json:"filter,omitempty" jsonschema:"the Google Chat API's own filter expression, combined with since and until rather than replacing them"`
+	Space       string `json:"space" jsonschema:"the space: a resource name like spaces/AAAAAAA, an alias, a display name, or an email address"`
+	Limit       int    `json:"limit,omitempty" jsonschema:"how many messages to return; omit for 25, maximum 200"`
+	Order       string `json:"order,omitempty" jsonschema:"newest or oldest first; omit for newest"`
+	Since       string `json:"since,omitempty" jsonschema:"only messages created strictly after this time"`
+	Until       string `json:"until,omitempty" jsonschema:"only messages created strictly before this time"`
+	Filter      string `json:"filter,omitempty" jsonschema:"the Google Chat API's own filter expression, combined with since and until rather than replacing them"`
+	ShowDeleted bool   `json:"show_deleted,omitempty" jsonschema:"also return tombstones for deleted messages, which carry no text"`
 }
 
 type listMessagesOut struct {
@@ -216,12 +217,13 @@ func (s *Server) listMessages(ctx context.Context, _ *mcp.CallToolRequest, in li
 	}
 
 	found, more, err := collect(s.profile.Transport.Messages(ctx, chat.ListMessagesRequest{
-		Space:   target,
-		OrderBy: order,
-		Filter:  in.Filter,
-		Since:   since,
-		Until:   until,
-		Limit:   limit + 1,
+		Space:       target,
+		OrderBy:     order,
+		ShowDeleted: in.ShowDeleted,
+		Filter:      in.Filter,
+		Since:       since,
+		Until:       until,
+		Limit:       limit + 1,
 	}), limit)
 	if err != nil {
 		return nil, listMessagesOut{}, err
@@ -296,6 +298,71 @@ type sendMessageIn struct {
 	Text      string `json:"text" jsonschema:"the message body, as Chat markup unless md is set"`
 	Md        bool   `json:"md,omitempty" jsonschema:"translate the text from CommonMark into Chat markup"`
 	ThreadKey string `json:"thread_key,omitempty" jsonschema:"group this message into the thread with this key, creating it if there is none"`
+
+	// MessageID matters more here than it does on the command line. A person who
+	// is not sure whether a send worked looks in the space; a model that gets a
+	// timeout retries, and without a key that retry is a second message. Google
+	// deduplicates on this value, so the same key sent twice posts once.
+	MessageID string `json:"message_id,omitempty" jsonschema:"a caller-chosen id making this send idempotent: retrying with the same id posts once, not twice"`
+}
+
+// The reaction tool. §14.1 names it and milestone 5 did not build it, which the
+// m5-99 sweep found by reading the section against the tool list.
+//
+// It is a write, so it carries both gates and the confirmation sentence. The
+// sentence is the one §14.2 mandates for every write tool, word for word, even
+// though a reaction is not literally a message: the requirement is that every
+// write tool ends with those words, and a per-tool rewording is how a promise
+// becomes six slightly different promises. What a reaction is gets said before
+// them.
+var reactToMessageTool = &mcp.Tool{
+	Name: "react_to_message",
+	Description: "Add an emoji reaction to a Google Chat message, as the authorized account. " +
+		"The emoji must be an actual emoji character such as 👍, not a shortcode like :thumbsup:, " +
+		"which this API does not accept. The reaction is attributed to the account this profile is " +
+		"authorized as and is visible to everybody in the space. " + confirmation,
+	Annotations: &mcp.ToolAnnotations{
+		DestructiveHint: ptr(false),
+		ReadOnlyHint:    false,
+		IdempotentHint:  false,
+		OpenWorldHint:   ptr(true),
+	},
+}
+
+type reactToMessageIn struct {
+	Message string `json:"message" jsonschema:"the message resource name, as in spaces/AAAAAAA/messages/BBBBBBB"`
+	Emoji   string `json:"emoji" jsonschema:"a single emoji character, such as 👍; a :shortcode: is refused"`
+}
+
+func (s *Server) reactToMessage(ctx context.Context, _ *mcp.CallToolRequest, in reactToMessageIn) (*mcp.CallToolResult, rows.Reaction, error) {
+	// A reaction names a message and the allowlist names spaces, so the space is
+	// read out of the message name. Without this step --allow-space would not
+	// constrain this tool at all, which is the quiet kind of gap: the flag would
+	// be set, the operator would believe writes were confined, and reactions
+	// would land anywhere the account can reach.
+	//
+	// No resolution step, unlike send_message, because a message resource name
+	// is already a resource name. There is nothing here that the caller could
+	// have written as an alias, so there is no gap between what was typed and
+	// what the request will reach.
+	space, err := chat.SpaceOfMessage(in.Message)
+	if err != nil {
+		return nil, rows.Reaction{}, err
+	}
+	if err := s.checkAllowed(space); err != nil {
+		return nil, rows.Reaction{}, err
+	}
+
+	added, err := s.profile.Transport.React(ctx, chat.ReactRequest{
+		Message: in.Message,
+		Emoji:   in.Emoji,
+	})
+	if err != nil {
+		return nil, rows.Reaction{}, err
+	}
+
+	row, _ := rows.ForReaction(*added, in.Message)
+	return nil, row, nil
 }
 
 func (s *Server) sendMessage(ctx context.Context, _ *mcp.CallToolRequest, in sendMessageIn) (*mcp.CallToolResult, rows.Message, error) {
@@ -324,6 +391,7 @@ func (s *Server) sendMessage(ctx context.Context, _ *mcp.CallToolRequest, in sen
 		Space:     target,
 		Message:   chat.Message{Text: text},
 		ThreadKey: in.ThreadKey,
+		MessageID: in.MessageID,
 	})
 	if err != nil {
 		return nil, rows.Message{}, err

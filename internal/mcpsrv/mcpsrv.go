@@ -136,6 +136,7 @@ func New(opts Options) (*Server, error) {
 	// agreed to let a model.
 	if opts.AllowWrite {
 		register(s, caps, transport.CanSend, sendMessageTool, s.sendMessage)
+		register(s, caps, transport.CanReact, reactToMessageTool, s.reactToMessage)
 	}
 
 	if len(s.tools) == 0 {
@@ -245,7 +246,7 @@ func (s *Server) checkAllowed(space string) error {
 		return nil
 	}
 	return output.Errorf("REFUSED", output.ExitRefused,
-		"%s is not in this server's --allow-space list, so nothing was sent.", space)
+		"%s is not in this server's --allow-space list, so nothing was written there.", space)
 }
 
 // collect reads a bounded number of items out of a streaming list.

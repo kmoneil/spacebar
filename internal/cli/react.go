@@ -20,6 +20,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
+	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
@@ -29,13 +30,6 @@ import (
 // by both adapters, and nothing over MCP reacts yet. It moves there the day
 // m5-02 registers a react tool, and putting it there now would be a shape
 // nobody has agreed to in a package whose whole point is agreement.
-type reactionRow struct {
-	Name    string `json:"name"`
-	Message string `json:"message"`
-	Emoji   string `json:"emoji,omitempty"`
-	User    string `json:"user,omitempty"`
-}
-
 func newReactCmd(opts *Options) *cobra.Command {
 	return &cobra.Command{
 		Use:   "react MESSAGE EMOJI",
@@ -80,12 +74,11 @@ webhook URL can do, and that is refused before any request.`,
 				return finish(r, opened, err)
 			}
 
-			row := reactionRow{Name: added.Name, Message: args[0], Emoji: args[1]}
-			if added.Emoji != nil && added.Emoji.Unicode != "" {
-				row.Emoji = added.Emoji.Unicode
-			}
-			if added.User != nil {
-				row.User = added.User.Name
+			row, _ := rows.ForReaction(*added, args[0])
+			if row.Emoji == "" {
+				// The API echoes the emoji it stored; when it says nothing, what
+				// was asked for is the honest answer and not a blank column.
+				row.Emoji = args[1]
 			}
 
 			return r.Result(row, output.Fields{

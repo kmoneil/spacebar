@@ -49,6 +49,7 @@ To allow writing, and only if you mean it:
 | `list_messages` | Messages in a space, newest first by default |
 | `get_message` | One message by resource name |
 | `send_message` | Post to a space. Requires `--allow-write` |
+| `react_to_message` | Add an emoji reaction. Requires `--allow-write` |
 
 **A tool this profile cannot serve is not registered at all.** It is not
 registered-and-failing: it is absent from the tool list and absent from the
@@ -139,6 +140,16 @@ represent rather than approximating it.
 account holder, is not unique, and can be changed to impersonate somebody. When
 you report who said something, prefer `sender`; when you show a person a name,
 say which one you are showing.
+
+**Pass `message_id` when you might retry a send.** If a `send_message` call
+times out you cannot tell whether it posted, and retrying without a key is how
+one message becomes two. Google deduplicates on `message_id`, so the same key
+sent twice posts once. This matters more for you than it does for a person, who
+would just look in the space.
+
+**A reaction is refused as a `:shortcode:`.** `react_to_message` takes the emoji
+character itself, `👍` and not `:thumbsup:`, because the API does
+not accept the shortcode form. The refusal happens before the request.
 
 **`affiliation` is worth reading before drafting anything sensitive.** It says
 whether a member is inside the organization, and it is absent on an app and on a

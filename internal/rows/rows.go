@@ -344,3 +344,39 @@ func textOf(payload json.RawMessage) string {
 	}
 	return ""
 }
+
+// Reaction is the published shape of one emoji reaction.
+//
+// It moved here from internal/cli in the m5-99 sweep. It had been declared in
+// the command that prints it, which made it the one published shape an adapter
+// owned, and the parity check is what found it: react_to_message could not
+// return the same object the CLI does without either importing a command
+// package or declaring a second, silently divergent copy.
+type Reaction struct {
+	Name    string `json:"name"`
+	Message string `json:"message"`
+
+	// Emoji is the unicode character, which is the only form this API accepts.
+	// A shortcode is refused before the request.
+	Emoji string `json:"emoji,omitempty"`
+
+	// User is who reacted, as users/NNN. Absent when the API did not say.
+	User string `json:"user,omitempty"`
+}
+
+// ForReaction projects one reaction onto what is published about it.
+//
+// The message is passed in rather than read off the reaction's own name.
+// Trimming two path segments off the far end's string would be this tool
+// deriving a resource name from a value it did not check, and the caller
+// already holds the message it asked about.
+func ForReaction(r chat.Reaction, message string) (Reaction, []string) {
+	row := Reaction{Name: r.Name, Message: message}
+	if r.Emoji != nil {
+		row.Emoji = r.Emoji.Unicode
+	}
+	if r.User != nil {
+		row.User = r.User.Name
+	}
+	return row, []string{row.Message, row.Emoji, row.User}
+}
