@@ -274,6 +274,39 @@ it is pasted rather than as a `400` about an API key days later.
   without one would exclude the population this tool is built for, so the
   fallback is a supported path rather than a degraded one, and it says plainly
   that the credential is on disk in plain text.
+- **`profile rm` removes every credential a profile holds**, from the keyring
+  and from the fallback file: the webhook URL, the OAuth token, and the client
+  secret. `auth.ProfileSecrets` is the list and `auth.RemoveProfile` walks it.
+  `TestRemovingAProfileLeavesNoCredentialBehind` and
+  `TestRemovingAUserOAuthProfileTakesTheTokenAndTheClientSecret`.
+
+  It removed one of them until this was written down. `RemoveProfile` deleted
+  the webhook URL by name, so `profile rm` on a user-OAuth profile removed the
+  configuration entry, printed `removed`, exited `0`, and left the OAuth token
+  and the client secret exactly where they were. The token record carries a
+  refresh token, which does not expire with the hourly access token, so what
+  survived was a live credential for that account's Chat scopes on a machine
+  whose owner had been told it was gone. The person it cost is the careful one:
+  retiring a laptop, handing over a shared build box, baking an image.
+
+  Two gates in `internal/lint` keep the list whole rather than trusting anybody
+  to remember it. `TestEverySecretNameIsInProfileSecrets` fails when a
+  `SecretName` constant is declared and not listed, and
+  `TestEveryStoredSecretNamesAConstant` fails when `auth.Ref` is called with
+  anything but one of the listed names, because `SecretName` is a named type
+  and an untyped literal converts to it implicitly. A secret stored under a
+  name removal does not walk is the bug above, and it can now only be written
+  by editing the list.
+
+  **Removal is local and is not revocation.** Neither `profile rm` nor
+  `auth logout` tells Google to forget anything, and that is deliberate rather
+  than owed: revoking needs a network call in a command that otherwise touches
+  only this machine, it needs the refresh token that is being deleted, and
+  Google revokes a grant per OAuth client rather than per machine, so it would
+  silently end the authorization on every other machine using the same client.
+  Deleting the token stops this machine using the authorization. Ending the
+  authorization is done from the account's security settings, and that is the
+  thing to do if a machine is lost rather than retired. Both commands say so.
 - **A webhook URL is a bearer credential, not a URL.** It carries `key` and
   `token` query parameters that are the entire authentication for posting to
   that space. It is redacted, stored, and refused on the command line exactly
@@ -626,6 +659,52 @@ therefore a decision the operator makes, with `rm`, knowing what it costs.
   not the operator's and a download should not be able to replace something
   they have.
 
+- **And the write cannot leave it either**, which is a second claim and was not
+  held. `TestADownloadWillNotFollowASymlinkOutOfTheDirectory`.
+
+  The name is one thing and what is already sitting in the directory under that
+  name is another. The write used to ask `os.Stat` whether the path existed and
+  then call `os.WriteFile`, and `os.Stat` follows symlinks, so a **dangling**
+  symlink answered `ErrNotExist`, the existence guard passed, and the write
+  followed the same link and created the file at its target. The bytes are
+  chosen by whoever posted the message, so anybody who could plant a name in
+  the download directory could write content of their choosing wherever the
+  operator can write. There was a plain check-then-use race beside it; the
+  dangling link needed no race at all.
+
+  It needs a directory that is not only the operator's, which is not a laptop
+  writing into `~/Downloads`. It is a shared CI workspace, `--out /tmp`, a
+  synced folder, or a build box several people have accounts on.
+
+  Every write now goes through `os.Root`, which resolves each component against
+  a directory handle and refuses to leave it. Without `--force` the open is
+  `O_CREATE|O_EXCL`, which refuses anything already at that name, symlink or
+  not, dangling or not, and is the existence check as well as the write, so
+  there is no window between the two. With `--force` the bytes are staged under
+  a temporary name and renamed over the target, which replaces the name rather
+  than following what it points at, and is atomic besides.
+
+  `os.Root` is also what refuses a Windows reserved device name, which its own
+  documentation states: on Windows a download called `NUL` would otherwise
+  write to the null device, with the bytes discarded and `os.Stat` answering as
+  though a file were there. It is refused at the platform's own boundary rather
+  than by a list kept here, because a list would have to be maintained against
+  somebody else's operating system.
+
+  A colon joins the two separators in what is flattened out of a name. On
+  Windows `report.txt:hidden` is not a filename, it is an alternate data stream
+  on a file called `report.txt`, so a download under that name writes into a
+  file the operator already has and a directory listing afterwards shows
+  nothing new. It is an ordinary character on Unix, exactly as a backslash is,
+  and is replaced on both for the same reason: one answer, wherever it ran.
+
+  What is **not** held end to end is the command. `messages download` needs
+  read access, so it needs a user-OAuth profile, and these tests cannot
+  configure one against a test server because `chat.BaseURL` is a constant on
+  purpose: an environment variable that redirected the API base would be a
+  lever for sending a credential somewhere else. So the claim is held at the
+  function that does the writing, and the command is one call away from it.
+
 - **An attachment's download URL is a credential and is dropped.** The API
   returns `downloadUri` and `thumbnailUri` beside every attachment, and each is
   a `chat.google.com` URL with an `attachment_token` in its query that is what
@@ -756,6 +835,40 @@ read. It is gated more tightly than the CLI, on purpose.
   a server that fails the test if it is ever reached. Verified by planting a new
   command and watching the first fail.
 
+  **That walk covered one transport, and forgetting to render is exactly what
+  went wrong in the gap.** It could only configure a webhook, so every command
+  needing read access was recorded as exit 5 and its dry run was never reached.
+  `send --file` uploads before it posts, and the upload was the one place a dry
+  run's answer arrived unhandled: the command exited 1 with
+  `dry run: the request below was not sent` and nothing below it, for four
+  milestones. It failed safe, and it failed dishonestly.
+
+  The walk now runs each command on the transport that can carry it. There is
+  still no server for the user-OAuth half and there cannot be one, because
+  `chat.BaseURL` is a constant so that no environment variable can redirect
+  where a credential goes; what makes that half safe is that any request which
+  did escape dials an unreachable loopback proxy the test sets, so it talks to
+  nobody even on the day the stop regresses. Verified by breaking the stop
+  deliberately and watching the request die at `127.0.0.1:1`.
+
+  It also covers `send --file` explicitly, because walking commands never
+  reaches it: `--file` is a flag on a command the walk already had, and it is a
+  different code path with the same name. A flag earns an entry when it changes
+  which requests are made rather than what is in one.
+
+  **A dry run of a send with an attachment shows the upload and says the message
+  would follow.** Two requests, and the second carries an upload token this API
+  returns from the first, so there is no way to show it without making the
+  first. One exact request and a sentence about what comes next is the honest
+  answer; a rendering of a request that would not be sent in that form is not.
+  `TestADryRunOfASendWithAFileShowsTheUploadAndSaysWhatFollows`.
+
+  The upload's body is the file, and it is described with its exact size rather
+  than printed. Printing it is not showing a request, it is copying a file to
+  stdout, and an attachment may be 200MB. Described rather than truncated: the
+  rule is that a value is never *silently* altered, and a count saying how many
+  bytes it stands in for is not silent.
+
   A dry run of a command that writes locally means the whole command.
   `spacebar profile set-webhook --dry-run` stores nothing, because the other
   reading, where it saves the credential and only declines to send, is a
@@ -799,9 +912,10 @@ read. It is gated more tightly than the CLI, on purpose.
   pair exists to prevent, and it is invisible to every other test in the tree,
   because the matrix and the scope list had never been compared to each other.
 - **Confirmation that cannot be asked for is refused, not skipped.** Exit code
-  7, `output.ExitRefused`. Two commands ask: `profile rm`, which destroys a
-  credential that is only recoverable from the space it was issued in, and
-  `messages delete`, which destroys a message everybody in a space could see.
+  7, `output.ExitRefused`. Two commands ask: `profile rm`, which destroys every
+  credential a profile holds and at least one of which is only recoverable from
+  the space it was issued in, and `messages delete`, which destroys a message
+  everybody in a space could see.
 
   `messages delete` is the one where the confirmation is the whole defence.
   Editing is limited by the API to messages the account sent, measured on

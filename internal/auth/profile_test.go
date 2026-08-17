@@ -17,8 +17,10 @@ package auth
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -57,6 +59,17 @@ func (m memoryBackend) remove(service, key string) error {
 func memoryStore() (*Store, memoryBackend) {
 	keyring := memoryBackend{}
 	return &Store{keyring: keyring, file: memoryBackend{}}, keyring
+}
+
+// bothBackends is memoryStore with the fallback file handed back as well.
+//
+// A removal has to reach both, and the one that matters is the file: a machine
+// with no keyring keeps its credentials there in plain text, and a container, a
+// CI runner and a headless server are all that machine. A test that only
+// watched the keyring would pass on a build that emptied one of the two.
+func bothBackends() (*Store, memoryBackend, memoryBackend) {
+	keyring, file := memoryBackend{}, memoryBackend{}
+	return &Store{keyring: keyring, file: file}, keyring, file
 }
 
 // TestSetWebhookPutsTheURLInTheKeyringAndAReferenceInTheFile is the whole point
@@ -223,6 +236,120 @@ func TestRemoveProfileDeletesACredentialNothingPointsAt(t *testing.T) {
 	if _, err := store.Get(Ref("orphan", WebhookSecret)); err == nil {
 		t.Error("the orphaned credential is still there")
 	}
+}
+
+// TestRemovingAProfileLeavesNoCredentialBehind is the claim `profile rm` makes
+// and did not keep.
+//
+// It walks ProfileSecrets rather than naming the three, which is the whole
+// point of that list existing: a secret added in a later milestone is covered
+// here without anybody remembering to cover it, and if it is added without
+// being added to the list then TestEverySecretNameIsInProfileSecrets is what
+// fails instead.
+//
+// Both backends, because a removal that emptied the keyring and left the
+// fallback file has not removed anything on the machines this tool is built
+// for.
+func TestRemovingAProfileLeavesNoCredentialBehind(t *testing.T) {
+	if len(ProfileSecrets) == 0 {
+		t.Fatal("ProfileSecrets is empty, so this test would pass by checking nothing")
+	}
+
+	store, keyring, file := bothBackends()
+	cfg := &config.Config{Profiles: map[string]config.Profile{
+		"work": {Transport: config.TransportUserOAuth},
+	}}
+
+	// Planted in both, because that is the state after a keyring that was
+	// available once and is not now, which is the state the fallback exists for.
+	for _, name := range ProfileSecrets {
+		ref := Ref("work", name)
+		service, key, err := parseRef(ref)
+		if err != nil {
+			t.Fatalf("parseRef(%q): %v", ref, err)
+		}
+		if err := keyring.set(service, key, "a value for "+string(name)); err != nil {
+			t.Fatalf("planting %s in the keyring: %v", name, err)
+		}
+		if err := file.set(service, key, "a value for "+string(name)); err != nil {
+			t.Fatalf("planting %s in the file: %v", name, err)
+		}
+	}
+
+	if err := store.RemoveProfile(cfg, "work"); err != nil {
+		t.Fatalf("RemoveProfile: %v", err)
+	}
+
+	for _, name := range ProfileSecrets {
+		ref := Ref("work", name)
+		if value, err := store.Get(ref); err == nil {
+			t.Errorf("%s outlived the profile it belonged to, reading back %d bytes", name, len(value))
+		}
+	}
+	if len(keyring) != 0 {
+		t.Errorf("the keyring still holds %d entries: %v", len(keyring), keys(keyring))
+	}
+	if len(file) != 0 {
+		t.Errorf("the fallback file still holds %d entries: %v", len(file), keys(file))
+	}
+}
+
+// TestRemovingAUserOAuthProfileTakesTheTokenAndTheClientSecret is the same
+// claim through the real write paths rather than through a planted map.
+//
+// This is the test that fails on the build this card was written against.
+// `profile rm` deleted one hardcoded secret name, the webhook, so a user-OAuth
+// profile kept its token and its client secret, and the token record holds a
+// refresh token: a long-lived credential for somebody's Chat account, surviving
+// the command that reported it destroyed.
+//
+// It builds the profile with SaveClient and SaveToken so that what is removed
+// is what those two actually wrote, rather than what this test believes they
+// write.
+func TestRemovingAUserOAuthProfileTakesTheTokenAndTheClientSecret(t *testing.T) {
+	store, _ := memoryStore()
+	cfg := &config.Config{}
+
+	if err := store.SaveClient(cfg, "work", &Client{
+		ID:     "1234.apps.googleusercontent.com",
+		Secret: "GOCSPX-notARealClientSecret",
+	}); err != nil {
+		t.Fatalf("SaveClient: %v", err)
+	}
+	if err := store.SaveToken("work", &Token{
+		AccessToken:  "ya29.notARealAccessToken",
+		RefreshToken: "1//notARealRefreshToken",
+		TokenType:    "Bearer",
+		Scopes:       DefaultScopes,
+		ObtainedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+
+	if err := store.RemoveProfile(cfg, "work"); err != nil {
+		t.Fatalf("RemoveProfile: %v", err)
+	}
+
+	if _, err := store.LoadToken("work"); err == nil {
+		t.Error("the OAuth token outlived the profile, and it carries a refresh token")
+	}
+	if _, err := store.Get(Ref("work", ClientSecretName)); err == nil {
+		t.Error("the OAuth client secret outlived the profile")
+	}
+	if _, ok := cfg.Profiles["work"]; ok {
+		t.Error("the profile is still configured")
+	}
+}
+
+// keys is for a failure message that says which entries survived rather than
+// how many.
+func keys(m memoryBackend) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestCheckWebhookURL(t *testing.T) {

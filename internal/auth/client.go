@@ -23,8 +23,15 @@ import (
 	"github.com/kmoneil/spacebar/internal/output"
 )
 
-// ClientSecretRef names the OAuth client secret inside a profile's credentials.
-const ClientSecretRef = "client-secret"
+// ClientSecretName names the OAuth client secret inside a profile's
+// credentials.
+//
+// Named for what it is rather than ClientSecretRef, which is what it was called
+// and which is the name of a different thing: config.Profile.ClientSecretRef
+// holds a whole reference, and this is the last segment of one. The two sat a
+// package apart reading as the same noun, which is how a reader ends up
+// believing the constant already carries the keyring: prefix.
+const ClientSecretName SecretName = "client-secret"
 
 // Client is an OAuth client somebody created in their own Cloud project.
 type Client struct {
@@ -118,7 +125,7 @@ func (s *Store) SaveClient(cfg *config.Config, profileName string, client *Clien
 		return err
 	}
 
-	ref := Ref(profileName, ClientSecretRef)
+	ref := Ref(profileName, ClientSecretName)
 	if err := s.Set(ref, client.Secret); err != nil {
 		return err
 	}
