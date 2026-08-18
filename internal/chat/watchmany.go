@@ -140,9 +140,15 @@ func (c *Client) WatchMany(ctx context.Context, req WatchManyRequest) iter.Seq2[
 }
 
 // watched is one space's place in the rotation.
+//
+// seen is per-space and not shared, because the rotation polls each space from
+// its own watermark. One set across all of them would be emptied by whichever
+// space last had an event, and every other space's boundary event would come
+// round again unrecognised.
 type watched struct {
 	space string
 	since time.Time
+	seen  seenAt
 }
 
 // tickFor is the gap between one request and the next, rather than between one
@@ -225,7 +231,7 @@ func (c *Client) rotate(ctx context.Context, req WatchManyRequest, yield func(Sp
 func (c *Client) step(ctx context.Context, req WatchManyRequest, live []watched, at int,
 	yield func(SpaceEvent, error) bool,
 ) ([]watched, int, bool) {
-	newest, pollErr, keepGoing := c.pollSpace(ctx, req, live[at], yield)
+	newest, pollErr, keepGoing := c.pollSpace(ctx, req, &live[at], yield)
 	switch {
 	case !keepGoing:
 		// The consumer stopped ranging, which ends everything.
@@ -263,7 +269,11 @@ func (c *Client) step(ctx context.Context, req WatchManyRequest, live []watched,
 //
 // The third return says whether to carry on at all, which is false only when
 // the consumer stopped ranging.
-func (c *Client) pollSpace(ctx context.Context, req WatchManyRequest, w watched,
+//
+// w is a pointer because its seen set is state that outlives this poll, and
+// taking the space by value here is how the single-space path's version of this
+// bug would have been reintroduced in the copy.
+func (c *Client) pollSpace(ctx context.Context, req WatchManyRequest, w *watched,
 	yield func(SpaceEvent, error) bool,
 ) (time.Time, error, bool) {
 	newest := w.since
@@ -277,10 +287,14 @@ func (c *Client) pollSpace(ctx context.Context, req WatchManyRequest, w watched,
 		if err != nil {
 			return newest, err, true
 		}
+		if w.seen.holds(event) {
+			continue
+		}
 		if !yield(event, nil) {
 			return newest, nil, false
 		}
-		if at, parseErr := time.Parse(time.RFC3339Nano, event.EventTime); parseErr == nil && at.After(newest) {
+		w.seen.record(event)
+		if at, ok := eventTime(event); ok && at.After(newest) {
 			newest = at
 		}
 	}

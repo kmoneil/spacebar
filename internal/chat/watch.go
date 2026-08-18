@@ -123,9 +123,13 @@ func (c *Client) Watch(ctx context.Context, req WatchRequest) iter.Seq2[SpaceEve
 			since = c.now()
 		}
 
+		// Carried across polls rather than rebuilt inside one, because what it
+		// remembers is what the previous poll handed over. See seenAt.
+		var seen seenAt
+
 		follow(ctx, c, req.Interval, since, yield,
 			func(ctx context.Context, since time.Time, yield func(SpaceEvent, error) bool) (time.Time, int, bool) {
-				return c.pollEvents(ctx, req, since, yield)
+				return c.pollEvents(ctx, req, since, &seen, yield)
 			})
 	}
 }
@@ -146,14 +150,96 @@ func (c *Client) checkWatch(req WatchRequest) error {
 	return err
 }
 
+// seenAt remembers which events were handed to the consumer at exactly one
+// instant, so that a poll asking again from that instant does not hand them
+// over a second time.
+//
+// spaceEvents.list bounds a query with start_time = "...", which was measured
+// on 2026-08-16 to mean "from here onwards" rather than what an equals usually
+// means. What that measurement did not settle is the boundary itself: whether
+// an event whose eventTime is exactly the start_time is in the answer.
+//
+// It matters, because the watermark a watch polls from is the time of the last
+// event it saw. If the instant is included, that event comes back on every
+// poll: the consumer sees it again every interval for as long as the command
+// runs, and found is never zero, so the adaptive backoff in follow never
+// engages and a space where nothing is happening is polled at the base
+// interval forever.
+//
+// The obvious answer is to move the watermark on by a nanosecond, and a
+// comment here claimed that was being done for four milestones while nothing
+// did it. It would also have been wrong. The first poll's watermark is the
+// caller's own --since, so nudging it drops an event at exactly the instant
+// the caller asked to start from, silently, and a value altered to make the
+// loop convenient is the thing this project refuses everywhere else.
+//
+// Remembering instead costs nothing and needs no answer to the boundary
+// question. If the endpoint excludes the instant the set is never consulted,
+// and if it includes it the repeat is recognised. An event at the caller's own
+// --since still arrives, because nothing has been yielded when the first poll
+// starts.
+//
+// It is bounded by the events sharing a single nanosecond, because moving the
+// instant empties it. That is the difference from the seen-set the watermark
+// was chosen over, which grows for as long as the watch runs.
+type seenAt struct {
+	at    time.Time
+	names map[string]bool
+}
+
+// holds reports whether this event has already been handed to the consumer.
+//
+// Only an event at exactly the remembered instant can have been: anything
+// earlier is behind a bound the endpoint applies itself, and anything later
+// has not been seen.
+func (s *seenAt) holds(e SpaceEvent) bool {
+	if len(s.names) == 0 || !s.names[e.Name] {
+		return false
+	}
+	at, ok := eventTime(e)
+	return ok && at.Equal(s.at)
+}
+
+// record notes an event that has been yielded, emptying the set when the
+// instant moves on.
+//
+// An event older than the instant is not recorded and does not rewind it. That
+// case should not arise, because the endpoint answers in ascending order, and
+// if it ever does the cost of ignoring it is one event that could be yielded
+// twice rather than a watch that forgets everything it just saw.
+func (s *seenAt) record(e SpaceEvent) {
+	at, ok := eventTime(e)
+	if !ok || at.Before(s.at) {
+		return
+	}
+	if at.After(s.at) || s.names == nil {
+		s.at = at
+		s.names = map[string]bool{}
+	}
+	s.names[e.Name] = true
+}
+
+// eventTime reads an event's own timestamp.
+//
+// An event whose time will not parse is still yielded and still does not move
+// the watermark, which is what this loop always did: losing the ordering of one
+// malformed event is better than dropping it, and better than rewinding a watch
+// to whatever a zero time would mean.
+func eventTime(e SpaceEvent) (time.Time, bool) {
+	at, err := time.Parse(time.RFC3339Nano, e.EventTime)
+	return at, err == nil
+}
+
 // pollEvents fetches everything since the watermark and returns the new one.
 //
 // The watermark is the event time rather than the count, for the reason tail's
-// is a createTime: a seen-set grows without bound and a count cannot survive a
-// page boundary. start_time is the API's own comparison, and it is inclusive
-// where messages.list's createTime is exclusive, so the watermark is nudged by
-// a nanosecond to avoid replaying the event that set it.
-func (c *Client) pollEvents(ctx context.Context, req WatchRequest, since time.Time,
+// is a createTime: a count cannot survive a page boundary. What it costs is
+// that the boundary instant is ambiguous, which is what seen is for.
+//
+// found counts what was yielded rather than what arrived, so a poll whose only
+// answer is the event that set the watermark counts as a quiet one and lets the
+// backoff engage.
+func (c *Client) pollEvents(ctx context.Context, req WatchRequest, since time.Time, seen *seenAt,
 	yield func(SpaceEvent, error) bool,
 ) (time.Time, int, bool) {
 	found := 0
@@ -169,11 +255,15 @@ func (c *Client) pollEvents(ctx context.Context, req WatchRequest, since time.Ti
 			report(ctx, err, yield)
 			return newest, found, false
 		}
+		if seen.holds(event) {
+			continue
+		}
 		if !yield(event, nil) {
 			return newest, found, false
 		}
 		found++
-		if at, parseErr := time.Parse(time.RFC3339Nano, event.EventTime); parseErr == nil && at.After(newest) {
+		seen.record(event)
+		if at, ok := eventTime(event); ok && at.After(newest) {
 			newest = at
 		}
 	}

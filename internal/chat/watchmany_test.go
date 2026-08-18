@@ -446,3 +446,63 @@ func TestDroppingASpaceDoesNotSpeedUpTheRotation(t *testing.T) {
 		t.Errorf("the last wait was %s, and a watch of one space waits %s", waited[len(waited)-1], want)
 	}
 }
+
+// TestEachSpaceInARotationYieldsItsEventOnce.
+//
+// The single-space path's boundary defence, asserted again on the path that has
+// its own copy of the poll loop. It is a separate copy for a good reason, that a
+// failure in one space of many must not end the run, and a separate copy is
+// exactly where a fix applied once goes missing.
+//
+// Run under the inclusive rule only, because that is the one that breaks
+// anything: sec-12 could not measure which rule the endpoint follows, and the
+// single-space tests cover both.
+//
+// Each space's set is its own, and the three events are deliberately at three
+// different instants, which is what makes that half assertable. One set shared
+// across the rotation passes a test where every space's event lands on the same
+// instant, and fails this one: it is emptied by whichever space last had an
+// event, so the next space round finds its own boundary event unrecognised.
+func TestEachSpaceInARotationYieldsItsEventOnce(t *testing.T) {
+	const spaces = 3
+
+	when := func(space string) time.Time {
+		return tailAt.Add(time.Duration(len(space)+int(space[len(space)-1])) * time.Second)
+	}
+
+	client, _, ctx := watcher(t, spaces*4, func(_ int, w http.ResponseWriter, req *http.Request) {
+		space := strings.TrimSuffix(strings.TrimPrefix(req.URL.Path, "/v1/"), "/spaceEvents")
+		at := when(space)
+
+		since, bounded := startTimeOf(t, req.URL.String())
+		if bounded && at.Before(since) {
+			noEvents(w)
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"spaceEvents": [
+			{"name": %q, "eventTime": %q, "eventType": %q,
+			 "messageCreatedEventData": {"message": {"name": %q}}}]}`,
+			space+"/spaceEvents/E", wireTime(at), EventMessageCreated, space+"/messages/M")
+	})
+
+	seen := map[string]int{}
+	for event, err := range client.WatchMany(ctx, WatchManyRequest{
+		Types:    watchTypes(),
+		Spaces:   spaceList(spaces),
+		Interval: MinPollInterval,
+	}) {
+		if err != nil {
+			t.Fatalf("WatchMany: %v", err)
+		}
+		seen[event.Name]++
+	}
+
+	if len(seen) != spaces {
+		t.Fatalf("%d spaces yielded %d distinct events: %v", spaces, len(seen), seen)
+	}
+	for name, count := range seen {
+		if count != 1 {
+			t.Errorf("%s was yielded %d times across four passes, want 1", name, count)
+		}
+	}
+}

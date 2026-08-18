@@ -263,3 +263,177 @@ func TestAnAmbiguousPayloadDecodesTheSameWayEveryTime(t *testing.T) {
 		t.Errorf("200 decodes of one event produced %d different payloads", len(payloads))
 	}
 }
+
+// startTimeOf pulls the start_time back out of a recorded event filter, which
+// is the value a fake endpoint has to honour to be worth testing against.
+func startTimeOf(t *testing.T, uri string) (time.Time, bool) {
+	t.Helper()
+
+	_, clause, ok := strings.Cut(filterOf(t, uri), "start_time = ")
+	if !ok {
+		return time.Time{}, false
+	}
+	at, err := time.Parse(time.RFC3339Nano, strings.Trim(clause, `"`))
+	if err != nil {
+		t.Fatalf("parsing start_time out of %q: %v", uri, err)
+	}
+	return at, true
+}
+
+// boundary is what a fake spaceEvents.list does with an event sitting exactly
+// on the start_time it was given.
+//
+// It is a parameter rather than a constant because the real answer has not been
+// measured, and the point of these tests is that the watch is right either way.
+// See seenAt.
+type boundary bool
+
+const (
+	inclusive boundary = true
+	exclusive boundary = false
+)
+
+func (b boundary) String() string {
+	if b {
+		return "a start_time that includes the instant"
+	}
+	return "a start_time that excludes it"
+}
+
+// eventsAt is the fake endpoint: a fixed set of events, answered according to
+// the start_time the caller asked for and the boundary rule under test.
+func eventsAt(t *testing.T, b boundary, at ...time.Time) func(int, http.ResponseWriter, *http.Request) {
+	t.Helper()
+
+	return func(_ int, w http.ResponseWriter, r *http.Request) {
+		since, bounded := startTimeOf(t, r.URL.String())
+
+		rows := make([]string, 0, len(at))
+		for i, when := range at {
+			switch {
+			case !bounded, when.After(since):
+			case bool(b) && when.Equal(since):
+			default:
+				continue
+			}
+			rows = append(rows, fmt.Sprintf(
+				`{"name": "spaces/AAA/spaceEvents/%d",
+				  "eventTime": %q,
+				  "eventType": %q,
+				  "messageCreatedEventData": {"message": {"name": "spaces/AAA/messages/M%d"}}}`,
+				i, wireTime(when), EventMessageCreated, i))
+		}
+		_, _ = fmt.Fprintf(w, `{"spaceEvents": [%s]}`, strings.Join(rows, ","))
+	}
+}
+
+// TestAWatchYieldsAnEventOnceWhicheverWayTheBoundaryGoes.
+//
+// The claim sec-12 exists for. The watermark a watch polls from is the time of
+// the last event it saw, so if start_time includes that instant the endpoint
+// hands the same event back on every poll, forever, and nothing downstream can
+// tell it from a new one: the events are byte-identical.
+//
+// Run against both boundary rules because the real one has not been measured
+// against a live space, and a watch that is only correct under the reading
+// somebody guessed is not correct.
+func TestAWatchYieldsAnEventOnceWhicheverWayTheBoundaryGoes(t *testing.T) {
+	one := tailAt.Add(time.Minute)
+	two := tailAt.Add(2 * time.Minute)
+
+	for _, b := range []boundary{inclusive, exclusive} {
+		t.Run(b.String(), func(t *testing.T) {
+			client, _, ctx := tailer(t, 6, eventsAt(t, b, one, two))
+
+			var seen []string
+			for event, err := range client.Watch(ctx, WatchRequest{
+				Space:    "spaces/AAAATestSpace",
+				Types:    []string{EventMessageCreated},
+				Interval: MinPollInterval,
+			}) {
+				if err != nil {
+					t.Fatalf("Watch: %v", err)
+				}
+				seen = append(seen, event.Name)
+			}
+
+			want := []string{"spaces/AAA/spaceEvents/0", "spaces/AAA/spaceEvents/1"}
+			if !slices.Equal(seen, want) {
+				t.Errorf("six polls yielded %v, want each event exactly once: %v", seen, want)
+			}
+		})
+	}
+}
+
+// TestAWatchWithNothingNewGoesQuietWhicheverWayTheBoundaryGoes.
+//
+// The second half of the same failure, and the more expensive one. follow
+// counts what a poll found and backs off after five that found nothing, so a
+// poll whose only answer is the event that set the watermark has to count as
+// nothing found. Otherwise a space where nobody has said anything since
+// yesterday is polled at the base interval for as long as the command runs, and
+// the per-space quota that pays for it is shared with every other app in that
+// space.
+func TestAWatchWithNothingNewGoesQuietWhicheverWayTheBoundaryGoes(t *testing.T) {
+	for _, b := range []boundary{inclusive, exclusive} {
+		t.Run(b.String(), func(t *testing.T) {
+			client, recorded, ctx := tailer(t, 9, eventsAt(t, b, tailAt.Add(time.Minute)))
+
+			for _, err := range client.Watch(ctx, WatchRequest{
+				Space:    "spaces/AAAATestSpace",
+				Types:    []string{EventMessageCreated},
+				Interval: MinPollInterval,
+			}) {
+				if err != nil {
+					t.Fatalf("Watch: %v", err)
+				}
+			}
+
+			all := recorded.all()
+			if len(all) < 8 {
+				t.Fatalf("only %d waits recorded, which is too few to show a backoff", len(all))
+			}
+			if last := all[len(all)-1]; last <= MinPollInterval {
+				t.Errorf("the last wait was %s, so nine polls of a space with one old event never backed off", last)
+			}
+		})
+	}
+}
+
+// TestAWatchStartingAtAnEventStillYieldsIt.
+//
+// The reason this is a remembered set rather than the nanosecond nudge the code
+// claimed for four milestones. A nudge applies to the first poll too, where the
+// watermark is the caller's own --since, so `watch --since <the eventTime of
+// something>` would silently skip the event the caller named. Nothing has been
+// yielded when the first poll runs, so nothing is suppressed.
+//
+// The count is asserted from both sides deliberately, because that is what
+// separates the two designs: zero is the nudge, more than one is no defence at
+// all, and one is this.
+//
+// Only assertable under the inclusive rule: under the other one the endpoint
+// itself excludes the event and no client-side choice can bring it back.
+func TestAWatchStartingAtAnEventStillYieldsIt(t *testing.T) {
+	at := tailAt.Add(time.Minute)
+	client, _, ctx := tailer(t, 3, eventsAt(t, inclusive, at))
+
+	var seen int
+	for event, err := range client.Watch(ctx, WatchRequest{
+		Space:    "spaces/AAAATestSpace",
+		Types:    []string{EventMessageCreated},
+		Interval: MinPollInterval,
+		Since:    at,
+	}) {
+		if err != nil {
+			t.Fatalf("Watch: %v", err)
+		}
+		if event.Name != "spaces/AAA/spaceEvents/0" {
+			t.Errorf("event = %q", event.Name)
+		}
+		seen++
+	}
+	if seen != 1 {
+		t.Errorf("an event at exactly --since was yielded %d times, want 1", seen)
+	}
+}
