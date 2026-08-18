@@ -943,3 +943,77 @@ func TestOrderOnlyTakesWhatItDocuments(t *testing.T) {
 		}
 	}
 }
+
+// TestAMessageCarriesEveryRouteAGifArrivesBy.
+//
+// A GIF reaches a Chat message three ways, and each one was measured against a
+// real space on 2026-08-18 before this test was written.
+//
+// A pasted URL is ordinary body text and needed nothing. An app's GIF arrives
+// in the deprecated top-level `cards` field, which had no field on Message at
+// all and decoded into nothing: what survived was the attribution line, so the
+// message read as complete and was not. Chat's own picker produces
+// `attachedGifs`, which is output only and therefore cannot be created by any
+// send this tool makes, so its shape here comes from the discovery document
+// rather than from a message.
+//
+// The card body is the widget tree a real Giphy message carries, with the host
+// changed to a reserved TLD because a test never names a real one.
+func TestAMessageCarriesEveryRouteAGifArrivesBy(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"messages": [
+			{"name": "spaces/AAA/messages/PASTED",
+			 "text": "look https://media.giphy.example/media/AAA/giphy.gif",
+			 "createTime": "2026-08-18T19:00:00Z"},
+			{"name": "spaces/AAA/messages/PICKED",
+			 "createTime": "2026-08-18T19:01:00Z",
+			 "attachedGifs": [{"uri": "https://media.tenor.example/one.gif"},
+			                  {"uri": "https://media.tenor.example/two.gif"}]},
+			{"name": "spaces/AAA/messages/CARDED",
+			 "createTime": "2026-08-18T19:02:00Z",
+			 "text": "Requested by Ada\n_Try the new /giphy slash command_",
+			 "cards": [{"sections": [{"widgets": [{"image": {
+			     "imageUrl": "https://media.giphy.example/media/BBB/giphy.gif",
+			     "aspectRatio": 1}}]}]}]}]}`)
+	})
+
+	messages, err := collect(r.client.Messages(context.Background(), ListMessagesRequest{Space: "spaces/AAA"}))
+	if err != nil {
+		t.Fatalf("Messages: %v", err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("messages = %+v", messages)
+	}
+
+	pasted, picked, carded := messages[0], messages[1], messages[2]
+
+	// The route that already worked, asserted so that a change to the other two
+	// cannot quietly take it away.
+	if !strings.Contains(pasted.Text, "giphy.example") {
+		t.Errorf("a pasted GIF URL is body text and came back as %q", pasted.Text)
+	}
+	if len(pasted.AttachedGifs) != 0 {
+		t.Errorf("a pasted URL was given an attachedGifs it does not have: %+v", pasted.AttachedGifs)
+	}
+
+	if len(picked.AttachedGifs) != 2 {
+		t.Fatalf("attachedGifs decoded into %+v, which is the whole content of that message",
+			picked.AttachedGifs)
+	}
+	if picked.AttachedGifs[0].URI != "https://media.tenor.example/one.gif" {
+		t.Errorf("uri = %q", picked.AttachedGifs[0].URI)
+	}
+	if picked.Text != "" {
+		t.Errorf("text = %q, want empty: a picker GIF arrives with no body at all", picked.Text)
+	}
+
+	if len(carded.Cards) != 1 {
+		t.Fatalf("the deprecated cards field decoded into %+v", carded.Cards)
+	}
+	if !strings.Contains(string(carded.Cards[0]), "giphy.example/media/BBB") {
+		t.Errorf("the card was decoded but its content was lost: %s", carded.Cards[0])
+	}
+	if len(carded.CardsV2) != 0 {
+		t.Errorf("a legacy card decoded into cardsV2, which is a different field: %+v", carded.CardsV2)
+	}
+}

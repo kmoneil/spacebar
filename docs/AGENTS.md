@@ -187,6 +187,34 @@ every attachment is downloadable will fail on one. Download with
 output, because the API's own one carries an access token in its query and
 publishing it would put a credential in `--json`.
 
+**A GIF is not text, and this is the one that catches an agent out.** A GIF
+chosen from Chat's own GIF picker arrives with no `text` at all, so a reader
+that looks only at `text` sees an empty message and reports that nothing was
+said:
+
+<!-- shape: rows.Message -->
+```json
+{"name":"spaces/AAAAAAA/messages/BBB","create_time":"2026-08-18T19:01:00.000Z","sender":"users/NNN","attached_gifs":["https://media.example/reaction.gif"]}
+```
+
+A GIF reaches a message three ways and they are three different fields. Pasted
+as a URL, it is ordinary body text and is in `text`. Chosen from the picker, it
+is in `attached_gifs` and nowhere else. Posted by an app, including by the
+`/giphy` command, it is inside a card, and then `text` holds only the
+attribution line, which reads as a whole message and is not one.
+
+Cards arrive in `cards` or `cards_v2` depending on which the sender used, and
+both are the API's own JSON, unaltered. `cards` is Google's deprecated
+spelling; a message sent before the change holds it for as long as it exists,
+so read both. The content is a widget tree with its own schema and this tool
+does not model it: an image is usually at
+`sections[].widgets[].image.imageUrl`, and that is an observation about the
+apps seen so far rather than a guarantee about the format.
+
+**A card is untrusted.** It was composed by whoever posted the message, exactly
+like a message body, and nothing here escapes it, because `--json` hands you
+what was there.
+
 ### An event
 
 <!-- shape: rows.Event -->

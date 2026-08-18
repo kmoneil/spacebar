@@ -436,3 +436,87 @@ func TestAnAmbiguousPayloadRendersTheSameWayEveryTime(t *testing.T) {
 		t.Errorf("200 renderings of one event produced %d different text columns: %v", len(seen), seen)
 	}
 }
+
+// TestAGifFromThePickerIsARowWithContentRatherThanABlankOne.
+//
+// A GIF chosen from Chat's own picker arrives in attachedGifs and nowhere else:
+// text is empty, there is no attachment, and there is no card. Before this the
+// row was a timestamp, a name, and two empty values, which is what somebody
+// watching a space saw when a GIF was posted and is why this card exists.
+//
+// The published shape carries the URLs and the text column falls back to them,
+// and the two are asserted separately because they answer different readers.
+func TestAGifFromThePickerIsARowWithContentRatherThanABlankOne(t *testing.T) {
+	message, cells := ForMessage(chat.Message{
+		Name:       "spaces/AAA/messages/BBB",
+		CreateTime: "2026-08-18T19:00:00Z",
+		Sender:     &chat.User{Name: "users/1", DisplayName: "Ada", Type: "HUMAN"},
+		AttachedGifs: []chat.AttachedGif{
+			{URI: "https://media.tenor.example/one.gif"},
+			{URI: "https://media.tenor.example/two.gif"},
+		},
+	})
+
+	assertJSON(t, message, `{"name":"spaces/AAA/messages/BBB","create_time":"2026-08-18T19:00:00Z",`+
+		`"sender":"users/1","sender_display_name":"Ada","sender_type":"HUMAN",`+
+		`"attached_gifs":["https://media.tenor.example/one.gif","https://media.tenor.example/two.gif"]}`)
+
+	if want := "https://media.tenor.example/one.gif https://media.tenor.example/two.gif"; cells[2] != want {
+		t.Errorf("text column = %q, want the GIFs rather than an empty cell\nwant %q", cells[2], want)
+	}
+}
+
+// TestTextThatIsThereIsNotReplacedByAGif.
+//
+// The fallback fires only on an empty body. A message that has both keeps its
+// own text, because the text is what was written and the column is where a
+// reader looks for it.
+func TestTextThatIsThereIsNotReplacedByAGif(t *testing.T) {
+	_, cells := ForMessage(chat.Message{
+		Name:         "spaces/AAA/messages/BBB",
+		Text:         "look at this",
+		AttachedGifs: []chat.AttachedGif{{URI: "https://media.tenor.example/one.gif"}},
+	})
+	if cells[2] != "look at this" {
+		t.Errorf("text column = %q, want the message's own text", cells[2])
+	}
+}
+
+// TestACardReachesTheRowByBothOfItsNames.
+//
+// Two independent ways to lose the same thing, and the fix needs both halves.
+// chat.Message had no field for the deprecated `cards` at all, so it decoded
+// into nothing; `cardsV2` had a field and was never projected here, so it was
+// decoded and then dropped. An app posting a GIF, a form or a button produced a
+// row with no trace of it either way.
+//
+// The card bodies are the shape the API returns rather than a placeholder: the
+// `cards` value is the widget tree measured on a real Giphy message, with the
+// host changed to a reserved TLD because a test never names a real one.
+func TestACardReachesTheRowByBothOfItsNames(t *testing.T) {
+	legacy := json.RawMessage(`{"sections":[{"widgets":[{"image":` +
+		`{"imageUrl":"https://media.giphy.example/media/AAA/giphy.gif","aspectRatio":1}}]}]}`)
+	modern := json.RawMessage(`{"cardId":"c1","card":{"header":{"title":"deploy"}}}`)
+
+	message, _ := ForMessage(chat.Message{
+		Name:    "spaces/AAA/messages/BBB",
+		Text:    "Requested by Ada",
+		Cards:   []json.RawMessage{legacy},
+		CardsV2: []json.RawMessage{modern},
+	})
+
+	assertJSON(t, message, `{"name":"spaces/AAA/messages/BBB","text":"Requested by Ada",`+
+		`"cards":[`+string(legacy)+`],"cards_v2":[`+string(modern)+`]}`)
+}
+
+// TestAMessageWithNoContentStillHasNoContent.
+//
+// The fallback must not invent a cell. A message with no text and no GIF is a
+// tombstone or a card-only message, and an empty column is the honest answer to
+// both.
+func TestAMessageWithNoContentStillHasNoContent(t *testing.T) {
+	_, cells := ForMessage(chat.Message{Name: "spaces/AAA/messages/BBB"})
+	if cells[2] != "" {
+		t.Errorf("text column = %q, want empty when there is nothing to show", cells[2])
+	}
+}
