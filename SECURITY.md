@@ -1254,6 +1254,16 @@ answer with is worth a sentence rather than a silence.
 than printing them, for the reason `internal/auth` does: only `internal/output`
 writes to a process stream.
 
+**Out loud on both adapters**, which it was not. `internal/store` returned the
+warnings and only the CLI collected them, so a search over MCP answered narrowly
+and said nothing: the truncation rule broken at the one consumer that cannot
+notice, because a person reading a short list can wonder and a model hands it on
+as fact. `search_messages` carries them in its result as `skipped`, in the
+result rather than on the audit stream because stderr is invisible to a model.
+`TestASearchOverMCPSaysWhatTheIndexWouldNotAnswerWith`, and
+`TestASearchThatSkippedNothingSaysNothing` for the other half, because a field
+that is always populated is a field nobody reads.
+
 **A search answers in the same order every time.** Create time descending, and
 the resource name descending to break a tie, which makes it a total order.
 Without the second clause it was not deterministic: results are collected by

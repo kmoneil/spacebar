@@ -19,6 +19,8 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -1240,5 +1242,123 @@ func TestListingSpacesUnderAnAllowlistShowsOnlyThose(t *testing.T) {
 	}
 	if strings.Contains(body, "spaces/BBB") {
 		t.Errorf("a space outside the allowlist was listed:\n%s", body)
+	}
+}
+
+// TestASearchOverMCPSaysWhatTheIndexWouldNotAnswerWith.
+//
+// internal/store refuses a record whose space disagrees with the file it was
+// read from, because a record read from the wrong file would answer for a space
+// it was never in and would move where a sync resumes. It says so rather than
+// skipping silently: the index is the only copy of a message that no longer
+// exists anywhere else, so one it holds and will not return is worth a
+// sentence.
+//
+// The CLI printed that sentence and this server did not. The warnings sat in
+// the index for the life of the session and nothing ever read them, so a search
+// over a copied or restored file answered narrowly and reported the narrow
+// answer as the whole one. That is the truncation rule broken at the one
+// consumer that cannot check: a person reading a short list can wonder, and a
+// model hands it on as fact.
+//
+// The mechanism was already built for this caller. NDJSON.Warnings names the
+// MCP server in its doc comment, and the mutex guarding the list exists because
+// search over MCP is served concurrently. Only the call was missing.
+func TestASearchOverMCPSaysWhatTheIndexWouldNotAnswerWith(t *testing.T) {
+	const space = "spaces/AAAATestSpace"
+	const other = "spaces/AAAAOtherSpace"
+
+	// Written by hand rather than through Append, which cannot produce a file
+	// like this: it arrives from a restored backup, a directory copied between
+	// machines, or somebody tidying by hand.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "spaces"), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	lines := strings.Join([]string{
+		`{"space":"` + space + `","message":{"name":"` + space + `/messages/AAA",` +
+			`"create_time":"2026-08-17T09:00:00Z","text":"deploy done"}}`,
+		`{"space":"` + other + `","message":{"name":"` + other + `/messages/BBB",` +
+			`"create_time":"2026-08-17T09:01:00Z","text":"deploy elsewhere"}}`,
+		`{"space":"` + other + `","message":{"name":"` + other + `/messages/CCC",` +
+			`"create_time":"2026-08-17T09:02:00Z","text":"deploy elsewhere again"}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "spaces", "AAAATestSpace.ndjson"), []byte(lines), 0o600); err != nil {
+		t.Fatalf("planting the file: %v", err)
+	}
+
+	session := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		Index:   store.NewNDJSON(dir),
+	})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_messages",
+		Arguments: map[string]any{"query": "deploy"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("the search failed: %s", contentOf(result))
+	}
+
+	var got struct {
+		Messages []rows.Message `json:"messages"`
+		Searched []string       `json:"searched"`
+		Skipped  []string       `json:"skipped"`
+	}
+	body, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshalling the structured content: %v", err)
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decoding the structured content: %v", err)
+	}
+
+	// The narrow answer itself is correct: the two foreign records are not in
+	// it. What was missing is the tool saying so.
+	if len(got.Messages) != 1 {
+		t.Errorf("the search returned %d messages, want the one that belongs to the file:\n%s", len(got.Messages), body)
+	}
+
+	if len(got.Skipped) != 1 {
+		t.Fatalf("the result carries %d skipped lines, want exactly one for the one file:\n%s", len(got.Skipped), body)
+	}
+	for _, want := range []string{"AAAATestSpace.ndjson", "2 record(s)", "another space"} {
+		if !strings.Contains(got.Skipped[0], want) {
+			t.Errorf("the skipped line does not mention %q:\n%s", want, got.Skipped[0])
+		}
+	}
+}
+
+// TestASearchThatSkippedNothingSaysNothing.
+//
+// The other half, and the half that keeps the first one worth reading. A field
+// that is always populated is a field nobody checks, so an ordinary index has
+// to produce no skipped line at all rather than an empty one.
+func TestASearchThatSkippedNothingSaysNothing(t *testing.T) {
+	session := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		Index:   indexWith(t, "spaces/AAAATestSpace"),
+	})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "search_messages",
+		Arguments: map[string]any{"query": "deploy"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("the search failed: %s", contentOf(result))
+	}
+
+	body, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshalling the structured content: %v", err)
+	}
+	if strings.Contains(string(body), "skipped") {
+		t.Errorf("a clean index produced a skipped field, which is a line every caller learns to ignore:\n%s", body)
 	}
 }
