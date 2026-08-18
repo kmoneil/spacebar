@@ -45,7 +45,12 @@ func TestGolangciLintVersionIsDeclaredOnce(t *testing.T) {
 	// The action and its version are on separate lines, so the pattern spans
 	// both rather than trying to find a bare `version:` and hoping it belongs
 	// to the right step.
-	action := regexp.MustCompile(`(?m)^\s*-\s*uses:\s*golangci/golangci-lint-action@\S+\s*\n\s*with:\s*\n\s*version:\s*(\S+)\s*$`)
+	//
+	// `[^\n]*` after the ref rather than `\s*`, because the ref is a commit SHA
+	// with the tag it came from in a trailing comment. Anchoring straight to the
+	// newline made this pattern miss and the test fail with "does not pin a
+	// version", which is a true sentence about the wrong thing.
+	action := regexp.MustCompile(`(?m)^\s*-\s*uses:\s*golangci/golangci-lint-action@\S+[^\n]*\n\s*with:\s*\n\s*version:\s*(\S+)\s*$`)
 	got := action.FindStringSubmatch(ci)
 	if got == nil {
 		t.Fatal("ci.yml does not pin a version for golangci-lint-action; `latest` can fail a pull request that changed nothing")
