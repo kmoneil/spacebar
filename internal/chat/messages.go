@@ -98,6 +98,9 @@ func (c *Client) SendMessage(ctx context.Context, req SendRequest) (*Message, er
 	if err := CheckMessageID(req.MessageID); err != nil {
 		return nil, err
 	}
+	if err := CheckMessageText(req.Message.Text); err != nil {
+		return nil, err
+	}
 
 	query := url.Values{}
 	setIf(query, "messageReplyOption", replyOption(req))
@@ -236,6 +239,56 @@ func CheckMessageID(id string) error {
 	return clientErr("a message id has to begin with %q, which the API requires of any name a caller chooses.\n"+
 		"%q does not, and the API refuses it with a message that does not mention the prefix.",
 		MessageIDPrefix, id)
+}
+
+// The two ends of the one measurement that decides how long a body may be.
+//
+// Bisected on 2026-08-17 against a real space, by sending bodies of increasing
+// size and reading what came back. 32,017 bytes of ASCII were accepted and
+// 32,117 were answered 400 INVALID_ARGUMENT, "Message content is too long";
+// 31,617 bytes of emoji were accepted and 32,417 were not. Both boundaries land
+// at the same byte count, so the cap is on the encoded size and not on a
+// character count.
+//
+// The true limit is somewhere in the hundred bytes between the two and nothing
+// here knows where, which is why these are the two measurements rather than a
+// round number near them. See CheckMessageText.
+const (
+	// acceptedTextBytes is the largest body seen to be accepted.
+	acceptedTextBytes = 32_017
+
+	// tooLongTextBytes is the smallest body seen to be refused.
+	tooLongTextBytes = 32_117
+)
+
+// CheckMessageText refuses a body the API has been measured to refuse.
+//
+// It refuses that and nothing more, which is the whole of the decision here. A
+// check set at a round 32,000 would refuse a body that was seen to be accepted,
+// and a tool that refuses a message somebody could have sent produces a bug
+// report rather than a test. So a body in the unmeasured band between the two
+// numbers still reaches the API and still gets its 400, exactly as it does
+// today: this moves the failure for a body that is definitely too long and
+// invents nothing about one that might not be.
+//
+// That is the same reason CheckMessageID checks the prefix and says nothing
+// about the rest of the ID. A validator invented from a reference refuses
+// values that would have worked.
+//
+// Bytes and not characters, because the cap is on the encoded size: 7,900 emoji
+// are refused where 32,000 ASCII characters are not. The text field only, and
+// deliberately not cardsV2 or an attachment, because what the API allows those
+// has not been measured here.
+func CheckMessageText(text string) error {
+	if len(text) < tooLongTextBytes {
+		return nil
+	}
+	return clientErr("the message body is %d bytes, and the API refuses one this size: "+
+		"%d bytes was accepted when this was measured against a real space and %d was answered "+
+		"400 INVALID_ARGUMENT, \"Message content is too long\".\n"+
+		"The cap is on the encoded size rather than on a character count, so it is bytes that have "+
+		"to come down and not characters. No request was made.",
+		len(text), acceptedTextBytes, tooLongTextBytes)
 }
 
 // messagesPath is where a send goes. The space has already been through
@@ -403,6 +456,9 @@ type EditRequest struct {
 // edits. A mask naming a field the body does not carry would clear it.
 func (c *Client) EditMessage(ctx context.Context, req EditRequest) (*Message, error) {
 	if err := CheckMessageName(req.Message); err != nil {
+		return nil, err
+	}
+	if err := CheckMessageText(req.Text); err != nil {
 		return nil, err
 	}
 

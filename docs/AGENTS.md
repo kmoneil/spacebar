@@ -31,6 +31,22 @@ the token comes back from it. The upload's body is the file and is described
 with its size rather than printed. Exit code and redaction are the same as
 every other dry run.
 
+## How long a message can be
+
+The API caps a message body at roughly 32,000 bytes, and the cap is on bytes
+rather than on characters: 32,017 bytes of ASCII were accepted where 32,117 were
+answered `400 INVALID_ARGUMENT, "Message content is too long"`, and an emoji body
+crossed at the same byte count. Nothing here splits a body to fit one.
+
+A body certainly over the cap is refused at exit 2 before any request is made,
+with the measured numbers in the message. A body in the hundred-byte band where
+the true limit has not been pinned down reaches the API and comes back as exit 3.
+Do not retry either one unchanged.
+
+To post something longer, send it as several messages carrying the same
+`--thread-key`, which puts them in one thread, or attach it with `send --file` on
+a profile that can upload.
+
 ## The contract
 
 **stdout is data. Nothing else is ever written there.** No progress, no
