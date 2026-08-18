@@ -491,6 +491,29 @@ type searchMessagesOut struct {
 	// somebody remembered to sync.
 	Searched []string `json:"searched"`
 
+	// Skipped is what the index holds and will not answer with, one line per
+	// file, and it is here for the same reason Searched is.
+	//
+	// internal/store refuses a record whose space disagrees with the file it
+	// was read from, because a record read from the wrong file would answer for
+	// a space it was never in. It says so rather than skipping silently, and
+	// the CLI prints those lines to stderr. Nothing carried them here, so a
+	// search over an index with a copied or restored file answered narrowly and
+	// said nothing about it: the failure the truncation rule exists to prevent,
+	// arriving at the one consumer that will act on the answer and report it to
+	// a person as fact.
+	//
+	// In the result rather than only on the audit stream, because stderr is
+	// invisible to a model and the model is who acts on this.
+	//
+	// It describes the local index rather than this query. The warnings are
+	// what the index has accumulated for the life of the server, deduplicated,
+	// so a file this particular search did not read can still appear here. That
+	// is why the schema says "this machine's index" and not "your results":
+	// under-reporting is the failure being fixed, and a line that turns out to
+	// be about another file costs a model nothing but a sentence it can check.
+	Skipped []string `json:"skipped,omitempty" jsonschema:"records this machine's index holds but will not answer with, one line per file; a file that holds records belonging to another space has been copied, restored, or edited, and those records are excluded from every search"`
+
 	HasMore bool `json:"has_more,omitempty" jsonschema:"true when more messages match than the limit returned"`
 }
 
@@ -548,6 +571,11 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 	if err != nil {
 		return nil, searchMessagesOut{}, err
 	}
+
+	// After the search rather than before it, because the index cannot know it
+	// skipped anything until it has read the files. Same ordering the CLI uses
+	// for the same reason. See searchMessagesOut.Skipped.
+	out.Skipped = s.index.Warnings()
 	return nil, out, nil
 }
 

@@ -61,6 +61,19 @@ what a user-authorized one copied down. Its results carry `searched`, the list
 of spaces the index actually holds, because an answer over an index is bounded
 by what somebody remembered to sync.
 
+They also carry `skipped` when there is anything to say. The index refuses a
+record whose space disagrees with the file it was read from, because a record
+read from the wrong file would answer for a space it was never in. Nothing
+`spacebar` writes produces one, so a file that has them was copied, restored, or
+edited by hand. Those records are excluded from every search, and `skipped` is
+one line per file saying so, because an index is the only copy of a message that
+no longer exists anywhere else and one it holds and will not return is worth a
+sentence. The field is absent when nothing was skipped.
+
+It describes the index rather than your query: a file an earlier search read can
+still appear in a later one scoped elsewhere. Read it as "this machine's index
+has records it will not answer with", not as "your results were cut".
+
 **A tool this profile cannot serve is not registered at all.** It is not
 registered-and-failing: it is absent from the tool list and absent from the
 dispatch. So the tool list is the honest answer to what is possible right now,
