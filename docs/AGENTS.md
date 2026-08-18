@@ -31,6 +31,17 @@ the token comes back from it. The upload's body is the file and is described
 with its size rather than printed. Exit code and redaction are the same as
 every other dry run.
 
+An uploaded file is declared as whatever its first bytes sniff as, not as
+whatever its name ends in, and that value becomes the attachment's
+`content_type`. Two consequences are worth knowing before you drive this in a
+loop. A file whose bytes nothing recognises is sent as
+`application/octet-stream`, exactly as every upload was before detection
+existed. And a file that **is** recognised is validated by Chat against the
+type it was given, so an upload that used to succeed as opaque bytes can come
+back `400 INVALID_ARGUMENT` naming the file extension or the quota, which are
+not the reason. Pass `--content-type application/octet-stream` to send it the
+old way.
+
 ## How long a message can be
 
 The API caps a message body at roughly 32,000 bytes, and the cap is on bytes

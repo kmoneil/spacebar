@@ -15,6 +15,7 @@
 package chat
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -107,6 +108,19 @@ type UploadRequest struct {
 	// Size is how many bytes Body will produce, for the limit check. Zero means
 	// unknown, which is allowed: the API's own refusal is the backstop.
 	Size int64
+
+	// ContentType is what the file will be declared as. Empty means detect it
+	// from the bytes, which is the same shape Size uses for "unknown".
+	//
+	// It matters more than it looks. Measured against a real space on
+	// 2026-08-18: the attachment's contentType is this value echoed back, so a
+	// file declared application/octet-stream is stored as opaque bytes and
+	// rendered as a generic file card however plainly it is an image. Every
+	// upload this tool made said exactly that for four milestones.
+	//
+	// A caller sets it to override the detection, and the reason that escape
+	// hatch exists is in multipartBody.
+	ContentType string
 }
 
 // Upload sends a file's bytes and returns the handle a message attaches by
@@ -163,6 +177,14 @@ func multipartBody(req UploadRequest) ([]byte, string, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
+	// Buffered so the first bytes can be read for detection and still be sent.
+	// Peek does not consume, so the copy below is the whole file either way.
+	body := bufio.NewReader(req.Body)
+	contentType := req.ContentType
+	if contentType == "" {
+		contentType = detectContentType(body)
+	}
+
 	metadata, err := json.Marshal(map[string]string{
 		"filename": filepath.Base(req.Filename),
 	})
@@ -181,12 +203,12 @@ func multipartBody(req UploadRequest) ([]byte, string, error) {
 	}
 
 	media, err := writer.CreatePart(textproto.MIMEHeader{
-		"Content-Type": {"application/octet-stream"},
+		"Content-Type": {contentType},
 	})
 	if err != nil {
 		return nil, "", err
 	}
-	if _, err := io.Copy(media, req.Body); err != nil {
+	if _, err := io.Copy(media, body); err != nil {
 		return nil, "", clientErr("the file could not be read: %v", err)
 	}
 	if err := writer.Close(); err != nil {
@@ -196,6 +218,45 @@ func multipartBody(req UploadRequest) ([]byte, string, error) {
 	// Related rather than form-data. The parts are two representations of one
 	// thing, which is what related means, and the endpoint refuses form-data.
 	return buf.Bytes(), "multipart/related; boundary=" + writer.Boundary(), nil
+}
+
+// detectContentType names the bytes about to be sent.
+//
+// From the bytes and deliberately not from the filename extension, which is
+// the fix that suggests itself and is the wrong one twice over.
+//
+// mime.TypeByExtension answers from the machine's own database, /etc/mime.types
+// on Unix and the registry on Windows, on top of a small built-in table. So a
+// type outside that table resolves differently depending on what is installed,
+// and this tool builds for six platforms and does not send a value that depends
+// on which one somebody is on. It also trusts the half a caller can get wrong:
+// a name is chosen and bytes are what they are.
+//
+// http.DetectContentType has neither problem. It is a pure-Go sniff table with
+// no machine state behind it, and what it returns for anything it does not
+// recognise is application/octet-stream, which is exactly what this code sent
+// for every file before this existed. So nothing that worked stops working
+// except where the bytes really are a type Chat knows.
+//
+// What it does not do is avoid a refusal, and that is worth stating because it
+// is the surprise in this change. Declaring the true type makes Chat validate
+// the bytes against it: a 1x1 GIF uploads as application/octet-stream and is
+// refused with 400 as image/gif, at 44 bytes and at 10KB alike, so it is not
+// about size. Sniffing calls that file image/gif too, correctly, because it is
+// one. UploadRequest.ContentType is the way through, and the 400 names the
+// extension and the quota, neither of which is the reason.
+func detectContentType(body *bufio.Reader) string {
+	const sniffLen = 512
+
+	// Peek returns what it has along with io.EOF when the file is shorter than
+	// the sniff window, and a short file is still worth sniffing. The error is
+	// dropped rather than checked for that reason: a read failure here shows up
+	// again on the copy, which is where it can be reported against the file.
+	head, _ := body.Peek(sniffLen)
+	if len(head) == 0 {
+		return "application/octet-stream"
+	}
+	return http.DetectContentType(head)
 }
 
 // Download fetches an attachment's bytes.

@@ -261,6 +261,19 @@ without making it. The upload's body is the file, so it is described with its
 exact size rather than printed: an attachment may be 200MB and printing it is
 not showing a request.
 
+The file is declared as what its bytes are, sniffed rather than taken from the
+filename extension. That is what the API records as the attachment's content
+type and what decides whether Chat shows an image or a generic file card. It is
+sniffed because the extension is the half a caller can get wrong, and because
+resolving one against the machine's own mime database would give the same file
+a different answer on different platforms.
+
+Declaring the true type makes Chat validate the bytes against it, which is a
+real cost and not a theoretical one: a 1x1 GIF uploads as
+`application/octet-stream` and is refused as `image/gif`, with a 400 that
+blames the file extension or the quota and means neither. `--content-type`
+overrides the detection when you hit one.
+
 A flag this profile cannot honour fails before the network call, naming the
 capability and the profile rather than pretending the flag does not exist:
 

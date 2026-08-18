@@ -63,6 +63,9 @@ type sendFlags struct {
 	replyTo string
 	file    string
 
+	// contentType overrides what --file's bytes are declared as.
+	contentType string
+
 	// refresh busts the resolver's cached space list for this one invocation.
 	refresh bool
 }
@@ -149,6 +152,8 @@ again.`,
 	// A registered one is exit 5 naming the capability and the profile, which
 	// says this profile cannot, and that is both true and actionable.
 	f.StringVar(&flags.file, "file", "", "attach a file (requires a profile that can upload)")
+	f.StringVar(&flags.contentType, "content-type", "",
+		"declare --file as this media type instead of detecting it from its bytes")
 	f.StringVar(&flags.replyTo, "reply-to", "", "reply to a message by name (requires a profile that can read)")
 	addRefreshFlag(cmd, &flags.refresh)
 
@@ -232,7 +237,7 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 	// message can carry. A failure here means nothing was posted, which is the
 	// right order for it: an attachment that failed to upload should not become
 	// a message with the text and no file.
-	token, err := uploadAttachment(cmd, r, opened, target, flags.file)
+	token, err := uploadAttachment(cmd, r, opened, target, flags.file, flags.contentType)
 	if dry, ok := errors.AsType[*chat.DryRun](err); ok {
 		return dryRunUpload(r, opened, dry)
 	}
@@ -503,7 +508,9 @@ func verboseLog(opts *Options, r *output.Renderer) chat.Logger {
 // The file is opened before the upload and its size is taken from the handle
 // rather than from a second stat, so the number checked against the limit is
 // the number that will be read.
-func uploadAttachment(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, space, path string) (string, error) {
+func uploadAttachment(cmd *cobra.Command, r *output.Renderer, opened *profile.Open,
+	space, path, contentType string,
+) (string, error) {
 	if path == "" {
 		return "", nil
 	}
@@ -523,10 +530,11 @@ func uploadAttachment(cmd *cobra.Command, r *output.Renderer, opened *profile.Op
 	}
 
 	ref, err := opened.Transport.Upload(cmd.Context(), chat.UploadRequest{
-		Space:    space,
-		Filename: filepath.Base(path),
-		Body:     file,
-		Size:     info.Size(),
+		Space:       space,
+		Filename:    filepath.Base(path),
+		Body:        file,
+		Size:        info.Size(),
+		ContentType: contentType,
 	})
 	if err != nil {
 		return "", err
