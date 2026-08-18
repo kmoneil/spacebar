@@ -17,7 +17,10 @@ package output
 import (
 	"bytes"
 	"encoding/json"
+	"io"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -392,4 +395,110 @@ func TestBlockAddsNoSecondNewlineInJSONMode(t *testing.T) {
 	if strings.Count(out.String(), "deploy done") != 1 {
 		t.Errorf("the body appears more than once, so the text half leaked into JSON mode:\n%q", out.String())
 	}
+}
+
+// TestConcurrentWritersProduceWholeLines.
+//
+// SPEC.md §14.2 promises the MCP audit trail is one JSON object per line, and
+// calls it a security control rather than a courtesy. The MCP server serves
+// tool calls concurrently, so that promise is made by two goroutines sharing
+// one Renderer: the audit line for one call and the --verbose log of another.
+//
+// This was already safe in production, and the reason is why it is worth a
+// test. Renderer takes an io.Writer, the command hands it os.Stderr, and
+// internal/poll holds a per-descriptor lock across a whole write. Concurrent
+// writes to a *os.File therefore cannot interleave, and trying to make one
+// interleave, with 60KB lines and a reader slow enough to fill the pipe, does
+// not work.
+//
+// None of which is a property of this type. It is a property of the writer it
+// happens to be given, undocumented where it was relied on, and gone the moment
+// somebody wraps stderr. So the writer here is a bytes.Buffer, which has no
+// lock of its own: this fails under -race without the mutex, and asserts the
+// promise rather than the accident.
+func TestConcurrentWritersProduceWholeLines(t *testing.T) {
+	var errw safeBuffer
+	r := NewRenderer(io.Discard, &errw, Options{})
+
+	// Long enough to be split by any writer that can be, which is the shape
+	// that corrupts a neighbouring line rather than merely reordering it.
+	long := strings.Repeat("x", 6000)
+
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r.Logf("< %s", long)
+		}()
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			line, err := json.Marshal(map[string]any{"tool": "send_message", "ok": true, "n": i})
+			if err != nil {
+				t.Errorf("Marshal: %v", err)
+				return
+			}
+			r.Audit(string(line))
+		}()
+	}
+	wg.Wait()
+
+	audit := 0
+	for _, line := range strings.Split(strings.TrimRight(errw.String(), "\n"), "\n") {
+		if !strings.Contains(line, `"tool"`) {
+			continue
+		}
+		audit++
+
+		// The claim: an audit line is one whole JSON object, with nothing
+		// spliced into it and nothing of it spliced into anything else.
+		var got map[string]any
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Fatalf("an audit line is not one JSON object (%d bytes):\n%.200s", len(line), line)
+		}
+	}
+	if audit != 40 {
+		t.Errorf("found %d audit lines, want 40", audit)
+	}
+}
+
+// safeBuffer is a bytes.Buffer with a lock of its own, so that the test asserts
+// the Renderer's synchronisation rather than crashing on the buffer's absence
+// of any. Without it the race detector reports the buffer rather than the thing
+// under test, which is a true report about the wrong subject.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf strings.Builder
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	// Written in two halves, with the lock released between them. A writer is
+	// allowed to do this and several do: a bufio.Writer flushing mid-line, a
+	// network writer, anything wrapping stderr. The gap is the whole point,
+	// because it is where another goroutine's line lands when nothing above is
+	// holding it off. Each half is locked on its own, so the buffer itself is
+	// race-free and the race detector reports the subject rather than the prop.
+	if len(p) > 1 {
+		half := len(p) / 2
+		b.append(p[:half])
+		runtime.Gosched()
+		b.append(p[half:])
+		return len(p), nil
+	}
+	b.append(p)
+	return len(p), nil
+}
+
+func (b *safeBuffer) append(p []byte) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, _ = b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

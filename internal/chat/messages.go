@@ -92,6 +92,13 @@ type SendRequest struct {
 
 // SendMessage posts a message (SPEC.md §7.3).
 func (c *Client) SendMessage(ctx context.Context, req SendRequest) (*Message, error) {
+	if err := CheckSendTarget(req.Space); err != nil {
+		return nil, err
+	}
+	if err := CheckMessageID(req.MessageID); err != nil {
+		return nil, err
+	}
+
 	query := url.Values{}
 	setIf(query, "messageReplyOption", replyOption(req))
 	setIf(query, "messageId", req.MessageID)
@@ -172,16 +179,67 @@ func replyOption(req SendRequest) string {
 	return ""
 }
 
-// messagesPath is where a send goes.
+// CheckSendTarget refuses a space a send cannot go to.
 //
-// An empty space is the webhook case and is not an omission: the webhook URL is
-// already the full messages endpoint for exactly one space, so there is no path
-// to add and nowhere else the request could go. Refusing to guess is the point.
+// Empty is allowed, and only here. It is the webhook case and is not an
+// omission: a webhook URL is already the full messages endpoint for exactly one
+// space, so there is no path to add and nowhere else the request could go.
+// Refusing to guess is the point.
 //
-// The strict ^spaces/[A-Za-z0-9_-]+$ check from SPEC.md §15.8 lands with
-// Milestone 3, where target resolution produces the value. What holds until
-// then is checkRelative, which resolve runs over this and which refuses the
-// shapes that could move the request to another host or another path.
+// Anything else is a space name, checked by the same function every other
+// method in this package uses. That was not true until now, and the reason it
+// was not is a comment that outlived its milestone: this said the strict check
+// "lands with Milestone 3, where target resolution produces the value. What
+// holds until then is checkRelative". Milestone 3 landed, and so did four more.
+//
+// Nothing was reachable through the gap. `useroauth.Send` checks the space
+// before calling and `webhook.Send` clears it, so both callers were covered.
+// But every other write in this package checks its own resource name, and this
+// was the one leaning on the layer below it and on its callers remembering,
+// which is the arrangement this repository refuses three other times in these
+// same files: a first layer that needs the layer below it to be safe is not a
+// first layer.
+func CheckSendTarget(space string) error {
+	if space == "" {
+		return nil
+	}
+	return CheckSpaceName(space)
+}
+
+// CheckMessageID refuses a caller-chosen message name the API will not take.
+//
+// Here rather than in an adapter, which is the whole of why it moved. The CLI
+// refused an ID without the prefix and the MCP tool did not, so the same value
+// was a usage error through one adapter and a 400 through the other, and
+// SPEC.md §4 says neither adapter is where a decision gets made.
+//
+// The CLI still checks first and its message is better, because it can name the
+// flag that carries the value. That is not a duplicate for the same reason
+// `transport.Require` is not a duplicate of a transport's own refusal: one
+// produces the better sentence and the other holds when a caller forgets.
+//
+// Only the prefix, and nothing about length or alphabet. The prefix is
+// measured: the API refuses an ID without it with a message that does not
+// mention it, which is why the constant exists. Whatever else the API requires
+// of the rest has not been measured here, and a validator invented from a
+// reference is how a tool refuses a value that would have worked.
+//
+// Empty is allowed and means the caller wants none, which is also what makes a
+// send non-idempotent. That pairing is the reason this check is worth having at
+// all: a message ID is what marks a POST safe to replay, so an ID the API will
+// reject is a request marked replayable on the strength of a value that was
+// never going to work.
+func CheckMessageID(id string) error {
+	if id == "" || strings.HasPrefix(id, MessageIDPrefix) {
+		return nil
+	}
+	return clientErr("a message id has to begin with %q, which the API requires of any name a caller chooses.\n"+
+		"%q does not, and the API refuses it with a message that does not mention the prefix.",
+		MessageIDPrefix, id)
+}
+
+// messagesPath is where a send goes. The space has already been through
+// CheckSendTarget.
 func messagesPath(space string) string {
 	if space == "" {
 		return ""

@@ -50,21 +50,3 @@ func UseColor(f *os.File, noColorFlag bool) bool {
 	}
 	return IsTTY(f)
 }
-
-// CanPrompt reports whether this process could ask its caller a question.
-//
-// SPEC.md §11.3 makes this a hard rule: never enter an interactive mode when
-// stdin is not a terminal. A CLI that blocks on a prompt inside a pipeline
-// hangs whatever is driving it, and a hung agent is strictly worse than a
-// failed one: a failure gets reported, a hang gets a timeout somebody has to
-// go and find. A caller that needs confirmation and cannot ask for it exits
-// ExitRefused instead.
-//
-// This is the process-wide answer and is deliberately not what Confirm uses.
-// A command reads from the stream it was given, which is os.Stdin in
-// production and something else under test, so the rule is applied to that
-// stream by Interactive. Both go through the same check, so the two cannot
-// drift into disagreeing about what a terminal is.
-func CanPrompt() bool {
-	return Interactive(os.Stdin)
-}

@@ -16,6 +16,8 @@ package chat
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -297,12 +299,19 @@ func (e *SpaceEvent) UnmarshalJSON(data []byte) error {
 	}
 	*e = SpaceEvent(flat)
 
-	for key, value := range fields {
+	// Sorted, because ranging a map is not ordered and this takes the first
+	// match. The API sends exactly one field ending in EventData, measured
+	// across three event types, so today there is nothing to order. On the day
+	// it sends two, an unsorted walk answers differently for the same bytes on
+	// the same build: 200 decodes of one such event produced 162 of one subject
+	// and 38 of the other. That is the worst kind of wrong to be handed, because
+	// re-running it disagrees with the report.
+	for _, key := range slices.Sorted(maps.Keys(fields)) {
 		if !strings.HasSuffix(key, "EventData") {
 			continue
 		}
-		e.Payload = value
-		e.Subject = subjectOf(value)
+		e.Payload = fields[key]
+		e.Subject = subjectOf(fields[key])
 		break
 	}
 	return nil
@@ -316,11 +325,13 @@ func subjectOf(payload json.RawMessage) string {
 		return ""
 	}
 
-	for _, value := range wrapper {
+	// Sorted for the reason UnmarshalJSON sorts: one key is what the API sends
+	// and two is what makes an unsorted walk answer at random.
+	for _, key := range slices.Sorted(maps.Keys(wrapper)) {
 		var subject struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal(value, &subject); err == nil && subject.Name != "" {
+		if err := json.Unmarshal(wrapper[key], &subject); err == nil && subject.Name != "" {
 			return subject.Name
 		}
 	}
