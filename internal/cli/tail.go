@@ -53,7 +53,8 @@ Google Chat offers no socket, so this polls. The interval floor is 2s and a
 smaller one is refused rather than rounded up: per-space quota is shared with
 every other app acting in that space, so a tight loop degrades the space for
 everybody in it. After five polls with nothing new the interval doubles, up to
-a minute, and any message resets it.
+a minute, and any message resets it. It never goes below what you asked for, so
+--interval 5m stays at five minutes however quiet the space is.
 
 Ctrl-C exits 0. It is how this command is meant to end, so it is not a failure.
 
@@ -115,7 +116,7 @@ message posted at exactly that moment is not replayed. It cannot be given with
 	}
 
 	f := cmd.Flags()
-	f.DurationVar(&interval, "interval", 0, "how often to poll, at least 2s")
+	f.DurationVar(&interval, "interval", 0, intervalHelp)
 	f.IntVar(&backfill, "backfill", 0, "print this many existing messages before following")
 	f.StringVar(&since, "since", "", sinceHelp)
 	addRefreshFlag(cmd, &refresh)

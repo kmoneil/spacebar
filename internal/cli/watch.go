@@ -68,6 +68,12 @@ The interval floor is 2s and a smaller one is refused rather than rounded up,
 for the reason it is on tail: per-space quota is shared with every other app
 acting in that space.
 
+After five polls with nothing new a space is polled less often, doubling up to
+a minute, or staying where it is if you asked for less often than that. Any
+event resets it. With --all that is per space, so one busy space does not hold
+thirty quiet ones at the base interval, and a space that has been silent all
+night still answers within a minute of somebody speaking.
+
 --all watches every space this profile can reach, instead of one named space.
 Two things about it are worth knowing before you leave it running.
 
@@ -135,7 +141,7 @@ refusal is a 404 that mentions neither, and this tool explains it.`,
 	}
 
 	f := cmd.Flags()
-	f.DurationVar(&interval, "interval", 0, "how often to poll, at least 2s")
+	f.DurationVar(&interval, "interval", 0, intervalHelp)
 	f.StringVar(&events, "events", chat.DefaultEventGroups,
 		"which events to ask for: any of message, reaction, membership, space")
 	f.StringVar(&since, "since", "", watchSinceHelp)
