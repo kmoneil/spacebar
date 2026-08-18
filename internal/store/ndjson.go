@@ -361,8 +361,44 @@ func (s *NDJSON) resolve(ctx context.Context, q Query) ([]rows.Message, error) {
 			found = append(found, r.Message)
 		}
 	}
+	// Create time first, and the resource name to break a tie, which makes this
+	// a total order rather than an almost-total one.
+	//
+	// Without the second clause this was not deterministic, and the reason is
+	// two steps away from the sort. found is built by ranging latest, which is
+	// a map, so the runtime randomizes the order the records arrive in; then
+	// sort.Slice is not stable and a comparator that answers false in both
+	// directions leaves tied records wherever the map put them. Measured: six
+	// records sharing a createTime came back in six different orders over fifty
+	// runs, and four records in four orders over forty. Those are the numbers
+	// TestASearchOrdersTiedCreateTimesTheSameWayEveryRun is sized against.
+	//
+	// That is worse than untidy. --limit cuts the sorted list, so with more
+	// ties than the limit at the boundary, two runs of one query over an
+	// unchanged index return different messages rather than the same messages
+	// in a different order. The output shape is a public API here and the
+	// golden files record it, so an order nothing can pin is a contract nobody
+	// can hold.
+	//
+	// Ties are ordinary rather than exotic. createTime has microsecond
+	// resolution, and this index also holds files that were restored, copied
+	// between machines, or written by a bulk import, which is the same
+	// provenance the foreign-record check exists for.
+	//
+	// The name is the tiebreaker because latest is keyed by it, so exactly one
+	// record carries each one and the pair can never tie. Descending, to match
+	// the direction of the key it is breaking a tie in; the direction is
+	// otherwise arbitrary, because a message id is opaque and says nothing
+	// about time.
+	//
+	// sort.SliceStable instead would not fix this. It would make the sort
+	// stable with respect to an input order that is itself randomized.
 	sort.Slice(found, func(i, j int) bool {
-		return when[found[i].Name].After(when[found[j].Name])
+		at, other := when[found[i].Name], when[found[j].Name]
+		if at.Equal(other) {
+			return found[i].Name > found[j].Name
+		}
+		return at.After(other)
 	})
 	return found, nil
 }

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -677,4 +678,102 @@ func TestASkippedRecordIsSaidOutLoud(t *testing.T) {
 	if again := index.Warnings(); len(again) != 1 {
 		t.Errorf("a second search repeated the warning: %v", again)
 	}
+}
+
+// TestASearchOrdersTiedCreateTimesTheSameWayEveryRun.
+//
+// Two runs of one query over an index nothing has touched have to answer the
+// same way. That was not true, and the reason was two steps away from the sort:
+// resolve builds its result by ranging a map, so the runtime hands the records
+// over in a different order every time, and sort.Slice is not stable, so
+// records sharing a createTime stayed wherever the map put them. Six of them
+// came back in six different orders.
+//
+// The sharp end of it is --limit, which cuts the sorted list. With more ties
+// than the limit at the boundary, two runs return different messages rather
+// than the same messages in a different order, and the second half of this test
+// is that claim.
+//
+// The order asserted is the whole order rather than a property of it, because
+// the output shape is a public contract here: create time descending, and the
+// resource name descending to break a tie.
+func TestASearchOrdersTiedCreateTimesTheSameWayEveryRun(t *testing.T) {
+	dir := t.TempDir()
+	index := NewNDJSON(dir)
+
+	// Every one at the same instant, appended in ascending name order so that
+	// the answer is the reverse of the order they went in. A sort that kept the
+	// order it was handed would produce the other one.
+	var tied []rows.Message
+	for _, id := range []string{"AAA", "BBB", "CCC", "DDD", "EEE", "FFF"} {
+		tied = append(tied, rows.Message{
+			Name:       testSpace + "/messages/" + id,
+			CreateTime: at(0),
+			Text:       "deploy " + id,
+		})
+	}
+	if err := index.Append(context.Background(), testSpace, tied); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	want := []string{"FFF", "EEE", "DDD", "CCC", "BBB", "AAA"}
+
+	// Fifty runs rather than two. One run of a randomized order agrees with the
+	// expected one often enough to pass by luck; fifty do not.
+	const runs = 50
+	for run := range runs {
+		if got := ids(t, collect(t, index, Query{Text: "deploy"})); !slices.Equal(got, want) {
+			t.Fatalf("run %d ordered a tied search %v, want %v", run, got, want)
+		}
+	}
+
+	// The half that loses messages rather than reordering them.
+	wantLimited := want[:2]
+	for run := range runs {
+		got := ids(t, collect(t, index, Query{Text: "deploy", Limit: 2}))
+		if !slices.Equal(got, wantLimited) {
+			t.Fatalf("run %d of a limited search over tied times returned %v, want %v", run, got, wantLimited)
+		}
+	}
+}
+
+// TestACreateTimeStillDecidesTheOrderBeforeTheName.
+//
+// The tiebreaker is a tiebreaker and not a second sort key. A newer message
+// comes first however its name sorts, which is the half of the ordering that
+// was always right and which a tiebreaker written into the wrong branch would
+// silently take away.
+func TestACreateTimeStillDecidesTheOrderBeforeTheName(t *testing.T) {
+	dir := t.TempDir()
+	index := NewNDJSON(dir)
+
+	// The newer message has the name that sorts lower, so name-descending on
+	// its own would put them the other way round.
+	if err := index.Append(context.Background(), testSpace, []rows.Message{
+		{Name: testSpace + "/messages/ZZZ", CreateTime: at(0), Text: "deploy older"},
+		{Name: testSpace + "/messages/AAA", CreateTime: at(5), Text: "deploy newer"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	want := []string{"AAA", "ZZZ"}
+	if got := ids(t, collect(t, index, Query{Text: "deploy"})); !slices.Equal(got, want) {
+		t.Errorf("got %v, want the newer message first: %v", got, want)
+	}
+}
+
+// ids is the message id of each result, which is the readable half of a
+// resource name and all these ordering tests are about.
+func ids(t *testing.T, found []rows.Message) []string {
+	t.Helper()
+
+	out := make([]string, 0, len(found))
+	for _, m := range found {
+		_, id, ok := strings.Cut(m.Name, "/messages/")
+		if !ok {
+			t.Fatalf("%q is not a message resource name", m.Name)
+		}
+		out = append(out, id)
+	}
+	return out
 }

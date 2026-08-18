@@ -1254,6 +1254,22 @@ answer with is worth a sentence rather than a silence.
 than printing them, for the reason `internal/auth` does: only `internal/output`
 writes to a process stream.
 
+**A search answers in the same order every time.** Create time descending, and
+the resource name descending to break a tie, which makes it a total order.
+Without the second clause it was not deterministic: results are collected by
+ranging a map, so the runtime randomizes the order they arrive in, and
+`sort.Slice` is not stable, so records sharing a `createTime` stayed wherever
+the map put them. Six of them came back in six different orders.
+
+That is a truncation claim too, not a tidiness one. `--limit` cuts the sorted
+list, so with more ties than the limit at the boundary two runs of one query over
+an unchanged index return *different messages*, not the same messages
+rearranged. The output shape is a public API and the golden files record it, so
+an order nothing can pin is a contract nobody can hold.
+`TestASearchOrdersTiedCreateTimesTheSameWayEveryRun`, and
+`TestACreateTimeStillDecidesTheOrderBeforeTheName` so that the tiebreaker stays
+a tiebreaker rather than becoming a second sort key.
+
 ## Supply chain
 
 - **One direct dependency today**, four more permitted by SPEC.md §3.1 and no
