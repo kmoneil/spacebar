@@ -83,6 +83,12 @@ type Open struct {
 	// only: internal/resolve substitutes from it and checks what comes out,
 	// because config.json is a file somebody may have been handed.
 	Aliases map[string]string
+
+	// Profiles is every configured profile name, carried for the same reason
+	// and used for one thing: internal/resolve explains a target that named a
+	// profile rather than answering it with "no space is called that". Nothing
+	// resolves against it. See resolve.Options.Profiles for why not.
+	Profiles []string
 }
 
 // For resolves the active profile and opens its transport.
@@ -106,14 +112,20 @@ func For(opts Options) (*Open, error) {
 
 	store, err := auth.New()
 	if err != nil {
-		return &Open{Name: name}, err
+		return &Open{Name: name, Profiles: cfg.Names()}, err
 	}
 
 	built, err := open(name, profile, store, opts)
 	if err != nil {
-		return &Open{Name: name, Warnings: store.Warnings()}, err
+		return &Open{Name: name, Warnings: store.Warnings(), Profiles: cfg.Names()}, err
 	}
-	return &Open{Transport: built, Name: name, Warnings: store.Warnings(), Aliases: profile.Aliases}, nil
+	return &Open{
+		Transport: built,
+		Name:      name,
+		Warnings:  store.Warnings(),
+		Aliases:   profile.Aliases,
+		Profiles:  cfg.Names(),
+	}, nil
 }
 
 func open(name string, profile config.Profile, store *auth.Store, opts Options) (transport.Transport, error) {
@@ -237,8 +249,9 @@ func (o *Open) Resolve(ctx context.Context, target string, refresh bool) (string
 	}
 
 	return resolve.Resolve(ctx, reader, target, resolve.Options{
-		Aliases: o.Aliases,
-		Cache:   resolve.NewCache(o.Name),
-		Refresh: refresh,
+		Aliases:  o.Aliases,
+		Cache:    resolve.NewCache(o.Name),
+		Refresh:  refresh,
+		Profiles: o.Profiles,
 	})
 }
