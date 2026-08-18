@@ -18,7 +18,13 @@ updates:
     labels:
       - dependencies
 
-  # The workflows pin actions by major version, so this is what moves them.
+  # The workflows pin actions by commit SHA, so this is what moves them, and it
+  # rewrites the trailing version comment along with the ref. That comment is
+  # load-bearing for the same reason: without it a pin is forty hex digits and
+  # nobody can tell a current one from a two-year-old one.
+  # internal/lint/actionpin_test.go refuses a tag and refuses a SHA with no
+  # comment, so neither can come back by hand.
+  #
   # Kept separate from gomod on purpose: an action bump changes what CI does,
   # a module bump changes what ships, and reviewing them together invites
   # waving through the half you did not read.
@@ -34,10 +40,17 @@ updates:
       - dependencies
       - ci
     # Grouped, unlike gomod above, and for the reason gomod is not: these move
-    # together. The first run opened four pull requests for four actions that
-    # do the same thing in the same file, and merging any one of them made the
-    # other three out of date, because the ruleset requires a branch to be
-    # current before it merges. Four rebases to change four version numbers.
+    # together. Seven actions across three workflow files, and the ruleset
+    # requires a branch to be current before it merges, so ungrouped the first
+    # merge leaves the rest behind and every rebase re-runs six checks to
+    # change one ref.
+    #
+    # That is the reason and not a report. This comment was written with the
+    # config on 2026-08-14, before Dependabot had ever run, and no action bump
+    # has been produced since, because every pin is at its latest major. So the
+    # grouping has never been exercised. An earlier version of this said the
+    # four pull requests had happened; they had not, and the pull request list
+    # says so.
     #
     # A module bump changes what ships and deserves its own review; an action
     # bump changes what CI does, and CI either runs or it does not.

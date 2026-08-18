@@ -120,6 +120,13 @@ from looking.
   together. See `internal/lint/goversion_test.go` for what breaks otherwise,
   which includes the licence gate failing with an error that mentions none of
   this.
+- **A workflow step pinned to a tag rather than to a commit.** A tag is a
+  mutable ref, so `actions/checkout@v7` is whatever that name points at on the
+  morning CI runs, and whoever can move it chooses what executes with this
+  repository's token. `internal/lint/actionpin_test.go` requires the
+  forty-character commit and the trailing `# vX.Y.Z` comment saying which
+  release it was, which is also what Dependabot reads and rewrites when it
+  moves one.
 
 ## Adding a dependency
 

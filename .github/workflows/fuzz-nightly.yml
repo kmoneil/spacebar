@@ -47,8 +47,8 @@ jobs:
       packages: ${{ steps.list.outputs.packages }}
       any: ${{ steps.list.outputs.any }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
       # Discovered rather than listed, and by the Makefile rather than here, so
@@ -88,8 +88,8 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.packages.outputs.packages) }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
       # Go keeps the generated corpus in $GOCACHE/fuzz. Without this, every run
@@ -100,7 +100,7 @@ jobs:
         id: gocache
         run: echo "dir=$(go env GOCACHE)/fuzz" >> "$GITHUB_OUTPUT"
       - name: restore the fuzz corpus
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gocache.outputs.dir }}
           # Keyed per package, because each job only ever fuzzes one and a
@@ -127,7 +127,7 @@ jobs:
       # runner: an artifact, and an issue that says where to find it.
       - name: upload the crasher
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: crasher-${{ strategy.job-index }}
           path: ${{ matrix.package }}/testdata/fuzz/
