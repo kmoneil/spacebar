@@ -67,7 +67,26 @@ function taking a flag would be a call site away from checking a message
 against the space rule.
 
 Held on every path a name reaches today: the space a webhook URL names, a
-target given on the command line, and each of the five read endpoints.
+target given on the command line, each of the five read endpoints, **and the
+send**, which was the one leaning on the layer below it.
+`chat.SendMessage` checked no name of its own, on the strength of a comment
+saying the strict check "lands with Milestone 3"; Milestone 3 landed, and so did
+four more. Nothing was reachable through it, because `useroauth.Send` checks
+before calling and `webhook.Send` clears the space, but every other write in
+that package checks the name it is about to put in a path and this one relied on
+its callers remembering. `TestSendChecksItsOwnSpaceName` and
+`TestASendRefusesABadSpaceWithoutAskingTheAPI`, the second of which counts
+requests and uses a value the relative-path rule does **not** catch: the obvious
+`spaces/../../etc` was already refused at the join, so a test using it passes on
+the broken build and says the wrong thing about why.
+
+A caller-chosen message id is checked in the same place and for the reason
+SPEC.md §4 gives. The CLI refused one without the `client-` prefix and the MCP
+tool did not, so the same value was a usage error through one adapter and a 400
+through the other. It is more than a better message: an id is what marks a POST
+safe to replay, so one the API will reject is a request marked replayable on the
+strength of a value that was never going to work.
+`TestAMessageIDTheAPIWillNotTakeIsRefusedHereRatherThanThere`.
 `TestABadURLIsRefusedAtConstruction`, `TestARubbishTargetIsRefusedAsOne`,
 `TestAReadRefusesABadSpaceNameWithoutAskingTheAPI`,
 `TestASpaceNameIsCheckedAgainstWhatWouldChangeTheRequest`, and
@@ -338,6 +357,27 @@ it is pasted rather than as a `400` about an API key days later.
   Deleting the token stops this machine using the authorization. Ending the
   authorization is done from the account's security settings, and that is the
   thing to do if a machine is lost rather than retired. Both commands say so.
+- **A webhook URL on an unexpected host is stored, used, and said out loud.**
+  `TestAWebhookOnAnotherHostIsStoredAndSaidOutLoud`,
+  `TestAWebhookOnTheExpectedHostSaysNothing`.
+
+  `CheckWebhookURL` is deliberately loose about the host, and that reasoning
+  stands: Google may change it, and a validator refusing a URL the API would
+  have accepted cannot be fixed from the user's side. So nothing is refused.
+
+  What was missing is the other half. Once the URL is stored, nothing showed the
+  operator where their messages go. The space is read out of the URL's own path,
+  a send reports that as the destination because the URL is the fact rather than
+  the response, and `profile list` prints a name, a transport and whether a
+  credential is recorded. A URL pasted from the wrong place therefore posts
+  every message to somebody else's host while every line this tool prints reads
+  exactly as expected, and the only command that would show them is `--dry-run`,
+  which they have no reason to run because nothing looks wrong.
+
+  So `profile set-webhook` warns once, at the paste, naming the host and not the
+  rest of the URL, which is a credential. Once, because a line on every send is
+  one people learn to scroll past, and at the paste because that is the moment
+  somebody still has the URL in front of them to compare.
 - **A webhook URL is a bearer credential, not a URL.** It carries `key` and
   `token` query parameters that are the entire authentication for posting to
   that space. It is redacted, stored, and refused on the command line exactly
@@ -864,6 +904,28 @@ read. It is gated more tightly than the CLI, on purpose.
 
   It is a middleware rather than a wrapper on each handler, so a tool added
   later is logged without anybody remembering to log it.
+
+  **One line means one whole line, and that is now a property of the renderer
+  rather than of the stream it was handed.**
+  `TestConcurrentWritersProduceWholeLines`.
+
+  The MCP server serves tool calls concurrently, confirmed in the go-sdk rather
+  than assumed: its dispatch loop hands a request to a goroutine and waits, and
+  the MCP layer releases that wait for every call except `initialize`. So the
+  audit line for one call and the `--verbose` log of another are written by two
+  goroutines through one `Renderer`.
+
+  It was already safe in production, and the reason is the problem. `Renderer`
+  takes an `io.Writer`; the command hands it `os.Stderr`; `internal/poll` holds
+  a per-descriptor lock across a whole write. Concurrent writes to an
+  `*os.File` therefore cannot interleave, and trying to make one interleave,
+  with 60KB lines and a reader slow enough to fill the pipe, does not work.
+  None of that is a property of this type, none of it was written down where it
+  was relied on, and all of it is gone the moment stderr is wrapped. Against a
+  writer that can split a line, 36 of 40 audit lines were destroyed.
+
+  So the guarantee moved to the renderer, where it is held against exactly such
+  a writer rather than against the one that happens to save it.
 - **A webhook posts to one space and there is no version of it that posts
   anywhere else.** The space is derived from the URL rather than configured
   beside it, so the two cannot disagree about where a message goes, and a target
@@ -1156,7 +1218,24 @@ against. It can make requests slow or expensive, bounded by four things and
 nothing else: `--timeout`, which bounds one attempt rather than the command;
 the five-attempt limit; the 32-second cap on a backoff, which also caps how
 long a `Retry-After` will be honoured for before the loop reports instead; and
-the limit on how large a response body may be. It can serve an attachment whose
+the limit on how large a response body may be.
+
+It cannot make that cap answer the other way. `Retry-After` in delta-seconds
+became a `time.Duration` by multiplying, and a `time.Duration` is an int64 of
+nanoseconds, so the product wrapped for a large enough value. Not merely wrapped:
+1e9 is 2^9 x 5^9, so the greatest common divisor with 2^64 is 512 and the far
+end could **choose** which multiple of 512 nanoseconds the result landed on.
+`Retry-After: 20211507185753197` produced 512ns, which is positive and under the
+cap, so it was honoured exactly as sent, with no jitter, on each of the four
+retries. What that removed was the jitter, which exists so that several apps
+backing off from one burst in a space do not come back together. The value is
+bounded before the multiply now and saturates instead, which is what the
+HTTP-date form of the header already did through `time.Time.Sub`, so both forms
+answer the same way for values that mean the same thing.
+`TestParseRetryAfter` carries the crafted value and the arithmetic behind it,
+and `FuzzRetryAfterIsAlwaysSaneOrIgnored` states it over arbitrary header bytes:
+a delta-seconds header is read faithfully or saturated, never wrapped, so a
+larger number can never produce a shorter wait. It can serve an attachment whose
 *contents* are hostile;
 `spacebar` writes bytes to the path you named and never opens them.
 

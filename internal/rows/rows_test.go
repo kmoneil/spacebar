@@ -413,3 +413,26 @@ func TestAMessageRowCarriesItsAttachmentsAndNotTheirDownloadURL(t *testing.T) {
 		}
 	}
 }
+
+// TestAnAmbiguousPayloadRendersTheSameWayEveryTime is the same claim for the
+// text column, which lifts a body out of an event payload by ranging a map.
+//
+// Repeated for the reason the decode test is: once passes on the broken build.
+func TestAnAmbiguousPayloadRendersTheSameWayEveryTime(t *testing.T) {
+	payload := json.RawMessage(`{
+		"message":{"name":"spaces/AAAA/messages/AAA","text":"first"},
+		"batchMessage":{"name":"spaces/AAAA/messages/BBB","text":"second"}}`)
+
+	seen := map[string]int{}
+	for range 200 {
+		_, cells := ForEvent(chat.SpaceEvent{
+			Name:      "spaces/AAAA/spaceEvents/1",
+			EventType: "google.workspace.chat.message.v1.created",
+			Payload:   payload,
+		})
+		seen[cells[len(cells)-1]]++
+	}
+	if len(seen) != 1 {
+		t.Errorf("200 renderings of one event produced %d different text columns: %v", len(seen), seen)
+	}
+}

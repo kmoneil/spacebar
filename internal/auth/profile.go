@@ -50,6 +50,8 @@ func (s *Store) SetWebhook(cfg *config.Config, profile, rawURL string) error {
 		return err
 	}
 
+	s.warnUnexpectedHost(rawURL)
+
 	ref := Ref(profile, WebhookSecret)
 	if err := s.Set(ref, rawURL); err != nil {
 		return err
@@ -128,6 +130,60 @@ func (s *Store) RemoveProfile(cfg *config.Config, profile string) error {
 		cfg.DefaultProfile = ""
 	}
 	return failed
+}
+
+// ChatHost is where a Chat incoming webhook URL points.
+//
+// Not a rule, which is the point of it being separate from CheckWebhookURL: a
+// URL on another host is stored and used. See warnUnexpectedHost.
+const ChatHost = "chat.googleapis.com"
+
+// warnUnexpectedHost says so when a webhook URL does not point at Chat.
+//
+// A warning rather than a refusal, and the two halves of that are worth
+// separating. CheckWebhookURL is deliberately loose about the host, and its
+// reasoning is right: Google is free to change it, and a validator that refused
+// a URL the API would have accepted is unfixable from the user's side. That
+// stands, so nothing here refuses anything.
+//
+// What was missing is the other half. Once a URL is stored, nothing ever shows
+// the operator where their messages go. The space comes out of the URL's own
+// path, `spaceOf` reports that as the destination on every send because the URL
+// is the fact rather than the response, and `profile list` prints a name, a
+// transport and whether a credential is recorded. So a URL pasted from the
+// wrong place posts every message to somebody else's host while every line this
+// tool prints says `spaces/AAAA`, which is exactly what the operator expected to
+// see. The only command that would show them is `--dry-run`, which they have no
+// reason to run because nothing looks wrong.
+//
+// This fires once, when the URL is pasted, which is the moment somebody still
+// has it in front of them and can compare. A warning on every send would be a
+// line people learn to scroll past, and refusing would break the day Google
+// moves the host.
+//
+// Loopback is exempt because that is what a test server is, which is the same
+// exemption isSafeScheme makes and for the same reason.
+//
+// The URL is not quoted back, only its host. The rest of it is a credential.
+func (s *Store) warnUnexpectedHost(rawURL string) {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Hostname() == "" {
+		// Unreachable: CheckWebhookURL has already parsed this and refused a
+		// URL with no host. Kept because "unreachable" is a claim about the
+		// order two functions are called in today.
+		return
+	}
+
+	host := parsed.Hostname()
+	if host == ChatHost || IsLoopbackHost(host) {
+		return
+	}
+
+	s.warn("this webhook URL points at %s rather than %s, so messages sent through this profile "+
+		"go there.\nThat is allowed, because Google may change the host and refusing a URL the API "+
+		"would accept cannot be fixed from your side. It is worth checking now: nothing after this "+
+		"prints the host, and a URL copied from the wrong place looks exactly like one copied from "+
+		"the right place.", host, ChatHost)
 }
 
 // CheckWebhookURL reports why raw is not a Chat incoming webhook URL.
