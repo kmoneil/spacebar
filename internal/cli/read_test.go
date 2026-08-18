@@ -19,8 +19,12 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/output"
@@ -186,5 +190,81 @@ func TestAnOrdinaryFailurePassesThroughTheDryRunHandler(t *testing.T) {
 	}
 	if out.Len() != 0 {
 		t.Errorf("a failure wrote to stdout:\n%s", out.String())
+	}
+}
+
+// windowBounds says what each --since bounds, because two endpoints answer that
+// differently and one wording covered both for four milestones.
+//
+// messages.list compares createTime. spaceEvents.list compares eventTime, and
+// the two come apart on exactly the events watch exists to show: measured on
+// 2026-08-18 against a real space, a --since more than two minutes after a
+// message was created returned the event for that message's deletion. A caller
+// who reads "only messages created strictly after this", types 09:00, and is
+// handed something about a message posted at 08:00 was told the wrong thing by
+// the line they read before typing it.
+//
+// A map rather than a comparison between the strings, so that a new command
+// with a --since has to say which endpoint it polls rather than inheriting
+// whichever constant was nearest. search bounds createTime too: it reads the
+// local index, whose records are messages, and store.Query skips anything not
+// After the bound.
+var windowBounds = map[string]string{
+	"messages list": "messages created",
+	"search":        "messages created",
+	"tail":          "messages created",
+	"watch":         "events that happened",
+}
+
+// TestEveryWindowFlagSaysWhatItBounds.
+//
+// "strictly after" is asserted on all four because it is measured on both
+// endpoints rather than carried across from one: messages.list compares
+// createTime with > and answers >= with a 400, and spaceEvents.list excludes
+// its own start_time, measured on 2026-08-18 by asking for a space's newest
+// event at exactly its eventTime and getting an empty 200 where one microsecond
+// earlier returned it.
+func TestEveryWindowFlagSaysWhatItBounds(t *testing.T) {
+	root := New(&Options{})
+	seen := map[string]bool{}
+
+	walkCommands(root, func(cmd *cobra.Command) {
+		flag := cmd.LocalFlags().Lookup("since")
+		if flag == nil {
+			return
+		}
+
+		name := strings.TrimPrefix(cmd.CommandPath(), root.Name()+" ")
+		bounds, declared := windowBounds[name]
+		if !declared {
+			t.Errorf("%s has a --since and windowBounds does not say what it bounds.\n"+
+				"messages.list compares createTime and spaceEvents.list compares eventTime, "+
+				"and a command that borrows the nearest wording tells its caller the wrong one.",
+				cmd.CommandPath())
+			return
+		}
+		seen[name] = true
+
+		if !strings.Contains(flag.Usage, bounds) {
+			t.Errorf("%s --since bounds %q and its help does not say so:\n%s",
+				cmd.CommandPath(), bounds, flag.Usage)
+		}
+		for _, other := range slices.Compact(slices.Sorted(maps.Values(windowBounds))) {
+			if other == bounds || !strings.Contains(flag.Usage, other) {
+				continue
+			}
+			t.Errorf("%s --since bounds %q and its help also claims %q:\n%s",
+				cmd.CommandPath(), bounds, other, flag.Usage)
+		}
+		if !strings.Contains(flag.Usage, "strictly after") {
+			t.Errorf("%s --since does not say it is strictly after:\n%s",
+				cmd.CommandPath(), flag.Usage)
+		}
+	})
+
+	for name := range windowBounds {
+		if !seen[name] {
+			t.Errorf("windowBounds names %q, which has no --since flag", name)
+		}
 	}
 }
