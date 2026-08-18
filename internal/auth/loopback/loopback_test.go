@@ -17,6 +17,7 @@ package loopback
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -28,21 +29,76 @@ import (
 
 const testState = "aStateValueThatIsThirtyTwoBytesLong"
 
-// get fetches a URL the way the browser would, and returns the body.
-func get(t *testing.T, url string) (int, string) {
-	t.Helper()
-
+// fetch is the request itself, with no testing.T in it.
+//
+// Separated so that browse can run it on a goroutine. Nothing that runs off the
+// test's own goroutine may touch a testing.T: t.Fatalf calls FailNow, which is
+// documented as having to be called from the goroutine running the test, and
+// from any other one it stops only itself while the test carries on.
+func fetch(url string) (int, string, error) {
 	resp, err := http.Get(url) //nolint:noctx // a stand-in for a browser
 	if err != nil {
-		t.Fatalf("GET %s: %v", url, err)
+		return 0, "", fmt.Errorf("GET %s: %w", url, err)
 	}
-	t.Cleanup(func() { _ = resp.Body.Close() })
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("reading the page: %v", err)
+		return 0, "", fmt.Errorf("reading the page: %w", err)
 	}
-	return resp.StatusCode, string(body)
+	return resp.StatusCode, string(body), nil
+}
+
+// get fetches a URL the way the browser would, on the test's own goroutine.
+func get(t *testing.T, url string) (int, string) {
+	t.Helper()
+
+	status, body, err := fetch(url)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return status, body
+}
+
+// browse makes the callback request while the test blocks in Wait.
+//
+// The request has to be in flight rather than finished, because that is the
+// real flow: Listen, print the URL, open a browser, Wait. The buffered result
+// channel means a request that landed first would work too, so this could have
+// been written without a goroutine at all, and it is not, because then the
+// tests would stop covering the ordering that actually happens.
+//
+// What they must not do is let the goroutine outlive the test, and four of them
+// did. Each spawned a goroutine calling get and nothing waited for it, so when
+// the test body finished first, the t.Cleanup that get registered closed the
+// response body underneath io.ReadAll. The read failed, the goroutine called
+// t.Fatalf on a test that had already completed, and the package died with
+// "Log in goroutine after TestThePageIsSelfContained has completed" rather than
+// with a test failure. Reproduced on an untouched tree at roughly one run in
+// 450, which is rare enough to read as an unrelated flake and often enough to
+// redden somebody's pull request.
+//
+// The wait is registered here rather than returned, so that it happens whether
+// or not a caller remembers it. A cleanup is the one place that is guaranteed
+// to run, and receiving from a closed channel is what makes waiting twice safe.
+// The failure is reported from the cleanup, which runs on the test's own
+// goroutine, so FailNow's rule is kept.
+func browse(t *testing.T, url string) {
+	t.Helper()
+
+	var err error
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		_, _, err = fetch(url)
+	}()
+
+	t.Cleanup(func() {
+		<-finished
+		if err != nil {
+			t.Errorf("the browser request failed: %v", err)
+		}
+	})
 }
 
 // TestTheListenerIsOnLoopbackAndNowhereElse.
@@ -91,9 +147,7 @@ func TestTheCallbackIsAnsweredAndTheCodeComesBack(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 
-	go func() {
-		_, _ = get(t, s.RedirectURL()+"?code=theCode&state="+url.QueryEscape(testState))
-	}()
+	browse(t, s.RedirectURL()+"?code=theCode&state="+url.QueryEscape(testState))
 
 	result, err := s.Wait(context.Background())
 	if err != nil {
@@ -173,9 +227,7 @@ func TestAnAuthorizationErrorComesBackAsOne(t *testing.T) {
 				t.Fatalf("Listen: %v", err)
 			}
 
-			go func() {
-				_, _ = get(t, s.RedirectURL()+"?error="+tc.code+"&state="+url.QueryEscape(testState))
-			}()
+			browse(t, s.RedirectURL()+"?error="+tc.code+"&state="+url.QueryEscape(testState))
 
 			result, err := s.Wait(context.Background())
 			if err != nil {
@@ -208,9 +260,7 @@ func TestThePageIsSelfContained(t *testing.T) {
 		t.Fatalf("Listen: %v", err)
 	}
 
-	go func() {
-		_, _ = get(t, s.RedirectURL()+"?code=theCode&state="+url.QueryEscape(testState))
-	}()
+	browse(t, s.RedirectURL()+"?code=theCode&state="+url.QueryEscape(testState))
 	if _, err := s.Wait(context.Background()); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
@@ -237,9 +287,7 @@ func TestTheListenerIsClosedAfterTheCallback(t *testing.T) {
 	}
 	address := s.listener.Addr().String()
 
-	go func() {
-		_, _ = get(t, s.RedirectURL()+"?code=theCode&state="+url.QueryEscape(testState))
-	}()
+	browse(t, s.RedirectURL()+"?code=theCode&state="+url.QueryEscape(testState))
 
 	started := time.Now()
 	if _, err := s.Wait(context.Background()); err != nil {
