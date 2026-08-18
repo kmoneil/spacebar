@@ -843,6 +843,28 @@ read. It is gated more tightly than the CLI, on purpose.
 
   It is a middleware rather than a wrapper on each handler, so a tool added
   later is logged without anybody remembering to log it.
+
+  **One line means one whole line, and that is now a property of the renderer
+  rather than of the stream it was handed.**
+  `TestConcurrentWritersProduceWholeLines`.
+
+  The MCP server serves tool calls concurrently, confirmed in the go-sdk rather
+  than assumed: its dispatch loop hands a request to a goroutine and waits, and
+  the MCP layer releases that wait for every call except `initialize`. So the
+  audit line for one call and the `--verbose` log of another are written by two
+  goroutines through one `Renderer`.
+
+  It was already safe in production, and the reason is the problem. `Renderer`
+  takes an `io.Writer`; the command hands it `os.Stderr`; `internal/poll` holds
+  a per-descriptor lock across a whole write. Concurrent writes to an
+  `*os.File` therefore cannot interleave, and trying to make one interleave,
+  with 60KB lines and a reader slow enough to fill the pipe, does not work.
+  None of that is a property of this type, none of it was written down where it
+  was relied on, and all of it is gone the moment stderr is wrapped. Against a
+  writer that can split a line, 36 of 40 audit lines were destroyed.
+
+  So the guarantee moved to the renderer, where it is held against exactly such
+  a writer rather than against the one that happens to save it.
 - **A webhook posts to one space and there is no version of it that posts
   anywhere else.** The space is derived from the URL rather than configured
   beside it, so the two cannot disagree about where a message goes, and a target
