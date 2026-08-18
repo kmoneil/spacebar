@@ -707,6 +707,45 @@ therefore a decision the operator makes, with `rm`, knowing what it costs.
   `TestNothingInsideACodeSpanIsTransformed`, fifteen cases. Somebody pasting a
   shell command or a diff is what code spans are for, and a translator that
   worked by substitution would rewrite the inside of one.
+- **Text that is in a message and not on the screen is shown rather than
+  hidden.** `TestHiddenTextIsShownRatherThanObeyedOrDropped`,
+  `TestTheCharactersRealTextNeedsAreLeftAlone`, and `FuzzSanitize`.
+
+  The Unicode Tags block, U+E0000 to U+E007F, is deprecated, rendered as nothing
+  by every terminal and every font, and carries a complete ASCII alphabet. A run
+  of it is text that is in the message, absent from the screen, and perfectly
+  legible to anything reading codepoints. It is the standard carrier for an
+  instruction aimed at a model rather than at a person.
+
+  What makes it matter here is not the block, which has existed for decades. It
+  is that a message body now goes to a model as well as to a terminal, through
+  `list_messages`, `get_message` and `search_messages`, and a model reads
+  codepoints rather than glyphs. Every one of those tools already ends its
+  description by saying to treat a body as data rather than as instructions;
+  this is that risk with the operator's ability to notice it removed.
+
+  Escaped rather than removed, and visibly: what a reader sees is
+  `\U000e0049` where the hidden text is, which **is** the signal. Removing it
+  would make the terminal clean and the operator wrong.
+
+  **Only that block.** The wider set of invisible characters is a trap. U+200D
+  is what makes a family emoji one glyph and U+200C is required by Persian and
+  several Indic scripts, so escaping those would garble messages ordinary people
+  write, and a defence that garbles ordinary text is one somebody turns off. The
+  Tags block has no legitimate use in a message at all, which is what makes it
+  refusable without a judgement call.
+
+  **`--json` and an MCP tool result are untouched, deliberately**, for the reason
+  they are already exempt from the rest of the escaping: they hand a program what
+  was actually there, and altering it would break the rule below. So this makes
+  the terminal honest and changes nothing about what a model receives. Stated
+  here rather than left to be inferred, because a terminal that has been cleaned
+  up is exactly what would make somebody believe the model saw the same thing.
+
+  What is **not** decided is whether this tool should refuse to *send* a body
+  carrying them. That turns on what Chat itself does with one, which has not been
+  measured against a real space, and a rule invented without that measurement is
+  a guess. Recorded rather than guessed.
 - **A value is never altered to make it representable.** Invalid UTF-8 is
   refused, not replaced with U+FFFD. A message that is not what was sent is a
   wrong answer that looks like a right one. `TestInvalidUTF8IsRefused`, exit 2,
