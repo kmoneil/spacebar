@@ -67,7 +67,26 @@ function taking a flag would be a call site away from checking a message
 against the space rule.
 
 Held on every path a name reaches today: the space a webhook URL names, a
-target given on the command line, and each of the five read endpoints.
+target given on the command line, each of the five read endpoints, **and the
+send**, which was the one leaning on the layer below it.
+`chat.SendMessage` checked no name of its own, on the strength of a comment
+saying the strict check "lands with Milestone 3"; Milestone 3 landed, and so did
+four more. Nothing was reachable through it, because `useroauth.Send` checks
+before calling and `webhook.Send` clears the space, but every other write in
+that package checks the name it is about to put in a path and this one relied on
+its callers remembering. `TestSendChecksItsOwnSpaceName` and
+`TestASendRefusesABadSpaceWithoutAskingTheAPI`, the second of which counts
+requests and uses a value the relative-path rule does **not** catch: the obvious
+`spaces/../../etc` was already refused at the join, so a test using it passes on
+the broken build and says the wrong thing about why.
+
+A caller-chosen message id is checked in the same place and for the reason
+SPEC.md §4 gives. The CLI refused one without the `client-` prefix and the MCP
+tool did not, so the same value was a usage error through one adapter and a 400
+through the other. It is more than a better message: an id is what marks a POST
+safe to replay, so one the API will reject is a request marked replayable on the
+strength of a value that was never going to work.
+`TestAMessageIDTheAPIWillNotTakeIsRefusedHereRatherThanThere`.
 `TestABadURLIsRefusedAtConstruction`, `TestARubbishTargetIsRefusedAsOne`,
 `TestAReadRefusesABadSpaceNameWithoutAskingTheAPI`,
 `TestASpaceNameIsCheckedAgainstWhatWouldChangeTheRequest`, and
