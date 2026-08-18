@@ -154,34 +154,42 @@ func (c *Client) checkWatch(req WatchRequest) error {
 // instant, so that a poll asking again from that instant does not hand them
 // over a second time.
 //
-// spaceEvents.list bounds a query with start_time = "...", which was measured
-// on 2026-08-16 to mean "from here onwards" rather than what an equals usually
-// means. What that measurement did not settle is the boundary itself: whether
-// an event whose eventTime is exactly the start_time is in the answer.
+// spaceEvents.list bounds a query with start_time = "...", and the watermark a
+// watch polls from is the time of the last event it saw. If the endpoint
+// included that instant, the event would come back on every poll: the consumer
+// would see it again every interval for as long as the command ran, and found
+// would never be zero, so the adaptive backoff in follow would never engage and
+// a space where nothing is happening would be polled at the base interval
+// forever.
 //
-// It matters, because the watermark a watch polls from is the time of the last
-// event it saw. If the instant is included, that event comes back on every
-// poll: the consumer sees it again every interval for as long as the command
-// runs, and found is never zero, so the adaptive backoff in follow never
-// engages and a space where nothing is happening is polled at the base
-// interval forever.
+// Measured on 2026-08-18, it does not: the boundary is exclusive, so nothing
+// here fires against Chat as it behaves today. See eventFilter, which carries
+// the measurement.
 //
-// The obvious answer is to move the watermark on by a nanosecond, and a
+// This is kept anyway, and that is a decision rather than an oversight. The
+// measurement is a fact about somebody else's API on one day, and the whole
+// point of remembering was that the answer would not be load bearing: a defence
+// that has to be right about Google's boundary rule is one more thing to be
+// wrong about later, and what it costs to keep is an empty map and a comparison
+// per event. What it would cost to be wrong is a watch that repeats itself
+// every interval on a per-space quota shared with every other app in the space.
+// The tests take the boundary rule as a parameter and run both ways for that
+// reason, and disabling this fails the inclusive half of each, so it is a
+// defence with a test that can still fail rather than dead code wearing one.
+//
+// The obvious alternative is to move the watermark on by a nanosecond, and a
 // comment here claimed that was being done for four milestones while nothing
 // did it. It would also have been wrong. The first poll's watermark is the
 // caller's own --since, so nudging it drops an event at exactly the instant
 // the caller asked to start from, silently, and a value altered to make the
 // loop convenient is the thing this project refuses everywhere else.
 //
-// Remembering instead costs nothing and needs no answer to the boundary
-// question. If the endpoint excludes the instant the set is never consulted,
-// and if it includes it the repeat is recognised. An event at the caller's own
-// --since still arrives, because nothing has been yielded when the first poll
-// starts.
+// An event at the caller's own --since still arrives, because nothing has been
+// yielded when the first poll starts.
 //
-// It is bounded by the events sharing a single nanosecond, because moving the
-// instant empties it. That is the difference from the seen-set the watermark
-// was chosen over, which grows for as long as the watch runs.
+// The set is bounded by the events sharing a single nanosecond, because moving
+// the instant empties it. That is the difference from the seen-set the
+// watermark was chosen over, which grows for as long as the watch runs.
 type seenAt struct {
 	at    time.Time
 	names map[string]bool
@@ -234,7 +242,8 @@ func eventTime(e SpaceEvent) (time.Time, bool) {
 //
 // The watermark is the event time rather than the count, for the reason tail's
 // is a createTime: a count cannot survive a page boundary. What it costs is
-// that the boundary instant is ambiguous, which is what seen is for.
+// that the answer depends on how the endpoint treats the instant itself, which
+// is what seen is for.
 //
 // found counts what was yielded rather than what arrived, so a poll whose only
 // answer is the event that set the watermark counts as a quiet one and lets the

@@ -608,9 +608,15 @@ func eventFilter(req SpaceEventsRequest) (string, error) {
 		// Measured on 2026-08-16: start_time > is a 400 "Error parsing the
 		// filter", start_time = returns everything after that instant.
 		//
-		// What that measurement did not settle is the boundary: whether an
-		// event whose eventTime is exactly the start_time is in the answer.
-		// Watch has to be right either way and is, without knowing. See seenAt.
+		// The boundary was measured on 2026-08-18 and is exclusive: an event
+		// whose eventTime is exactly the start_time is not in the answer. Asked
+		// for a space's newest event at its own eventTime the endpoint answered
+		// 200 with an empty body, and one microsecond earlier it returned that
+		// event, so the comparison honours the microsecond rather than rounding
+		// to the second. So the equals reads as a > after all, which is what
+		// messages.list spells with a > and refuses to spell with a >=.
+		//
+		// Watch does not rely on that. See seenAt.
 		//
 		// The OR group is parenthesized because it has to be. The same filter
 		// without the brackets is the same 400, so the brackets are load

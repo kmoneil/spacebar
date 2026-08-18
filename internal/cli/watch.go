@@ -59,6 +59,11 @@ message and reaction, which is the conversation. Membership and space updates
 are administrative and arrive on a different rhythm, so they are opt-in rather
 than noise in the common case.
 
+--since bounds when an event happened rather than when a message was created,
+and the two come apart on exactly what this command exists to show: an edit at
+09:05 of a message posted at 08:00 is returned by --since 09:00. It is strictly
+after, so an event at exactly the instant named is not returned.
+
 The interval floor is 2s and a smaller one is refused rather than rounded up,
 for the reason it is on tail: per-space quota is shared with every other app
 acting in that space.
@@ -133,7 +138,7 @@ refusal is a 404 that mentions neither, and this tool explains it.`,
 	f.DurationVar(&interval, "interval", 0, "how often to poll, at least 2s")
 	f.StringVar(&events, "events", chat.DefaultEventGroups,
 		"which events to ask for: any of message, reaction, membership, space")
-	f.StringVar(&since, "since", "", sinceHelp)
+	f.StringVar(&since, "since", "", watchSinceHelp)
 	f.StringVar(&filter, "filter", "",
 		"the API's own filter expression, replacing the built one; it has to carry its own event_types")
 	f.BoolVar(&all, "all", false, "watch every space this profile can reach, instead of one")

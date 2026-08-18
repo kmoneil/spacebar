@@ -48,6 +48,25 @@ const (
 	untilHelp = "only messages created strictly before this, in the same two forms as --since"
 )
 
+// watchSinceHelp is the same flag on watch, worded separately because it bounds
+// a different thing, which is the one reason worth breaking a shared wording
+// for.
+//
+// The three callers above drive messages.list, where the comparison is on
+// createTime. watch drives spaceEvents.list, where it is on eventTime, and the
+// two come apart on exactly the events watch exists to show. Measured on
+// 2026-08-18 against a real space, and by the query rather than by reading the
+// field: a --since more than two minutes after a message was created returned
+// the event for that message's deletion, because the deletion is what happened
+// after the bound. Somebody who read "only messages created strictly after
+// this" before typing it was told the wrong thing by the line they read.
+// watch also yields reactions and memberships, which are not messages at all.
+//
+// "strictly" survives the move and is now measured here rather than carried
+// across from a claim about the other endpoint: start_time excludes its own
+// instant. See eventFilter in internal/chat.
+const watchSinceHelp = "only events that happened strictly after this: an RFC 3339 time, or how long ago, as in 90m or 2h"
+
 // parseSince turns a window flag into a time, treating unset as unbounded.
 //
 // The parsing itself lives in internal/chat beside CheckInterval, so that the
