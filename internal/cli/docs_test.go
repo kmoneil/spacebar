@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 
+	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/rows"
 )
 
@@ -481,4 +482,70 @@ func TestEveryCommandIsDocumentedSomewhere(t *testing.T) {
 			"at least, or to docs/AGENTS.md if an agent would use it.", path)
 	}
 	walk(root)
+}
+
+// envReference is the document that has to list every environment variable.
+//
+// One document rather than any of them, because the failure this gate exists
+// for is not that a variable was never written down anywhere: SPACEBAR_CLIENT_SECRET
+// was in SECURITY.md, in a sentence about where a credential may come from, and
+// XDG_CACHE_HOME was in a paragraph about quota. Both were true and neither is
+// findable by somebody who wants to know what this reads from the environment.
+// So the README carries the list, and the gate is that the list is complete.
+const envReference = "README.md"
+
+// TestEveryEnvironmentVariableIsDocumented is the environment's version of
+// TestEveryCommandIsDocumentedSomewhere, and it caught more.
+//
+// SPACEBAR_PROFILE was read from the first milestone and written down nowhere.
+// Its entire public existence was the parenthesis at the end of --profile's
+// help string, so the way to discover it was to already know. NO_COLOR, TERM
+// and XDG_CONFIG_HOME were in no hand-written document at all, and the one
+// document written for a program driving this tool mentioned no variable of
+// any kind.
+//
+// The other half, that the list is what the binary actually reads, is
+// TestEveryEnvironmentReadNamesAListedVariable in internal/lint.
+func TestEveryEnvironmentVariableIsDocumented(t *testing.T) {
+	if len(config.EnvVars) == 0 {
+		t.Fatal("config.EnvVars is empty, so this gate would pass by having nothing to check")
+	}
+
+	reference := readSource(t, envReference)
+	for _, v := range config.EnvVars {
+		if strings.Contains(reference, v.Name) {
+			continue
+		}
+		t.Errorf("%s does not mention %s, and it is read on every invocation that needs it.\n"+
+			"A variable nobody can find is one nobody sets. Add it to the environment table, "+
+			"with the line from config.EnvVars: %s", envReference, v.Name, v.Purpose)
+	}
+}
+
+// TestEveryVariableTheDocumentsNameIsOneThisToolReads is the other direction,
+// and it is the one that goes stale on its own.
+//
+// A renamed variable leaves the old name behind in prose that still reads
+// correctly, and nothing about the new name failing to work says which document
+// is lying. Only the ones this project owns are checked, because those are the
+// ones it can rename: NO_COLOR and the XDG variables are named by somebody else
+// and appear in these documents in sentences about other tools' behaviour.
+func TestEveryVariableTheDocumentsNameIsOneThisToolReads(t *testing.T) {
+	listed := map[string]bool{}
+	for _, v := range config.EnvVars {
+		listed[v.Name] = true
+	}
+
+	owned := regexp.MustCompile(regexp.QuoteMeta(config.Env("")) + `[A-Z0-9_]+`)
+	for _, doc := range allDocs {
+		source := readSource(t, doc)
+		for _, name := range owned.FindAllString(source, -1) {
+			if listed[name] {
+				continue
+			}
+			t.Errorf("%s names the environment variable %s, and nothing reads it.\n"+
+				"Either it was renamed and this document was not, or it never existed. "+
+				"config.EnvVars is what is read.", doc, name)
+		}
+	}
 }
