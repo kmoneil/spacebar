@@ -40,10 +40,13 @@ const stdinArg = "-"
 
 // maxBodyBytes bounds what is read from stdin.
 //
-// A Chat message is capped at 32,000 bytes by the API, so anything past this is
-// a message that cannot be sent whatever we do with it, and reading an
-// unbounded stream into memory because somebody piped the wrong file in is a
-// failure with no upside.
+// Not the message limit and never was. chat.CheckMessageText holds that, from a
+// measurement, and refuses at roughly 32,000 bytes before any request is made.
+// This is a bound on how much of a stream is pulled into memory when somebody
+// pipes the wrong file in, which is why it sits far above the real cap rather
+// than at it: reading an unbounded stream is a failure with no upside, and
+// guessing at the cap here would be a second copy of a number that is measured
+// somewhere else.
 const maxBodyBytes = 1 << 20
 
 // sendFlags are what `send` was asked for.
@@ -325,7 +328,12 @@ func readBody(in io.Reader, r *output.Renderer, text string) (string, error) {
 		return "", output.Usagef("could not read the message from stdin: %v", err)
 	}
 	if len(body) > maxBodyBytes {
-		return "", output.Usagef("the message on stdin is over %d bytes, which is more than Chat will accept.", maxBodyBytes)
+		// Not phrased as the message limit, because it is not one, and saying
+		// so here was wrong: it named 1MB as what Chat accepts, which is
+		// thirty-two times the measured cap. A body between the two is refused
+		// by chat.CheckMessageText with the real number in it.
+		return "", output.Usagef("the message on stdin is over %d bytes, which is more than this reads into memory.\n"+
+			"It is also far past what the API accepts, so it is not a message that could have been sent.", maxBodyBytes)
 	}
 
 	// Trailing newlines go, because a shell adds one and nobody means it. What

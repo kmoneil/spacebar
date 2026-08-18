@@ -24,6 +24,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/kmoneil/spacebar/internal/output"
 )
 
 // TestASendPostsWhereTheProfileSaysAndNowhereElse.
@@ -858,5 +860,118 @@ func TestAMessageIDTheAPIWillNotTakeIsRefusedHereRatherThanThere(t *testing.T) {
 	}
 	if h.count() != 0 {
 		t.Errorf("the refusal arrived after %d requests", h.count())
+	}
+}
+
+// TestALengthIsCheckedAgainstWhatWasMeasuredAndNotARoundNumber.
+//
+// The two numbers are a hundred bytes apart and the real limit is somewhere
+// between them, so the only question this check has to answer correctly is
+// which side of it a body is definitely on. A body seen to be accepted has to
+// pass, and one seen to be refused has to not, and everything between them is
+// the API's to answer as it does today.
+//
+// The row that matters is the first. A check set at a round 32,000 would fail
+// it, refuse a message somebody could have sent, and be discovered by whoever
+// tried to send one.
+func TestALengthIsCheckedAgainstWhatWasMeasuredAndNotARoundNumber(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bytes int
+		ok    bool
+	}{
+		{"the largest body seen to be accepted", acceptedTextBytes, true},
+		{"one byte under the smallest seen to be refused", tooLongTextBytes - 1, true},
+
+		{"the smallest body seen to be refused", tooLongTextBytes, false},
+		{"well past it, which is the case somebody will actually hit", tooLongTextBytes * 16, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := CheckMessageText(strings.Repeat("a", tc.bytes))
+			if tc.ok != (err == nil) {
+				t.Fatalf("CheckMessageText(%d bytes) = %v, accepted=%v want accepted=%v",
+					tc.bytes, err, err == nil, tc.ok)
+			}
+		})
+	}
+}
+
+// TestABodyTheAPIWillRefuseNeverReachesIt.
+//
+// Counted rather than read off the error, for the reason every other refusal in
+// this package is counted: a refusal that arrives after the POST carries the
+// same message as one that arrives before it, and only one of them is a
+// pre-flight check. It is a POST with no message ID, so a retry of it is a
+// second message in a space, which is why the request not being made is the
+// assertion rather than the exit code being right.
+//
+// The exit code is checked too, and it is exit 2 rather than exit 3, because
+// nothing failed: the caller handed over a body that cannot be sent, and the
+// fix is theirs.
+func TestABodyTheAPIWillRefuseNeverReachesIt(t *testing.T) {
+	h := newHarness(t, func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("an over-long body reached the network: %s %s", r.Method, r.URL.Path)
+	})
+
+	_, err := h.client.SendMessage(context.Background(), SendRequest{
+		Message: Message{Text: strings.Repeat("a", tooLongTextBytes)},
+	})
+	if err == nil {
+		t.Fatal("an over-long body was not refused")
+	}
+	if h.count() != 0 {
+		t.Errorf("the refusal arrived after %d requests", h.count())
+	}
+	if got := output.ExitCodeOf(err); got != output.ExitUsage {
+		t.Errorf("exit = %d, want %d", got, output.ExitUsage)
+	}
+
+	// The number is in the message, because the whole value of failing here
+	// rather than at the API is that somebody is told what the limit is.
+	if !strings.Contains(err.Error(), fmt.Sprintf("%d", tooLongTextBytes)) {
+		t.Errorf("the failure does not name the limit it is enforcing:\n%v", err)
+	}
+}
+
+// TestABodyTheAPIAcceptedStillSends is the other half, and the half a check
+// like this one gets wrong.
+//
+// Nothing about a length limit is dangerous to get slightly too large. Getting
+// it slightly too small refuses a message that would have arrived, from a
+// person who has no way to tell that the tool and not the API decided it.
+func TestABodyTheAPIAcceptedStillSends(t *testing.T) {
+	h := newHarness(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"name":"spaces/AAAATestSpace/messages/BBB"}`)
+	})
+
+	if _, err := h.client.SendMessage(context.Background(), SendRequest{
+		Message: Message{Text: strings.Repeat("a", acceptedTextBytes)},
+	}); err != nil {
+		t.Fatalf("a body measured as accepted by the API was refused here: %v", err)
+	}
+	if h.count() != 1 {
+		t.Errorf("made %d requests, want 1", h.count())
+	}
+}
+
+// TestAnEditIsHeldToTheSameLengthAsASend.
+//
+// The same field with the same cap, so a body that cannot be sent cannot be
+// edited into place either. Held here rather than left to the API because the
+// alternative is that the two paths disagree about the same value, which is the
+// gap CheckMessageID was moved into this package to close.
+func TestAnEditIsHeldToTheSameLengthAsASend(t *testing.T) {
+	r := newReader(t, func(_ http.ResponseWriter, req *http.Request) {
+		t.Errorf("an over-long edit reached the network: %s %s", req.Method, req.URL.Path)
+	})
+
+	if _, err := r.client.EditMessage(context.Background(), EditRequest{
+		Message: "spaces/AAA/messages/BBB",
+		Text:    strings.Repeat("a", tooLongTextBytes),
+	}); err == nil {
+		t.Fatal("an over-long edit was not refused")
+	}
+	if r.count() != 0 {
+		t.Errorf("the refusal arrived after %d requests", r.count())
 	}
 }
