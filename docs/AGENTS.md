@@ -345,7 +345,13 @@ spacebar search "deploy" --space eng --limit 10 --json
 `tail` and `watch` stream until interrupted, and **ending on a signal is exit
 0**, because that is how they are meant to end.
 
-Every command accepts `--profile NAME`. A target may be a resource name, an
-alias set with `spacebar alias set`, a display name, or an email address for a
-direct message; resolution happens before anything else and the result is
-checked before it reaches a request.
+Every command accepts `--profile NAME`, and `SPACEBAR_PROFILE` says the same
+thing for a whole process. Set the variable once rather than threading the flag
+through every call: the flag wins over it, and it wins over `default_profile` in
+the configuration file. The rest of the environment, including where the
+credential fallback and the local index live, is the table in
+[README.md](../README.md#environment).
+
+A target may be a resource name, an alias set with `spacebar alias set`, a
+display name, or an email address for a direct message; resolution happens
+before anything else and the result is checked before it reaches a request.
