@@ -742,10 +742,25 @@ therefore a decision the operator makes, with `rm`, knowing what it costs.
   here rather than left to be inferred, because a terminal that has been cleaned
   up is exactly what would make somebody believe the model saw the same thing.
 
-  What is **not** decided is whether this tool should refuse to *send* a body
-  carrying them. That turns on what Chat itself does with one, which has not been
-  measured against a real space, and a rule invented without that measurement is
-  a guess. Recorded rather than guessed.
+  **Sending one is not refused, and that is a measurement rather than a
+  preference.** Measured against a real space on 2026-08-18: a body of
+  `sec-09 probe` followed by U+E0048 and U+E0049 answered `200 OK`, and the
+  message the API echoed back carried `\udb40\udc48\udb40\udc49`, which is
+  those two codepoints exactly. Chat neither refuses them, strips them, nor
+  substitutes anything for them.
+
+  So `chat.CheckMessageText` says nothing about them. Refusing a body the API
+  was seen to accept is the mistake that function is written to avoid, and it
+  is the one that arrives as a bug report rather than as a test.
+
+  The same measurement is why the escaping above is not a defence against a
+  hypothetical: the carrier works end to end, so a body somebody else wrote can
+  reach a terminal and a model with an instruction in it that nobody can see.
+
+  What was measured is the webhook transport. A user-OAuth send reaches the
+  same endpoint with a different credential and has not been checked, which
+  does not reopen the decision: a refusal would break the path already seen to
+  work, whatever the other one does.
 - **A value is never altered to make it representable.** Invalid UTF-8 is
   refused, not replaced with U+FFFD. A message that is not what was sent is a
   wrong answer that looks like a right one. `TestInvalidUTF8IsRefused`, exit 2,
