@@ -254,6 +254,38 @@ fuzz: ## Fuzz every target, FUZZTIME each
 	done
 
 ## ---------------------------------------------------------------------------
+## benchmarking
+## ---------------------------------------------------------------------------
+
+# Found the way the fuzz targets are, and for the same reason: a benchmark
+# added to a package nobody thought to list here would never be run.
+.PHONY: bench-packages
+bench-packages: ## List the packages that have benchmarks, one per line
+	@go list ./... | while read -r pkg; do \
+		if go test -list 'Benchmark.*' "$$pkg" 2>/dev/null | grep -q '^Benchmark'; then \
+			echo "$${pkg#$(MODULE)/}"; \
+		fi; \
+	done
+
+BENCHPKGS ?= $(shell $(MAKE) -s bench-packages | sed 's|^|./|')
+BENCHCOUNT ?= 6
+
+# Nothing in CI runs this. A benchmark on a shared runner measures the runner,
+# and a gate that fails for that reason is one somebody turns off.
+#
+# -count runs every sample of one benchmark before it starts the next, so a
+# machine that gets busy half way through moves one of them and not the other.
+# To compare two variants, run this once per sample instead and let benchstat
+# read the lot: the header of internal/store/bench_test.go has the command, the
+# measured noise floor, and what it cost to learn that.
+.PHONY: bench
+bench: ## Benchmark every target, BENCHCOUNT samples each
+	@if [ -z "$(strip $(BENCHPKGS))" ]; then \
+		echo "no benchmarks yet"; exit 0; \
+	fi
+	go test $(BENCHPKGS) -run '^$$' -bench . -benchmem -count=$(BENCHCOUNT) -timeout=60m
+
+## ---------------------------------------------------------------------------
 ## tooling
 ## ---------------------------------------------------------------------------
 

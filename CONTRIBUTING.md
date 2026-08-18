@@ -77,6 +77,23 @@ internal/lint" in a comment, write the assertion too. A comment describing a
 gate nobody wrote is worse than no comment, because it stops the next person
 from looking.
 
+## Arguing about performance
+
+`make bench` runs every benchmark. Nothing in CI runs it, deliberately: a
+benchmark on a shared runner measures the runner, and a gate that fails for that
+reason is one somebody turns off.
+
+So a performance claim in a review is settled by whoever makes it, with a
+measurement rather than by reading the code. Before taking one, read the header
+of `internal/store/bench_test.go`. It records what this project has learned
+about measuring on a machine it does not own: what the noise floor was, what a
+p-value did and did not say once another tenant's test suite appeared half way
+through a run, and the one technique that made a seven per cent difference
+legible anyway.
+
+The answer a measurement gives is allowed to be "leave it alone", and two of
+them already are.
+
 ## Things that will fail CI
 
 - **An unformatted file.** `make fmt`.
