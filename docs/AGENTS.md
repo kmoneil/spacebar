@@ -302,6 +302,12 @@ naming the byte offset rather than being replaced with U+FFFD. A character Chat
 cannot represent inside a link is refused rather than escaped, because Chat has
 no escape syntax and a backslash would render as a backslash.
 
+**A profile name is not a space.** The first positional argument is a target and
+nothing else, and the two are not interchangeable: a space says where a message
+goes, a profile says which credential sends it and whose name is on it. A target
+that names a configured profile is exit 2 naming the flag to use, so there is
+nothing to retry. Choose the profile with `--profile`.
+
 **Nothing blocks on input when stdin is not a terminal.** A command that would
 have asked for confirmation exits 7 instead. Pass `--yes` when you have actually
 asked somebody.

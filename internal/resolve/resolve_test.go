@@ -485,3 +485,137 @@ func FuzzWhateverItReturnsIsASpaceName(f *testing.F) {
 		}
 	})
 }
+
+// The four tests below are one rule looked at from four sides: a profile name
+// is never a space, and saying so is the whole of what Options.Profiles does.
+//
+// What was there before was true and useless. `send live "test"` with a webhook
+// profile called `live` answered "resolving live needs the ability to list
+// spaces, and profile live is an incoming webhook", followed by instructions
+// for creating an OAuth client in a Cloud project. Every word of that is
+// correct. None of it is the problem, which is that a profile was typed where a
+// space goes, and the fix is four characters of flag.
+
+// TestAProfileNameInTheSpaceSlotSaysSoRatherThanNamingTheTransport, on the
+// transport where the old answer was worst.
+//
+// A webhook cannot list spaces at all, so this lookup was never going to
+// succeed and nothing is given up by answering the likelier question. Exit 2
+// rather than 5, because what has to change is the command line.
+func TestAProfileNameInTheSpaceSlotSaysSoRatherThanNamingTheTransport(t *testing.T) {
+	r := &fake{kind: config.TransportWebhook, spaces: []chat.Space{ops}}
+
+	_, err := Resolve(context.Background(), r, "live", Options{Profiles: []string{"live", "work"}})
+	if err == nil {
+		t.Fatal("a profile name resolved to a space")
+	}
+	if got := output.ExitCodeOf(err); got != output.ExitUsage {
+		t.Errorf("exit = %d, want %d\n%v", got, output.ExitUsage, err)
+	}
+	for _, want := range []string{`"live" is a profile`, "--profile live"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q:\n%v", want, err)
+		}
+	}
+
+	// The old answer, and the reason this test exists. Sending somebody to
+	// create an OAuth client to fix an argument in the wrong position is a long
+	// walk to the wrong place.
+	for _, unwanted := range []string{"incoming webhook", "auth setup"} {
+		if strings.Contains(err.Error(), unwanted) {
+			t.Errorf("the refusal still talks about %q:\n%v", unwanted, err)
+		}
+	}
+	if r.listed != 0 || r.looked != 0 {
+		t.Errorf("the refusal made %d lists and %d lookups", r.listed, r.looked)
+	}
+}
+
+// TestAProfileNameThatMatchesNoSpaceIsExplainedAfterTheLookup.
+//
+// The list is consulted first and the count is asserted, because that ordering
+// is the whole safety argument: the profile is only ever offered as an
+// explanation for a target that did not resolve. A check that ran before the
+// match would be the ambiguity this refuses to introduce, arriving through the
+// back door.
+func TestAProfileNameThatMatchesNoSpaceIsExplainedAfterTheLookup(t *testing.T) {
+	r := reader(ops, opsEsc)
+
+	_, err := Resolve(context.Background(), r, "live", Options{Profiles: []string{"live"}})
+	if err == nil {
+		t.Fatal("a profile name resolved to a space")
+	}
+	if got := output.ExitCodeOf(err); got != output.ExitUsage {
+		t.Errorf("exit = %d, want %d\n%v", got, output.ExitUsage, err)
+	}
+	if r.listed != 1 {
+		t.Errorf("the spaces were listed %d times, want 1: the profile is the explanation for a "+
+			"failed lookup and not a substitute for making one", r.listed)
+	}
+
+	// Both halves. It says what was wrong, and it still points at the command
+	// that answers "then what is there", because a profile and a space may
+	// genuinely share a word and the reader may have meant either.
+	for _, want := range []string{`"live" is a profile`, "--profile live", "spaces list"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not say %q:\n%v", want, err)
+		}
+	}
+}
+
+// TestASpaceReallyCalledThatBeatsAProfileOfTheSameName is the invariant that
+// makes the rest of this safe.
+//
+// Two namespaces can share a word without either becoming unreachable, but only
+// because resolution is unchanged: the space wins, every time, and the profile
+// is never consulted while an answer is still possible. An alias is checked as
+// well, because it resolves two steps earlier and a hint that had moved ahead
+// of resolution would take that one too.
+func TestASpaceReallyCalledThatBeatsAProfileOfTheSameName(t *testing.T) {
+	t.Run("display name", func(t *testing.T) {
+		got, err := Resolve(context.Background(), reader(ops, opsEsc), "Ops", Options{
+			Profiles: []string{"Ops"},
+		})
+		if err != nil {
+			t.Fatalf("a space called Ops stopped resolving because a profile shares its name: %v", err)
+		}
+		if got != "spaces/AAA" {
+			t.Errorf("resolved to %q, want the space actually called Ops", got)
+		}
+	})
+
+	t.Run("alias", func(t *testing.T) {
+		r := &fake{kind: config.TransportWebhook}
+		got, err := Resolve(context.Background(), r, "live", Options{
+			Aliases:  map[string]string{"live": "spaces/CCC"},
+			Profiles: []string{"live"},
+		})
+		if err != nil {
+			t.Fatalf("an alias stopped resolving because a profile shares its name: %v", err)
+		}
+		if got != "spaces/CCC" {
+			t.Errorf("resolved to %q, want the alias target", got)
+		}
+	})
+}
+
+// TestTheSuggestedProfileIsSpelledTheWayItIsConfigured.
+//
+// The match is case-folded, like every other match in this package, but the
+// name in the message is the configured one. --profile is exact, so telling
+// somebody to run `--profile LIVE` for a profile called `live` would be a
+// second dead end handed out by the refusal for the first.
+func TestTheSuggestedProfileIsSpelledTheWayItIsConfigured(t *testing.T) {
+	r := &fake{kind: config.TransportWebhook}
+
+	_, err := Resolve(context.Background(), r, "  LIVE  ", Options{Profiles: []string{"live"}})
+	if err == nil {
+		t.Fatal("a profile name resolved to a space")
+	}
+	if !strings.Contains(err.Error(), "--profile live") {
+		t.Errorf("the refusal does not suggest the configured spelling:\n%v", err)
+	}
+	if strings.Contains(err.Error(), "--profile LIVE") {
+		t.Errorf("the refusal suggests a spelling --profile will not accept:\n%v", err)
+	}
+}

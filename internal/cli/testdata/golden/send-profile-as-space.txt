@@ -1,0 +1,6 @@
+exit 2
+--- stdout
+--- stderr
+error: "alerts" is a profile, not a space.
+The first argument names the space to act on. A profile is chosen with --profile, which every command takes, or with SPACEBAR_PROFILE for a whole process.
+Take it out of the arguments and add: --profile alerts

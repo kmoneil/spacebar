@@ -218,6 +218,19 @@ func TestGoldenOutputContract(t *testing.T) {
 
 		{"send-wrong-space.txt", []string{"send", "spaces/BBBBSomewhereElse", "hi"}, output.ExitUsage, "", true, true},
 
+		// A profile name where the space goes, which is the mistake the first
+		// argument invites: the profile is the thing a person has just been
+		// typing, and both slots take a bare word.
+		//
+		// Frozen because it used to answer with the capability refusal above,
+		// exit 5, telling somebody to go and create an OAuth client in a Cloud
+		// project to fix an argument in the wrong position. Every word of that
+		// was true. What the golden holds now is that the answer names the
+		// profile, names the flag, and is a usage failure, because what has to
+		// change is the command line.
+		{"send-profile-as-space.txt", []string{"send", "alerts", "hi"}, output.ExitUsage, "", true, true},
+		{"send-profile-as-space.json", []string{"--json", "send", "alerts", "hi"}, output.ExitUsage, "", true, true},
+
 		// A dry run of the setup command, which stores nothing and sends
 		// nothing. The second half of that is the interesting one: --dry-run on
 		// a command that writes to disk has to mean the whole command, not the

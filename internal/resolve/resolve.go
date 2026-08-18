@@ -72,6 +72,20 @@ type Options struct {
 
 	// Refresh discards whatever the cache holds and lists spaces again.
 	Refresh bool
+
+	// Profiles is every configured profile name, and it is here to explain a
+	// failure and for nothing else. Nothing in this package resolves against
+	// it, deliberately.
+	//
+	// `send NAME text` reads NAME as a space, always, and the two are not
+	// interchangeable: a space says where a message goes and a profile says
+	// which credential sends it and whose name is on it. Reading the slot both
+	// ways would make a collision decide by which check ran first, and the
+	// loser would be unreachable with nothing to say which had happened. So the
+	// resolution rules do not change. What changes is that a target which
+	// happens to name a profile stops being answered with "no space is called
+	// that", which is true and sends somebody to look in the wrong place.
+	Profiles []string
 }
 
 // Resolve turns a target into a space resource name.
