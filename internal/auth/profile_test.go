@@ -444,3 +444,74 @@ func TestABadProfileNameIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestAWebhookOnAnotherHostIsStoredAndSaidOutLoud.
+//
+// CheckWebhookURL is deliberately loose about the host and its reasoning is
+// right: Google may change it, and a validator that refused a URL the API would
+// have accepted cannot be fixed from the user's side. So this does not refuse.
+//
+// What it does is close the other half. Once the URL is stored, nothing shows
+// the operator where their messages go: the space is read out of the URL's own
+// path and reported as the destination on every send, and `profile list` prints
+// a name and a transport. A URL pasted from the wrong place therefore posts
+// everything to somebody else's host while every line reads exactly as expected.
+//
+// The warning fires once, at the paste, which is the only moment somebody still
+// has the URL in front of them.
+func TestAWebhookOnAnotherHostIsStoredAndSaidOutLoud(t *testing.T) {
+	const elsewhere = "https://chat.example.invalid/v1/spaces/AAAATestSpace/messages" +
+		"?key=AIzaSyTestKeyNotARealOne0123456789&token=sQ7testTokenNotARealOne0123456789"
+
+	store, _ := memoryStore()
+	cfg := &config.Config{}
+
+	if err := store.SetWebhook(cfg, "alerts", elsewhere); err != nil {
+		t.Fatalf("a URL on another host was refused: %v", err)
+	}
+	if stored, err := store.Get(Ref("alerts", WebhookSecret)); err != nil || stored != elsewhere {
+		t.Errorf("the URL was not stored: %v", err)
+	}
+
+	warnings := store.Warnings()
+	if len(warnings) != 1 {
+		t.Fatalf("got %d warnings, want one naming the host:\n%v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "chat.example.invalid") {
+		t.Errorf("the warning does not name the host:\n%s", warnings[0])
+	}
+	if !strings.Contains(warnings[0], ChatHost) {
+		t.Errorf("the warning does not say what was expected:\n%s", warnings[0])
+	}
+
+	// The URL is a credential. Only its host may be quoted back.
+	for _, secret := range []string{
+		"AIzaSyTestKeyNotARealOne0123456789",
+		"sQ7testTokenNotARealOne0123456789",
+		elsewhere,
+	} {
+		if strings.Contains(warnings[0], secret) {
+			t.Errorf("the warning quotes the credential back:\n%s", warnings[0])
+		}
+	}
+}
+
+// TestAWebhookOnTheExpectedHostSaysNothing, because a warning on every ordinary
+// setup is a warning people learn to scroll past, and the loopback exemption is
+// what keeps every test server in this repository quiet.
+func TestAWebhookOnTheExpectedHostSaysNothing(t *testing.T) {
+	for _, tc := range []struct{ name, url string }{
+		{"the real host", realWebhook},
+		{"a loopback test server", "http://127.0.0.1:8080/v1/spaces/AAAATestSpace/messages?key=akeythatislong&token=atokenthatislong"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := memoryStore()
+			if err := store.SetWebhook(&config.Config{}, "alerts", tc.url); err != nil {
+				t.Fatalf("SetWebhook: %v", err)
+			}
+			if warnings := store.Warnings(); len(warnings) != 0 {
+				t.Errorf("an ordinary setup warned:\n%v", warnings)
+			}
+		})
+	}
+}
