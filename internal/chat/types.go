@@ -67,6 +67,36 @@ type Message struct {
 	// Google's documentation should find the same word.
 	Attachment []Attachment `json:"attachment,omitempty"`
 
+	// AttachedGifs is a GIF that arrived through Chat's own GIF picker.
+	//
+	// This is a third route into a message rather than a variation on one, and
+	// all three were measured on 2026-08-18 before this field was written. A
+	// pasted GIF URL arrives as ordinary body text and needs nothing. An app's
+	// GIF arrives in Cards. The picker button produces this, and it is the one
+	// route that could not be reproduced: no message carrying it exists in any
+	// space this machine can reach, and no send can create one, because the
+	// field is output only. What is known about it is the discovery document,
+	// which gives it one string and calls it the URL that hosts the image. That
+	// is a weaker footing than most of this package stands on, and it is said
+	// here rather than left for somebody to work out from the absence of a test
+	// against a real message.
+	AttachedGifs []AttachedGif `json:"attachedGifs,omitempty"`
+
+	// Cards is the deprecated predecessor of CardsV2, carried the same way and
+	// for the same reason.
+	//
+	// Google deprecated it in favour of cards_v2 and the API still returns it,
+	// because a message sent before the change holds it for as long as the
+	// message exists. An index is a record of what was said, so a field being
+	// deprecated is not a reason to decode it into nothing.
+	//
+	// Measured against real messages from the Giphy app: the image is at
+	// sections[].widgets[].image.imageUrl, and text carries only the
+	// attribution line naming who asked for it. Dropping this does not produce
+	// an empty message, which would at least look wrong. It produces a message
+	// that reads as complete and is not.
+	Cards []json.RawMessage `json:"cards,omitempty"`
+
 	// CardsV2 is carried through rather than modelled.
 	//
 	// A card is a deep tree of widgets with its own schema, and every field of
@@ -79,6 +109,28 @@ type Message struct {
 	// because a card requires app authentication, which is the counter-intuitive
 	// row of the capability matrix.
 	CardsV2 []json.RawMessage `json:"cardsV2,omitempty"`
+}
+
+// AttachedGif is one GIF on a message.
+//
+// One field, because one field is what the schema defines.
+//
+// The URI is deliberately not treated as a credential, which is the opposite of
+// the call made for an attachment. downloadUri and thumbnailUri each carry
+// "Chat apps shouldn't use this URL to download attachment content" in that
+// same schema, which is how the document says a URL holds an access token, and
+// neither of them is ever decoded here for exactly that reason. This field
+// carries no such sentence, and every GIF URL measured on a real message has no
+// query string at all.
+//
+// That is evidence and not a measurement of a picker URI, and the difference
+// matters because this value reaches the local index in plain text. SECURITY.md
+// states both halves where somebody deciding what is on their disk will read
+// them.
+type AttachedGif struct {
+	// URI is where the GIF is hosted. Chosen by whoever posted the message, so
+	// it is untrusted text like any other body content.
+	URI string `json:"uri,omitempty"`
 }
 
 // User is whoever or whatever sent a message.

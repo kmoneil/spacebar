@@ -526,6 +526,38 @@ identifies bytes and does not grant them, and fetching them still needs the
 credential. The API's `downloadUri` and `thumbnailUri`, which do carry an access
 token, never reach `internal/rows` and so cannot reach the index.
 
+**The index also holds a message's non-text content, as of the change that
+added it.** A GIF's URL and a card's JSON are message content, and a record of
+what was said that drops them is a record of something else. Two things follow
+and both are worth stating rather than leaving to be discovered.
+
+A card is carried raw, and a card is chosen by whoever posted the message. It
+is untrusted content in the same way a message body is, and it reaches `--json`
+and the index and never a text column: `output.Cell` and the Unicode Tags rule
+exist for what is rendered to a terminal, and `--json` deliberately hands a
+program what was there. Nothing renders a card, and nothing should start
+without deciding that question first.
+
+A GIF's URL is **not** treated as a credential, which is the opposite of the
+call made two paragraphs above for `downloadUri`. The difference is in the
+schema and is not a judgement: those two fields each carry "Chat apps shouldn't
+use this URL to download attachment content", which is how that document says a
+URL holds an access token, and `AttachedGif.uri` carries no such sentence. Every
+GIF URL measured on a real message has no query string at all.
+
+**What was not measured, said plainly.** A GIF from Chat's own picker is output
+only, so no request this tool can make will produce one, and no message carrying
+one exists in any space the author can reach. Its URL is therefore documented
+rather than observed. If it turns out to carry a token, what that token reaches
+is a GIF in a public GIF library, not the private content an `attachment_token`
+reaches, and that difference is why this ships stated rather than withheld. It
+carries no `(Mn)` marker because no milestone owes a test for it: a test here
+would assert what this repository does with a value, which is already held by
+`TestAGifFromThePickerIsARowWithContentRatherThanABlankOne`,
+`TestACardReachesTheRowByBothOfItsNames`, and
+`TestAMessageCarriesEveryRouteAGifArrivesBy`. What is open is a fact about
+somebody else's API, and the command that settles it is in the card.
+
 **Nothing removes it.** `auth logout` and `profile rm` delete the space-list
 cache, deliberately, and they do not touch this. That is the opposite decision
 from the one above it and for the opposite reason: the cache can be rebuilt from

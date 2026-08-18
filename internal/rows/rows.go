@@ -200,6 +200,42 @@ type Message struct {
 	// access token in its query, so publishing it would put a credential in
 	// --json.
 	Attachments []Attachment `json:"attachments,omitempty"`
+
+	// AttachedGifs is the URL of each GIF that arrived through Chat's own GIF
+	// picker.
+	//
+	// A list of strings and not a list of objects, because chat.AttachedGif has
+	// exactly one field, so nothing is lost by flattening and a caller writing
+	// `jq -r '.attached_gifs[]'` gets the URLs. That is the same call already
+	// made for an attachment's resource_name, which is lifted out of the
+	// attachmentDataRef it arrives inside. If the schema ever grows a second
+	// field this becomes an object and that is a contract break to take
+	// deliberately, rather than a reason to publish an awkward shape now
+	// against a field that may never gain one.
+	AttachedGifs []string `json:"attached_gifs,omitempty"`
+
+	// Cards and CardsV2 are the message's card content, carried raw.
+	//
+	// Both were decoded and then dropped, which is two independent ways to lose
+	// the same thing: Cards had no field on chat.Message at all, and CardsV2
+	// had one and was not projected here. An app posting a GIF, a form, or a
+	// button produced a row whose text was the attribution line and whose
+	// content was gone, and nothing said a field had been discarded.
+	//
+	// Raw for the reason internal/chat carries them raw: a card is a deep tree
+	// of widgets with its own schema, and modelling it here would be a guess
+	// reviewed as though it were knowledge.
+	//
+	// A card is untrusted content, chosen by whoever posted the message. It
+	// reaches --json and MCP and never a text column, which is what keeps it
+	// clear of output.Cell and the Unicode Tags rule: those exist for what is
+	// rendered to a terminal, and --json hands a program what was there.
+	Cards []json.RawMessage `json:"cards,omitempty"`
+
+	// CardsV2 is the modern spelling of the same thing. Both are published
+	// because the API returns whichever the sender used, and a message sent
+	// before the change holds Cards for as long as it exists.
+	CardsV2 []json.RawMessage `json:"cards_v2,omitempty"`
 }
 
 // Attachment is the published shape of one file on a message.
@@ -249,6 +285,12 @@ func ForMessage(m chat.Message) (Message, []string) {
 		row.Attachments = append(row.Attachments, attachment)
 	}
 
+	for _, gif := range m.AttachedGifs {
+		row.AttachedGifs = append(row.AttachedGifs, gif.URI)
+	}
+	row.Cards = m.Cards
+	row.CardsV2 = m.CardsV2
+
 	// The display name is preferred in the text column and the resource name is
 	// the fallback, which is the opposite of how --json orders them. A person
 	// reading a terminal wants to know who said it; a script wants a value it
@@ -258,9 +300,29 @@ func ForMessage(m chat.Message) (Message, []string) {
 		who = row.Sender
 	}
 
+	// A GIF from Chat's picker is the whole of a message and arrives with no
+	// text at all, so the text column would be blank on a row that has content.
+	// A human reading `tail` cannot tell that from a rendering fault, and this
+	// tool would be showing nothing for a message that says something.
+	//
+	// The URL is what the API sent rather than a description invented here, and
+	// --json keeps the two apart: text stays empty because it was empty, and
+	// attached_gifs carries the URLs. This is the same split the who column
+	// already makes, where a display name is preferred for a person reading and
+	// --json carries the resource name beside it.
+	//
+	// A card gets no such fallback, because reaching an image URL inside one
+	// means modelling a widget tree this package deliberately carries raw. In
+	// practice an app that posts a card sends text with it: the measured Giphy
+	// messages carry the attribution line.
+	body := m.Text
+	if body == "" {
+		body = strings.Join(row.AttachedGifs, " ")
+	}
+
 	// output.Cell escapes the tab and the newline, so a message body cannot
 	// forge a column or a row here. That is why the body can be a column at all.
-	return row, []string{m.CreateTime, who, m.Text}
+	return row, []string{m.CreateTime, who, body}
 }
 
 // Event is the published shape of one space event.
