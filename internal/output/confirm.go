@@ -36,7 +36,7 @@ func ColorFor(w io.Writer, noColorFlag bool) bool {
 // Interactive reports whether in is something a person is typing into.
 //
 // This asks about the reader for a reason that cost a test to find. The
-// obvious version asks CanPrompt, which describes os.Stdin, and a command
+// obvious version asks about os.Stdin, and a command
 // reads from whatever it was given: in production those are the same file and
 // in a test they are not, so a prompt-refusal rule verified against os.Stdin is
 // verified against a stream nothing reads.

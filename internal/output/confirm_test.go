@@ -147,10 +147,10 @@ func (r readerThatMustNotBeUsed) Read([]byte) (int, error) {
 
 // TestInteractiveAsksAboutTheStreamRatherThanTheProcess.
 //
-// This is the function whose absence was a bug. The version that asked
-// CanPrompt described os.Stdin while every command reads from whatever it was
-// handed, so the prompt-refusal rule was being verified against a stream
-// nothing read. Anything that is not a file is not a terminal, which covers a
+// This is the function whose absence was a bug. The version that asked about
+// os.Stdin described a stream nothing reads: every command reads from whatever
+// it was handed, so the prompt-refusal rule was being verified against the
+// wrong file. Anything that is not a file is not a terminal, which covers a
 // buffer, a pipe wrapper, and everything a test substitutes.
 func TestInteractiveAsksAboutTheStreamRatherThanTheProcess(t *testing.T) {
 	if Interactive(strings.NewReader("y\n")) {
@@ -169,12 +169,6 @@ func TestInteractiveAsksAboutTheStreamRatherThanTheProcess(t *testing.T) {
 	t.Cleanup(func() { _ = f.Close() })
 	if Interactive(f) {
 		t.Error("a regular file was treated as a terminal")
-	}
-
-	// CanPrompt is the same question asked of os.Stdin, and the two must not
-	// drift into disagreeing about what a terminal is.
-	if got, want := CanPrompt(), Interactive(os.Stdin); got != want {
-		t.Errorf("CanPrompt = %v and Interactive(os.Stdin) = %v", got, want)
 	}
 }
 
