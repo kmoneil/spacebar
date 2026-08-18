@@ -85,7 +85,25 @@ never onto a command line. To act as yourself instead of as a bot, see
 
 ## Status
 
-Nothing is released yet. Everything below works:
+All six milestones in the spec are done, and the adversarial security review
+that followed them produced fourteen fixes that are all on `main`. Nothing is
+released yet.
+
+| # | Milestone              | What it delivered                                                                                          |
+| - | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 1 | Skeleton and licensing | The build, the CI gates, and `version`, `licenses`, `completion`.                                          |
+| 2 | Webhook transport      | `send` end to end with no OAuth at all, and `--md`, `--dry-run`, `--json` and the exit codes with it.      |
+| 3 | User OAuth             | `auth setup`, `login`, `status` and `logout`, the keyring, expiry warnings, and the first read commands.   |
+| 4 | Full CLI               | `tail`, `watch`, `react`, edit and delete, aliases, attachments, and target resolution.                    |
+| 5 | MCP server             | Capability-gated tool registration, write gating, and the two agent guides.                                |
+| 6 | Index and search       | The NDJSON store, `sync` and `search`. SQLite with FTS5 was priced and refused, with a threshold recorded. |
+
+Milestone 2 is the one that mattered. An organization that blocks third-party
+API access leaves an incoming webhook as the only way in, and that population is
+large enough that a tool useless to them reaches far fewer people than it looks
+like it does.
+
+Everything below works:
 
 ```console
 $ spacebar --help
