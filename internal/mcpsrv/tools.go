@@ -85,8 +85,15 @@ func (s *Server) listSpaces(ctx context.Context, _ *mcp.CallToolRequest, in list
 		return nil, listSpacesOut{}, err
 	}
 
+	// Filtered rather than refused. A model asking what it can reach is
+	// answered with what it can reach, and listing a space it may not touch
+	// would publish the name and the display name of a room the operator
+	// confined it out of.
 	out := listSpacesOut{Spaces: make([]rows.Space, 0, len(found)), HasMore: more}
 	for _, space := range found {
+		if !s.allows(space.Name) {
+			continue
+		}
 		row, _ := rows.ForSpace(space)
 		out.Spaces = append(out.Spaces, row)
 	}
@@ -106,6 +113,9 @@ type getSpaceIn struct {
 func (s *Server) getSpace(ctx context.Context, _ *mcp.CallToolRequest, in getSpaceIn) (*mcp.CallToolResult, rows.Space, error) {
 	target, err := s.resolve(ctx, in.Space)
 	if err != nil {
+		return nil, rows.Space{}, err
+	}
+	if err := s.checkAllowed(target); err != nil {
 		return nil, rows.Space{}, err
 	}
 
@@ -152,6 +162,9 @@ func (s *Server) listMembers(ctx context.Context, _ *mcp.CallToolRequest, in lis
 	}
 	target, err := s.resolve(ctx, in.Space)
 	if err != nil {
+		return nil, listMembersOut{}, err
+	}
+	if err := s.checkAllowed(target); err != nil {
 		return nil, listMembersOut{}, err
 	}
 
@@ -217,6 +230,9 @@ func (s *Server) listMessages(ctx context.Context, _ *mcp.CallToolRequest, in li
 	if err != nil {
 		return nil, listMessagesOut{}, err
 	}
+	if err := s.checkAllowed(target); err != nil {
+		return nil, listMessagesOut{}, err
+	}
 
 	found, more, err := collect(s.profile.Transport.Messages(ctx, chat.ListMessagesRequest{
 		Space:       target,
@@ -251,6 +267,20 @@ type getMessageIn struct {
 }
 
 func (s *Server) getMessage(ctx context.Context, _ *mcp.CallToolRequest, in getMessageIn) (*mcp.CallToolResult, rows.Message, error) {
+	// The space is read out of the message name rather than resolved, exactly
+	// as react_to_message does and for the same reason: a message resource name
+	// is already a resource name, so there is no gap between what the caller
+	// wrote and what the request will reach. Without this the allowlist would
+	// not constrain this tool at all, which is the quiet kind of gap: the flag
+	// would be set and one read tool would answer from anywhere.
+	space, err := chat.SpaceOfMessage(in.Message)
+	if err != nil {
+		return nil, rows.Message{}, err
+	}
+	if err := s.checkAllowed(space); err != nil {
+		return nil, rows.Message{}, err
+	}
+
 	message, err := s.profile.Transport.GetMessage(ctx, in.Message)
 	if err != nil {
 		return nil, rows.Message{}, err
@@ -483,11 +513,25 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 		if target, err = s.resolve(ctx, in.Space); err != nil {
 			return nil, searchMessagesOut{}, err
 		}
+		if err := s.checkAllowed(target); err != nil {
+			return nil, searchMessagesOut{}, err
+		}
 	}
 
-	searched, err := s.index.Spaces()
+	indexed, err := s.index.Spaces()
 	if err != nil {
 		return nil, searchMessagesOut{}, err
+	}
+
+	// "Everything" means everything this server is allowed. A search with no
+	// space is the one read that reaches every space at once, so an allowlist
+	// that did not narrow it would confine every other tool and leave the index
+	// open, which is the same account's messages by another route.
+	searched := make([]string, 0, len(indexed))
+	for _, space := range indexed {
+		if s.allows(space) {
+			searched = append(searched, space)
+		}
 	}
 
 	out := searchMessagesOut{Messages: []rows.Message{}, Searched: searched}
@@ -495,25 +539,46 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 		out.Searched = []string{target}
 	}
 
-	found := 0
-	for m, err := range s.index.Search(ctx, store.Query{
+	out.Messages, out.HasMore, err = s.searchAllowed(ctx, store.Query{
 		Space: target,
 		Text:  in.Query,
 		Since: since,
 		Until: until,
-		Limit: limit + 1,
-	}) {
-		if err != nil {
-			return nil, searchMessagesOut{}, err
-		}
-		if found >= limit {
-			out.HasMore = true
-			break
-		}
-		out.Messages = append(out.Messages, m)
-		found++
+	}, limit)
+	if err != nil {
+		return nil, searchMessagesOut{}, err
 	}
 	return nil, out, nil
+}
+
+// searchAllowed reads matches out of the index, keeping only the spaces this
+// server may touch, and reports whether more matched than were returned.
+//
+// Split from searchMessages for the complexity ceiling, and the split is where
+// the two jobs already were: that one turns arguments into a query and this one
+// turns the query into an answer.
+//
+// Filtered on the way out rather than searched space by space, so that the
+// newest-first ordering across spaces survives. The limit is applied after the
+// filter for the same reason it is applied after the query: a limit counts what
+// the caller gets, not what the index looked at.
+func (s *Server) searchAllowed(ctx context.Context, q store.Query, limit int) ([]rows.Message, bool, error) {
+	found := []rows.Message{}
+
+	for m, err := range s.index.Search(ctx, q) {
+		if err != nil {
+			return nil, false, err
+		}
+		space, spaceErr := chat.SpaceOfMessage(m.Name)
+		if spaceErr != nil || !s.allows(space) {
+			continue
+		}
+		if len(found) >= limit {
+			return found, true, nil
+		}
+		found = append(found, m)
+	}
+	return found, false, nil
 }
 
 // whenOf parses an optional RFC 3339 time from a tool argument.

@@ -60,11 +60,19 @@ confused turn away from posting to a company-wide space, and the people who
 find out are everybody in it. Without the flag, send_message is not registered
 at all, so there is no tool for a model to talk itself into calling.
 
---allow-space, repeatable, narrows it further: a write to any other space is
-refused before the request. It takes space resource names, because it is
-checked against what a tool call resolves to rather than against what the model
-typed, and an alias here would be an allowlist whose meaning depends on what
-the API says at the time.
+--allow-space, repeatable, confines the whole server to the spaces you name:
+reading as well as writing. A tool call that resolves anywhere else is refused
+before the request, list_spaces shows only the ones you allowed, and a search
+across "everything" means everything you allowed. It takes space resource
+names, because it is checked against what a tool call resolves to rather than
+against what the model typed, and an alias here would be an allowlist whose
+meaning depends on what the API says at the time.
+
+Reading is the half worth saying out loud. --allow-write is about what a model
+can put into a space; --allow-space is about which spaces it can touch at all.
+Confining writes and leaving reads open is the larger surface of the two, since
+message bodies are written by people who may be outside your organization and a
+model talked into something by one can read the rest.
 
 Every tool call is written to stderr as one JSON line, whatever --quiet and
 --json say. It records the tool, the profile, the arguments with long strings

@@ -259,18 +259,41 @@ func allowlist(spaces []string) (map[string]bool, error) {
 	return allowed, nil
 }
 
-// checkAllowed refuses a write to a space outside the allowlist.
+// checkAllowed refuses a tool call that touches a space outside the allowlist.
 //
 // Called after resolution and never before it. An allowlist checked against
 // what the caller typed is checked against a string the caller controls; the
-// space that will actually be written to is the one that arrives out of
+// space that will actually be reached is the one that arrives out of
 // internal/resolve, and only that one is worth comparing.
+//
+// **Reads as well as writes**, which they were not. `--allow-space` narrowed
+// only what a model could put into a space, and its own help said it "narrows
+// it further" without saying which half. An operator who confined a server to
+// one space had confined half of it: every read tool still reached everything
+// the profile could, which is the larger surface, because message bodies are
+// hostile input by this project's own threat model and a model that has been
+// talked into something by one is a model that can read the rest.
+//
+// Extending the flag rather than adding a second one, and the reason is in the
+// alternative: two flags that both take space names is the shape somebody sets
+// one of and believes they set both. Nothing is released, so there is no agent
+// whose reach this silently narrows, and one flag now means the thing an
+// operator reading it already assumed.
 func (s *Server) checkAllowed(space string) error {
 	if len(s.allowed) == 0 || s.allowed[space] {
 		return nil
 	}
 	return output.Errorf("REFUSED", output.ExitRefused,
-		"%s is not in this server's --allow-space list, so nothing was written there.", space)
+		"%s is not in this server's --allow-space list, so nothing there was read or written.", space)
+}
+
+// allows reports whether a space may be touched at all.
+//
+// The same question checkAllowed asks, for the two tools that filter rather
+// than refuse. A model that asked what it can reach is answered with what it
+// can reach, and a search across "everything" means everything it is allowed.
+func (s *Server) allows(space string) bool {
+	return len(s.allowed) == 0 || s.allowed[space]
 }
 
 // collect reads a bounded number of items out of a streaming list.

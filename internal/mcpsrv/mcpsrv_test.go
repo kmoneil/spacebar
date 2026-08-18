@@ -1141,3 +1141,104 @@ func TestTheSearchToolNeedsNoCapabilityAtAll(t *testing.T) {
 		t.Fatalf("the search failed on a webhook profile: %+v", result.Content)
 	}
 }
+
+// indexWith is an index holding one message in each named space, so that
+// search_messages is registered and has something to find.
+func indexWith(t *testing.T, spaces ...string) *store.NDJSON {
+	t.Helper()
+
+	index := store.NewNDJSON(t.TempDir())
+	for _, space := range spaces {
+		if err := index.Append(context.Background(), space, []rows.Message{
+			{Name: space + "/messages/AAA", CreateTime: "2026-08-17T09:00:00Z", Text: "deploy done"},
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+	return index
+}
+
+// TestEveryToolThatNamesASpaceIsHeldToTheAllowlist.
+//
+// `--allow-space` narrowed writes only, and its own help said it "narrows it
+// further" without saying which half. So an operator who confined a server to
+// one space had confined half of it: every read tool still reached everything
+// the profile could, which is the larger surface. Message bodies are hostile
+// input by this project's own threat model, and a model talked into something
+// by one is a model that can read the rest.
+//
+// Walked per tool rather than asserted once, because the five that name a space
+// reach it three different ways: three resolve an argument, get_message reads it
+// out of a message resource name, and search_messages narrows "everything"
+// rather than refusing. A test naming one of them holds one of them.
+func TestEveryToolThatNamesASpaceIsHeldToTheAllowlist(t *testing.T) {
+	const outside = "spaces/BBB"
+
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"get_space", map[string]any{"space": outside}},
+		{"list_members", map[string]any{"space": outside}},
+		{"list_messages", map[string]any{"space": outside}},
+		{"get_message", map[string]any{"message": outside + "/messages/CCC"}},
+		{"search_messages", map[string]any{"query": "deploy", "space": outside}},
+	} {
+		t.Run(tc.tool, func(t *testing.T) {
+			reached := &fake{kind: config.TransportUserOAuth, caps: full()}
+			session := connectWith(t, Options{
+				Profile:     &profile.Open{Name: "work", Transport: reached},
+				AllowWrite:  true,
+				AllowSpaces: []string{"spaces/AAA"},
+				Index:       indexWith(t, outside),
+			})
+
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+				Name:      tc.tool,
+				Arguments: tc.args,
+			})
+			if err != nil {
+				t.Fatalf("CallTool: %v", err)
+			}
+			if !result.IsError {
+				t.Fatalf("%s answered for a space outside the allowlist: %s", tc.tool, contentOf(result))
+			}
+			if !strings.Contains(contentOf(result), outside) {
+				t.Errorf("the refusal does not name the space:\n%s", contentOf(result))
+			}
+		})
+	}
+}
+
+// TestListingSpacesUnderAnAllowlistShowsOnlyThose.
+//
+// Filtered rather than refused, because a model asking what it can reach should
+// be answered with what it can reach. Listing a space it may not touch would
+// publish the name and the display name of a room the operator confined it out
+// of, which is a smaller leak than reading the messages and is still one.
+func TestListingSpacesUnderAnAllowlistShowsOnlyThose(t *testing.T) {
+	session := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{
+			kind:   config.TransportUserOAuth,
+			caps:   full(),
+			spaces: []chat.Space{{Name: "spaces/AAA"}, {Name: "spaces/BBB"}},
+		}},
+		AllowSpaces: []string{"spaces/AAA"},
+	})
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_spaces"})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("list_spaces: %s", contentOf(result))
+	}
+
+	body := contentOf(result)
+	if !strings.Contains(body, "spaces/AAA") {
+		t.Errorf("the allowed space is missing:\n%s", body)
+	}
+	if strings.Contains(body, "spaces/BBB") {
+		t.Errorf("a space outside the allowlist was listed:\n%s", body)
+	}
+}
