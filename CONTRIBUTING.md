@@ -105,6 +105,15 @@ from looking.
   that quotes a golden against it. Those two are read by agents, which cannot
   tell a stale example from a current one, so an example there is closer to an
   interface definition than to prose.
+- **An environment variable no document names.** `config.EnvVars` is the list of
+  what this process reads. `internal/lint/env_test.go` fails on a read of
+  anything not in it, and on a listed entry nothing reads;
+  `internal/cli/docs_test.go` fails on an entry the README's environment table
+  does not carry, and on a document naming a variable of this project's that
+  nothing reads. It exists because `SPACEBAR_PROFILE` worked from the first
+  milestone and its whole public existence was the parenthesis at the end of
+  `--profile`'s help string, which is not where somebody wiring up a CI job
+  looks.
 - **A function over the cognitive complexity ceiling.** Split it. Raising the
   ceiling is not the fix.
 - **`go.mod` and a workflow disagreeing about the Go patch version.** They move

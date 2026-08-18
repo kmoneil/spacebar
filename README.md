@@ -75,6 +75,7 @@ never onto a command line. To act as yourself instead of as a bot, see
 **Everything else** &nbsp;·&nbsp;
 [Why it is shaped this way](#why-it-is-shaped-this-way) &nbsp;·&nbsp;
 [Status](#status) &nbsp;·&nbsp;
+[Environment](#environment) &nbsp;·&nbsp;
 [Development](#development) &nbsp;·&nbsp;
 [SECURITY.md](SECURITY.md) &nbsp;·&nbsp;
 [docs/ADMIN.md](docs/ADMIN.md)
@@ -669,6 +670,40 @@ spacebar completion powershell | Out-String | Invoke-Expression
 hand-roll and this is the part a person notices. `licenses` reads a file
 embedded at build time, so the binary can always say what is in it without a
 network call or a checkout.
+
+## Environment
+
+Nine variables, and not one of them is required: each has a flag, a
+configuration entry, or a default. They are here because a CI job cannot type a
+flag, and because a credential passed as an argument lands in the shell history
+and in the process list where anything running as that user can read it.
+
+| Variable | What it does |
+| --- | --- |
+| `SPACEBAR_PROFILE` | Which profile to use when `--profile` is not given. The flag wins over this, and this wins over `default_profile` in the configuration file. |
+| `SPACEBAR_CLIENT_ID` | OAuth client ID for `auth login`. Overrides the profile's own and whatever this build was compiled with. |
+| `SPACEBAR_CLIENT_SECRET` | OAuth client secret for the same. Read from here so that it reaches neither `config.json` nor the process list. |
+| `SPACEBAR_WEBHOOK_URL` | The incoming webhook URL for `profile set-webhook`, which takes it here or on stdin. There is no flag for it, for the same reason. |
+| `NO_COLOR` | Any non-empty value turns ANSI colour off, the same as `--no-color`. |
+| `TERM` | A value of `dumb` turns colour off. Nothing else about it is read. |
+| `XDG_CONFIG_HOME` | Where `config.json` and the credential fallback live. Without it, `~/.config/spacebar`. |
+| `XDG_CACHE_HOME` | Where the cached space list lives. Without it, `~/.cache/spacebar`. Safe to delete: it is rebuilt from the API. |
+| `XDG_DATA_HOME` | Where the local message index lives. Without it, `~/.local/share/spacebar`. Not safe to delete: it holds messages the API will not answer for a second time. |
+
+The three XDG variables are honoured on every platform, Windows included,
+because somebody who sets one has said where they want their files. Each has to
+be an absolute path, and a relative one is refused rather than ignored, so a
+file never quietly lands somewhere its owner will not think to look. Without
+them, Windows uses `%AppData%` for the first and `%LocalAppData%` for the other
+two.
+
+`SPACEBAR_PROFILE` is the one worth knowing about. Profile selection is the same
+everywhere, so a job that sends through one profile sets it once:
+
+```sh
+export SPACEBAR_PROFILE=alerts
+spacebar send 'deploy done'
+```
 
 ## Development
 
