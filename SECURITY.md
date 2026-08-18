@@ -862,6 +862,28 @@ read. It is gated more tightly than the CLI, on purpose.
 
   It is a middleware rather than a wrapper on each handler, so a tool added
   later is logged without anybody remembering to log it.
+
+  **One line means one whole line, and that is now a property of the renderer
+  rather than of the stream it was handed.**
+  `TestConcurrentWritersProduceWholeLines`.
+
+  The MCP server serves tool calls concurrently, confirmed in the go-sdk rather
+  than assumed: its dispatch loop hands a request to a goroutine and waits, and
+  the MCP layer releases that wait for every call except `initialize`. So the
+  audit line for one call and the `--verbose` log of another are written by two
+  goroutines through one `Renderer`.
+
+  It was already safe in production, and the reason is the problem. `Renderer`
+  takes an `io.Writer`; the command hands it `os.Stderr`; `internal/poll` holds
+  a per-descriptor lock across a whole write. Concurrent writes to an
+  `*os.File` therefore cannot interleave, and trying to make one interleave,
+  with 60KB lines and a reader slow enough to fill the pipe, does not work.
+  None of that is a property of this type, none of it was written down where it
+  was relied on, and all of it is gone the moment stderr is wrapped. Against a
+  writer that can split a line, 36 of 40 audit lines were destroyed.
+
+  So the guarantee moved to the renderer, where it is held against exactly such
+  a writer rather than against the one that happens to save it.
 - **A webhook posts to one space and there is no version of it that posts
   anywhere else.** The space is derived from the URL rather than configured
   beside it, so the two cannot disagree about where a message goes, and a target
@@ -1154,7 +1176,24 @@ against. It can make requests slow or expensive, bounded by four things and
 nothing else: `--timeout`, which bounds one attempt rather than the command;
 the five-attempt limit; the 32-second cap on a backoff, which also caps how
 long a `Retry-After` will be honoured for before the loop reports instead; and
-the limit on how large a response body may be. It can serve an attachment whose
+the limit on how large a response body may be.
+
+It cannot make that cap answer the other way. `Retry-After` in delta-seconds
+became a `time.Duration` by multiplying, and a `time.Duration` is an int64 of
+nanoseconds, so the product wrapped for a large enough value. Not merely wrapped:
+1e9 is 2^9 x 5^9, so the greatest common divisor with 2^64 is 512 and the far
+end could **choose** which multiple of 512 nanoseconds the result landed on.
+`Retry-After: 20211507185753197` produced 512ns, which is positive and under the
+cap, so it was honoured exactly as sent, with no jitter, on each of the four
+retries. What that removed was the jitter, which exists so that several apps
+backing off from one burst in a space do not come back together. The value is
+bounded before the multiply now and saturates instead, which is what the
+HTTP-date form of the header already did through `time.Time.Sub`, so both forms
+answer the same way for values that mean the same thing.
+`TestParseRetryAfter` carries the crafted value and the arithmetic behind it,
+and `FuzzRetryAfterIsAlwaysSaneOrIgnored` states it over arbitrary header bytes:
+a delta-seconds header is read faithfully or saturated, never wrapped, so a
+larger number can never produce a shorter wait. It can serve an attachment whose
 *contents* are hostile;
 `spacebar` writes bytes to the path you named and never opens them.
 
