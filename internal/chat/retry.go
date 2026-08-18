@@ -17,6 +17,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"math"
 	"math/rand/v2"
 	"net"
 	"net/http"
@@ -241,6 +242,30 @@ func sleepFor(ctx context.Context, d time.Duration) error {
 	}
 }
 
+// maxRetryAfterSeconds is the largest delta-seconds that can become a duration
+// without wrapping.
+//
+// A time.Duration is an int64 of nanoseconds, so multiplying by time.Second
+// overflows past this and the result is not merely wrong, it is **chosen by
+// whoever sent the header**. 1e9 is 2^9 x 5^9, so the greatest common divisor
+// with 2^64 is 512, and a server can therefore pick a value whose product wraps
+// onto any multiple of 512 nanoseconds it likes. Measured rather than reasoned
+// about: `Retry-After: 20211507185753197` produced 512ns, and delay honours
+// anything positive and under the cap exactly as sent, with no jitter.
+//
+// The cost was small and the shape was bad. maxAttempts is 5, so the worst case
+// was four retries with no pause instead of four with a backoff. What it
+// removed is the jitter, which exists so that several apps backing off from the
+// same burst in one space do not return together, and a far end that wanted to
+// make a burst worse could have it.
+//
+// Saturating rather than clamping to some invented ceiling, because that is
+// what the other branch of this function already does: time.Time.Sub returns
+// the maximum duration rather than wrapping, so an HTTP-date a thousand years
+// out already arrives here as something delay declines to wait for. Both forms
+// of the header now answer the same way for values that mean the same thing.
+const maxRetryAfterSeconds = math.MaxInt64 / int64(time.Second)
+
 // parseRetryAfter reads the header in both of the forms RFC 9110 allows.
 //
 // Google sends delta-seconds. The HTTP-date form is accepted anyway because it
@@ -255,6 +280,13 @@ func parseRetryAfter(value string, now time.Time) time.Duration {
 	if seconds, err := strconv.Atoi(value); err == nil {
 		if seconds <= 0 {
 			return 0
+		}
+		// Converted rather than compared as an int, because int is 32 bits on
+		// some platforms and 64 on the ones this ships to, and the bound is a
+		// property of time.Duration rather than of the machine.
+		if int64(seconds) > maxRetryAfterSeconds {
+			// Saturate rather than wrap. See maxRetryAfterSeconds.
+			return time.Duration(math.MaxInt64)
 		}
 		return time.Duration(seconds) * time.Second
 	}
