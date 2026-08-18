@@ -76,13 +76,41 @@ has records it will not answer with", not as "your results were cut".
 
 **A tool this profile cannot serve is not registered at all.** It is not
 registered-and-failing: it is absent from the tool list and absent from the
-dispatch. So the tool list is the honest answer to what is possible right now,
-and there is never a reason to call something to find out whether it works.
+dispatch. So the tool list is the honest answer to what this credential can do
+right now, and there is never a reason to call something to find out whether it
+works.
 
 That has a consequence worth stating plainly to a model reading this: **if a
 tool you expected is missing, the answer is not to try a different phrasing.**
-It is missing because this profile cannot do it. Say so to the user, and name
-the profile.
+Nothing you say will make it appear.
+
+**What you must not do is guess why it is missing**, because there are two
+reasons and only one of them is about the profile. Saying the wrong one tells
+somebody their access is limited when it is not, and they have no way to check.
+
+- **This server has no such tool, whatever the profile.** Editing a message,
+  deleting one, downloading an attachment, and running a sync have no tool.
+  Neither does sending an attachment or a card: `send_message` carries text, a
+  thread key and a message id and nothing else. Following a space live has
+  none either, and that one will not get one: a tool result is one document,
+  and a follow has nothing to return until it ends and does not end. Use
+  `list_messages` with `since` instead.
+
+  The command line does all of these. Say that, and name the command:
+  `spacebar messages edit`, `spacebar messages delete`,
+  `spacebar messages download`, `spacebar sync`, `spacebar send --file`,
+  `spacebar send --card`, `spacebar tail`, `spacebar watch`. Do not say the
+  profile cannot do them, because a profile that can do them from a terminal is
+  the ordinary case.
+
+- **This profile cannot do it.** Everything else. A webhook cannot read, so a
+  session on one offers `send_message` and, where there is an index,
+  `search_messages`. There the profile is genuinely the answer, and naming it
+  is what lets somebody fix it.
+
+That list is held by a test rather than by whoever last edited this file. Every
+command is recorded as served by a tool, deliberately not served, or owed one,
+and a command in none of the three fails the build.
 
 An incoming webhook profile is the common case in a locked-down Workspace
 organization. It can send to one space and do nothing else, so with

@@ -664,6 +664,14 @@ A model is never shown a tool this profile cannot serve, writes are off until
 `--allow-write` says otherwise, `--allow-space` narrows where they may land, and
 every tool call is one JSON line on stderr that no flag suppresses.
 
+**Eight tools is fewer jobs than the command line does**, and the gap is
+written down rather than left to be discovered. `spacebar messages edit`,
+`spacebar messages delete`, `spacebar messages download` and `spacebar sync`
+have no tool yet, and neither do `send --file` and `send --card`. Following a
+space live has none by design: a tool result is one document and a follow does
+not end. A test holds every command to being served, deliberately unserved, or
+owed a named tool, so this paragraph cannot go quietly out of date.
+
 **[docs/SKILL.md](docs/SKILL.md) is the full contract**, including the
 confirmation sentence every write tool carries and why message text reaching a
 model is untrusted input.

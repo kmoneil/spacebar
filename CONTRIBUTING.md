@@ -105,6 +105,28 @@ from looking.
   that quotes a golden against it. Those two are read by agents, which cannot
   tell a stale example from a current one, so an example there is closer to an
   interface definition than to prose.
+- **A command that neither has an MCP tool nor says why not.**
+  `internal/cli/parity_test.go`. `internal/cli` and `internal/mcpsrv` are thin
+  adapters over the same internal packages, so a job one can do and the other
+  cannot is a bug rather than a feature of either. Every command is recorded as
+  served by a named tool, deliberately not served with the reason, or owed one
+  with the name it will have, and a command in none of the three fails the
+  build. It runs the other way too: a tool no command claims fails, and an owed
+  entry whose tool has since been written fails until it moves.
+
+  A second check covers what walking commands cannot reach. `send --file` and
+  `send --card` are flags on a command that already has a tool, and each
+  carries its own `transport.Require`, so the capabilities `internal/cli` gates
+  on are read out of the source and compared with the ones `internal/mcpsrv`
+  registers behind. A flag earns an entry when it changes which requests are
+  made rather than what is in one, which is the rule `dryrun_test.go` already
+  follows for the same flag.
+
+  This exists because four commands were absent from the tool list for every
+  profile, including one that could run all four, while `docs/SKILL.md` told a
+  model that a missing tool means the profile cannot do the thing and to say so
+  to the person. A gap is recoverable; a gap that instructs a model to make a
+  false statement about somebody's access is not.
 - **An environment variable no document names.** `config.EnvVars` is the list of
   what this process reads. `internal/lint/env_test.go` fails on a read of
   anything not in it, and on a listed entry nothing reads;

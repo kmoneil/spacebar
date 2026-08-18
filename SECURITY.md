@@ -921,6 +921,32 @@ read. It is gated more tightly than the CLI, on purpose.
   the second is a defence. A profile that can serve no tool at all, which today
   is any webhook, is refused before the session starts rather than connected
   and empty: `TestAProfileThatCanServeNothingIsRefusedRatherThanEmpty`.
+
+  **The absence has to mean what the documentation says it means**, and it did
+  not. `docs/SKILL.md` told a model that a missing tool is missing because this
+  profile cannot do it, and to say so to the person and name the profile. Four
+  commands had no tool for any profile, including a user-OAuth one that runs
+  all four from a terminal, so the instruction turned a gap into a confident
+  false claim about somebody's access, made to the one reader who cannot check
+  it. That is a worse failure than the gap: an absent tool is recoverable, and
+  a wrong answer about why is acted on.
+
+  The document now separates the two reasons and names which commands fall in
+  which. `internal/cli/parity_test.go` holds the list rather than whoever last
+  edited the file: every command is recorded as served by a named tool,
+  deliberately not served, or owed one, and a command in none of the three
+  fails the build, as does a tool no command claims and an owed entry whose
+  tool has since been written. A second check reads the capabilities
+  `internal/cli` gates on out of its source and compares them with the ones
+  `internal/mcpsrv` registers behind, because `send --file` and `send --card`
+  are flags on a command that already has a tool and walking commands never
+  reaches them.
+
+  Four tools are recorded as owed rather than as decided: `edit_message`,
+  `delete_message`, `download_attachment` and `sync_space`, plus attachment and
+  card support on `send_message`. They are absent because nobody wrote them.
+  A marker that outlives its gap fails the build, which is the rule the `(Mn)`
+  markers above are kept to.
 - **`--allow-space` confines the server to an allowlist** of spaces, reading as
   well as writing, so that an agent given a scratch space has neither write
   access nor read access to the company-wide announcements space.
