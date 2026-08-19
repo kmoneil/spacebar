@@ -94,8 +94,12 @@ func repoSource(t *testing.T) (*token.FileSet, []sourceFile) {
 			return err
 		}
 		// Object resolution is skipped because nothing here needs it and the
-		// ast.Object it populates is deprecated.
-		syn, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		// ast.Object it populates is deprecated. Comments are kept because
+		// internal/lint/citation_test.go checks the test names cited in them,
+		// and without ParseComments File.Comments is empty, so that gate
+		// passed by iterating nothing. It was written, it went green, and it
+		// could not have failed.
+		syn, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if err != nil {
 			return fmt.Errorf("parsing %s: %w", filepath.ToSlash(rel), err)
 		}

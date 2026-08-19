@@ -164,7 +164,7 @@ func TestABadWebhookKeyIsExplained(t *testing.T) {
 	}
 }
 
-// TestA404TellsEachTransportSomethingItCanActed On is split in two because the
+// TestA404TellsEachTransportSomethingItCanActOn is split in two because the
 // same status has two different fixes, and giving a webhook user the user-OAuth
 // answer sends them to a command their profile cannot run.
 func TestA404TellsEachTransportSomethingItCanActOn(t *testing.T) {

@@ -280,10 +280,14 @@ func fuzzTargets(t *testing.T) map[string]map[string]int {
 	return found
 }
 
-// isFuzzTarget reports whether fn is func FuzzX(f *testing.F).
+// isFuzzTarget reports whether fn is a fuzz target: a plain function whose
+// name begins with Fuzz and whose only parameter is a *testing.F.
+//
+// Written out rather than shown as a signature, because a made-up name in a
+// comment is a citation to citation_test.go and it would refuse this one.
 //
 // The receiver and the parameter type are both checked rather than the name
-// alone. A helper called FuzzHelper(t *testing.T) is not a target, and counting
+// alone. A helper whose parameter is a *testing.T is not a target, and counting
 // it would make the list above disagree with what the toolchain runs.
 func isFuzzTarget(fn *ast.FuncDecl) bool {
 	if fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Fuzz") || fn.Body == nil {

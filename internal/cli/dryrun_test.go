@@ -521,7 +521,7 @@ func TestNoDryRunOutputAnywhereCarriesACredential(t *testing.T) {
 // answer to the question somebody is using --dry-run to ask. There is no
 // Authorization header on a webhook, whose credential is in the URL, so this is
 // asserted where the header exists: in internal/chat, against a client carrying
-// a bearer token. See TestADryRunShowsTheHeaderAsRedacted there.
+// a bearer token. See TestADryRunShowsTheHeaderAsRedactedRatherThanOmittingIt there.
 //
 // This one holds the other half, that a webhook dry run does not invent a
 // header it never sends.
