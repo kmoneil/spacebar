@@ -473,6 +473,15 @@ spacebar messages list spaces/AAAAAAA --since 2026-08-16T09:00:00Z --until 2026-
 spacebar messages get spaces/AAAAAAA/messages/BBBBBBB
 ```
 
+A space can grant access to a **Google Group**, and everybody in that group is
+then in the space without a membership of their own. Those rows are not
+returned unless `--show-groups` asks for them, so the default list can be a
+narrower answer than "who can see what I post here". When one is left out you
+are told on stderr, with the count and the flag; stdout is unchanged either
+way. The group row is `groups/NNN` and nothing more: a Chat scope cannot reach
+who is in it.
+
+
 And the three that change what is already there:
 
 ```sh

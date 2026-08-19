@@ -145,7 +145,27 @@ type ListMembersRequest struct {
 	// A space can grant access to a group, and everybody in that group is then in
 	// the space without a membership of their own. Without this the answer to
 	// "who can see what I post here" omits them silently.
+	//
+	// It decides what is yielded and no longer decides what is asked for. The
+	// request carries showGroups either way, because a row that is never
+	// fetched cannot be counted, and a count is the only thing that lets the
+	// omission be spoken about. See HiddenGroups.
 	ShowGroups bool
+
+	// HiddenGroups counts the group memberships that were fetched and not
+	// yielded, so that a caller can say a narrower answer is narrower.
+	//
+	// An out-parameter, which is unusual here and is the least bad of the
+	// shapes available. Members returns an iterator, so there is nowhere to put
+	// a second value that is only correct once the walk is finished; returning
+	// a counter function beside the sequence would give this one endpoint a
+	// signature none of its neighbours have. A pointer the walk increments is
+	// complete exactly when the sequence is exhausted, which is when every
+	// caller looks at it.
+	//
+	// Nil means nobody is counting, and the filtering happens regardless: a
+	// caller that does not want the number still must not be handed the rows.
+	HiddenGroups *int
 
 	// Limit is how many memberships the caller wants. Zero or less means all.
 	Limit int
@@ -214,23 +234,58 @@ func (c *Client) Members(ctx context.Context, req ListMembersRequest) iter.Seq2[
 	if req.ShowInvited {
 		query.Set("showInvited", "true")
 	}
-	if req.ShowGroups {
-		query.Set("showGroups", "true")
-	}
+
+	// Always, whatever the caller asked for. A group membership grants access
+	// to everybody in the group, so a list that omits one is a narrower answer
+	// to "who is in here" than the question asked for, and the old request let
+	// the server drop those rows before anything here could notice they had
+	// existed. What ShowGroups decides now is whether they are yielded.
+	query.Set("showGroups", "true")
 
 	return paginate(ctx, c, pager[Membership]{
 		path:  req.Space + "/members",
 		query: query,
 		limit: req.Limit,
+		// The filtering is here rather than in either adapter, and both halves
+		// of that matter. Business logic in an adapter is logic the other
+		// adapter does not have. And decode runs before pager.emit counts, so
+		// a row dropped here never reaches the limit: emit counts what it
+		// yields and pageSize under-asks the server from the same counter, so
+		// dropping downstream of it would spend limit budget on rows nobody
+		// sees and shorten the next page as well.
 		decode: func(payload []byte) ([]Membership, string, error) {
 			var body struct {
 				Memberships   []Membership `json:"memberships"`
 				NextPageToken string       `json:"nextPageToken"`
 			}
-			err := json.Unmarshal(payload, &body)
-			return body.Memberships, body.NextPageToken, err
+			if err := json.Unmarshal(payload, &body); err != nil {
+				return nil, "", err
+			}
+			if req.ShowGroups {
+				return body.Memberships, body.NextPageToken, nil
+			}
+			return withoutGroups(body.Memberships, req.HiddenGroups), body.NextPageToken, nil
 		},
 	})
+}
+
+// withoutGroups drops the memberships held by a Google Group, counting them.
+//
+// A group membership is the one with GroupMember set and Member nil, which is
+// how the API sends it and what TestAGroupMembershipDecodesAsTheAPISendsIt
+// pins against a real space.
+func withoutGroups(all []Membership, hidden *int) []Membership {
+	kept := make([]Membership, 0, len(all))
+	for _, m := range all {
+		if m.GroupMember != nil {
+			if hidden != nil {
+				*hidden++
+			}
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return kept
 }
 
 // GetSpace reads one space (SPEC.md §7.3).

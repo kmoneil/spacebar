@@ -208,3 +208,14 @@ not accept the shortcode form. The refusal happens before the request.
 whether a member is inside the organization, and it is absent on an app and on a
 Google Group rather than defaulting to `INTERNAL`. A space whose access comes
 through a group can include people no tool here can enumerate.
+
+**`hidden_groups` on a `list_members` result means the list is short.** Without
+`show_groups`, memberships held by a Google Group are not returned, and
+`hidden_groups` counts them. A non-zero value means everybody in that group is
+in the space without a membership of their own, so the list you are holding is
+not the whole answer to who is in it.
+
+Say so rather than reporting the members you got as complete. You can call
+`list_members` again with `show_groups` to name the group, and that is as far as
+it goes: there is no way from here to who is in the group, so do not offer to
+find out.

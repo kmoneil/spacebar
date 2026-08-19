@@ -15,6 +15,8 @@
 package cli
 
 import (
+	"fmt"
+
 	"github.com/spf13/cobra"
 
 	"github.com/kmoneil/spacebar/internal/chat"
@@ -224,12 +226,35 @@ reason there is none for a person.`,
 				return err
 			}
 
-			return finish(r, opened, stream(r, opened.Transport.Members(cmd.Context(), chat.ListMembersRequest{
-				Space:       target,
-				ShowInvited: showInvited,
-				ShowGroups:  showGroups,
-				Limit:       limit,
+			// Counted during the walk and read after it, so the sentence is
+			// only printed when there was something to say. It goes to stderr
+			// after the rows, because stdout is the answer and this is about
+			// the answer.
+			//
+			// Warn and not Note, which was the first version and was wrong.
+			// Note is suppressed under --json and --quiet, which is right for
+			// conversational chrome and exactly wrong for this: --json is what
+			// a program reads, and a program told nothing is a program that
+			// reports a narrowed membership list as the whole answer. That is
+			// the defect this change exists to remove, and choosing Note would
+			// have left it in place for the one reader who cannot check.
+			// search.go warns for the same reason when it could not search
+			// every space.
+			hidden := 0
+			err = finish(r, opened, stream(r, opened.Transport.Members(cmd.Context(), chat.ListMembersRequest{
+				Space:        target,
+				ShowInvited:  showInvited,
+				ShowGroups:   showGroups,
+				HiddenGroups: &hidden,
+				Limit:        limit,
 			}), rows.ForMember))
+			if err != nil {
+				return err
+			}
+			if hidden > 0 {
+				r.Warn("%s", hiddenGroupsNote(hidden))
+			}
+			return nil
 		},
 	}
 
@@ -239,6 +264,25 @@ reason there is none for a person.`,
 	f.BoolVar(&showGroups, "show-groups", false, "include memberships held by a Google Group")
 	addRefreshFlag(cmd, &refresh)
 	return cmd
+}
+
+// hiddenGroupsNote is what somebody is told when the list they just read is
+// not the whole answer.
+//
+// It says the number, what it means, and the flag, in that order, because the
+// first thing somebody needs is to know the list is short and the last is what
+// to type. It does not say who is in the group: a Chat scope reaches groups/NNN
+// and no further, so there is no name, no address and no count of people to
+// offer, and implying otherwise would send somebody looking for a command that
+// does not exist.
+//
+// Printed only when something was withheld. A note on every complete list is
+// noise, and noise is what teaches people to skip the line that mattered.
+func hiddenGroupsNote(hidden int) string {
+	return fmt.Sprintf("%d membership(s) held by a Google Group were not listed, and everybody in "+
+		"such a group is in this space without a membership of their own.\n"+
+		"So this is not the whole answer to who can see what you post here. Pass --show-groups to "+
+		"list them, which names the group and nothing about who is in it.", hidden)
 }
 
 // exactlyOne builds an argument check that fails at exit 2 with a message

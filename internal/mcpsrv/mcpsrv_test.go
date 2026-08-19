@@ -87,8 +87,30 @@ func (f *fake) GetSpace(_ context.Context, name string) (*chat.Space, error) {
 	return nil, output.Errorf("NOT_FOUND", output.ExitAPI, "no space named %q", name)
 }
 
-func (f *fake) Members(context.Context, chat.ListMembersRequest) iter.Seq2[chat.Membership, error] {
-	return yield(f.members, f.fail)
+// Members honours the same contract chat.Members does, which a fake that
+// simply yielded its list would not.
+//
+// The real one asks the API for group memberships whatever the caller wanted,
+// yields them only when ShowGroups is set, and counts the rest into
+// HiddenGroups. A fake that skipped that would let this package's tests pass
+// while the tool reported a narrowed list as complete, which is the exact
+// failure the count exists to prevent.
+func (f *fake) Members(_ context.Context, req chat.ListMembersRequest) iter.Seq2[chat.Membership, error] {
+	if req.ShowGroups {
+		return yield(f.members, f.fail)
+	}
+
+	kept := make([]chat.Membership, 0, len(f.members))
+	for _, m := range f.members {
+		if m.GroupMember != nil {
+			if req.HiddenGroups != nil {
+				*req.HiddenGroups++
+			}
+			continue
+		}
+		kept = append(kept, m)
+	}
+	return yield(kept, f.fail)
 }
 
 func (f *fake) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
@@ -1370,5 +1392,58 @@ func TestASearchThatSkippedNothingSaysNothing(t *testing.T) {
 	}
 	if strings.Contains(string(body), "skipped") {
 		t.Errorf("a clean index produced a skipped field, which is a line every caller learns to ignore:\n%s", body)
+	}
+}
+
+// TestAMemberListThatLeftGroupsOutSaysSoInTheResult.
+//
+// The CLI puts this on stderr because a person is reading a terminal. A model
+// is not, and CLAUDE.md already records where that difference went wrong once:
+// internal/store returned its warnings and only the CLI collected them, so the
+// same search over MCP answered narrowly and said nothing. This is that shape
+// again, caught before it shipped rather than after.
+//
+// A membership held by a Google Group grants access to everybody in the group,
+// so a list without one is a narrower answer than the question asked.
+// hidden_groups is what lets the reader who acts on the answer know that.
+func TestAMemberListThatLeftGroupsOutSaysSoInTheResult(t *testing.T) {
+	members := []chat.Membership{
+		{Name: "spaces/AAA/members/group-01", State: "JOINED", GroupMember: &chat.Group{Name: "groups/01"}},
+		{Name: "spaces/AAA/members/1", State: "JOINED", Member: &chat.User{Name: "users/1", Type: "HUMAN"}},
+		{Name: "spaces/AAA/members/group-02", State: "JOINED", GroupMember: &chat.Group{Name: "groups/02"}},
+		{Name: "spaces/AAA/members/2", State: "JOINED", Member: &chat.User{Name: "users/2", Type: "HUMAN"}},
+	}
+
+	for _, tc := range []struct {
+		name             string
+		showGroups       bool
+		wantRows, hidden int
+	}{
+		{name: "the default leaves them out and counts them", wantRows: 2, hidden: 2},
+		{name: "asking for them leaves nothing to report", showGroups: true, wantRows: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := connectWith(t, Options{
+				Profile: &profile.Open{
+					Name:      "work",
+					Transport: &fake{kind: config.TransportUserOAuth, caps: full(), members: members},
+				},
+			})
+
+			var out listMembersOut
+			callTool(t, session, "list_members", map[string]any{
+				"space":       "spaces/AAA",
+				"show_groups": tc.showGroups,
+			}, &out)
+
+			if len(out.Members) != tc.wantRows {
+				t.Errorf("members = %d, want %d", len(out.Members), tc.wantRows)
+			}
+			if out.HiddenGroups != tc.hidden {
+				t.Errorf("hidden_groups = %d, want %d: a model cannot read stderr, so a count it "+
+					"never receives is an omission it reports as the whole answer",
+					out.HiddenGroups, tc.hidden)
+			}
+		})
 	}
 }
