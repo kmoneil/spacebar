@@ -516,7 +516,7 @@ it is pasted rather than as a `400` about an API key days later.
   command that never returns while spending a shared per-space quota. The bound
   is a page count rather than a memory of tokens seen, because a set of tokens
   is memory whose size the far end chooses.
-  `TestANonAdvancingPageTokenStopsTheWalk`,
+  `TestANonAdvancingPageTokenStopsTheWalkAndSaysSo`,
   `TestAnAlternatingPageTokenStopsTheWalkAndSaysSo`.
 - **Nothing ever blocks on input.** A command that would read from a terminal
   when stdin is not one refuses and exits `7` instead. A CLI that blocks on a

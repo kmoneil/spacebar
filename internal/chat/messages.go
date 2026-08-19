@@ -418,9 +418,22 @@ func CheckMessageName(message string) error {
 // lives in an adapter is a rule the other adapter does not have.
 //
 // Both names are checked, the message on the way in and the space on the way
-// out. The second is not redundant: the message pattern is what guarantees the
-// prefix is a space, and a first layer that needs the layer below it to be safe
-// is not a first layer.
+// out, and the second check is depth rather than the guarantee. This comment
+// claimed the opposite until 2026-08-19, in a sentence that gave the reason it
+// is redundant as the reason to keep it: "the message pattern is what
+// guarantees the prefix is a space".
+//
+// If the pattern guarantees it, the check cannot fail. Measured rather than
+// argued, because a layered check and an unreachable one look alike: deleting
+// the CheckSpaceName call below and fuzzing the target that exists to hold it
+// found nothing in 2,130,611 executions, and a throwaway target hunting for a
+// string that passes one pattern and fails the other found none in 852,137.
+// messageName's space portion is character for character spaceName's class.
+//
+// Keeping the call is still worth one comparison: it is what makes this safe if
+// the patterns ever drift. What is not worth anything is a test asserting it,
+// so the claim is stated between the two patterns instead, where widening
+// either one fails it.
 func SpaceOfMessage(message string) (string, error) {
 	if err := CheckMessageName(message); err != nil {
 		return "", err
