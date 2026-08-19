@@ -437,10 +437,14 @@ it is pasted rather than as a `400` about an API key days later.
   and a token full of `..` moves no path.
   `TestAPageTokenChosenByTheServerCannotChangeTheRequest`.
 - **A server cannot hold a list open forever.** A page token identical to the
-  one just used ends the walk rather than being followed, so a far end that kept
-  reissuing the same token would stop rather than becoming a command that never
-  returns while spending a shared per-space quota.
-  `TestANonAdvancingPageTokenStopsTheWalk`.
+  one just used ends the walk rather than being followed, and a walk still
+  being promised pages after `maxPages` of them ends the same way, so a far end
+  reissuing one token or cycling through several stops rather than becoming a
+  command that never returns while spending a shared per-space quota. The bound
+  is a page count rather than a memory of tokens seen, because a set of tokens
+  is memory whose size the far end chooses.
+  `TestANonAdvancingPageTokenStopsTheWalk`,
+  `TestAnAlternatingPageTokenStopsTheWalkAndSaysSo`.
 - **Nothing ever blocks on input.** A command that would read from a terminal
   when stdin is not one refuses and exits `7` instead. A CLI that blocks on a
   prompt inside a pipeline hangs whatever is driving it, and a hung agent is
@@ -1222,6 +1226,12 @@ exact failure the claim above forbids. It now yields `chat.ErrTruncated`, and
 the rows already fetched are still delivered, because a partial answer with a
 non-zero exit is honest where a partial answer with a zero exit is not.
 `TestANonAdvancingPageTokenStopsTheWalkAndSaysSo`.
+
+The repeat check was also one comparison deep: a server alternating two tokens
+never repeats the one just used, and was measured walking 5,000 pages with no
+sign of stopping. A bound on pages per walk (`maxPages`, far past any real
+walk) now ends a cycle of any length the same honest way, at a cost the bound
+itself caps. `TestAnAlternatingPageTokenStopsTheWalkAndSaysSo`.
 
 **An empty page is not the end**, which is the other half and was observed
 rather than reasoned: Chat's `messages.list` in ascending order returns a page

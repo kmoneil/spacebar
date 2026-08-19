@@ -318,6 +318,57 @@ func TestANonAdvancingPageTokenStopsTheWalkAndSaysSo(t *testing.T) {
 	}
 }
 
+// TestAnAlternatingPageTokenStopsTheWalkAndSaysSo.
+//
+// The companion to the test above, for the cycle the repeat check cannot see.
+// A server alternating two tokens never hands back the one it was just given,
+// so before maxPages existed this walk ran forever: reproduced twice, 5,000
+// requests and still going when the harness gave up. The bound ends it with
+// the same honesty the one-token case gets: the rows already fetched are
+// yielded, the error is ErrTruncated, and the exit is non-zero.
+//
+// The request count is asserted exactly, because the bound is also a promise
+// about cost: a cycle spends maxPages requests and not one more, on a
+// per-space quota shared with every other app acting in the space.
+func TestAnAlternatingPageTokenStopsTheWalkAndSaysSo(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, req *http.Request) {
+		next := "cycle-A"
+		if req.URL.Query().Get("pageToken") == "cycle-A" {
+			next = "cycle-B"
+		}
+		_, _ = fmt.Fprintf(w, `{"nextPageToken": %q, "messages": [{"name": "spaces/AAA/messages/m"}]}`, next)
+	})
+
+	var got []Message
+	var err error
+	for message, e := range r.client.Messages(context.Background(), ListMessagesRequest{Space: "spaces/AAA"}) {
+		if e != nil {
+			err = e
+			break
+		}
+		got = append(got, message)
+	}
+
+	if err == nil {
+		t.Fatal("a walk on a token cycle reported nothing, so it would have run until somebody killed it")
+	}
+	if !errors.Is(err, ErrTruncated) {
+		t.Errorf("the failure is not ErrTruncated: %v", err)
+	}
+	if got := output.ExitCodeOf(err); got == output.ExitOK {
+		t.Errorf("a truncated list exited %d, which a script reads as success", got)
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Errorf("the failure does not say the result is short:\n%v", err)
+	}
+	if len(got) != maxPages {
+		t.Errorf("got %d messages before the bound, want one per page, %d", len(got), maxPages)
+	}
+	if r.count() != maxPages {
+		t.Errorf("made %d requests on a token cycle, want exactly maxPages, %d", r.count(), maxPages)
+	}
+}
+
 // TestMessagesDefaultsToNewestFirst.
 //
 // The decision recorded in m3-04. A caller who says nothing gets the latest
@@ -840,6 +891,22 @@ func TestEveryWayAListEndsIsEitherCompleteOrSaysItIsNot(t *testing.T) {
 				_, _ = fmt.Fprint(w, `{"messages":[{"name":"spaces/AAA/messages/a"}],"nextPageToken":"stuck"}`)
 			},
 			wantRows:  2,
+			truncated: true,
+		},
+		{
+			// The repeat guard never fires here, because the token is always
+			// new; the page bound is what ends it. One row per page, so the
+			// row count is the request count, and both are exactly maxPages.
+			name:  "the server cycled between two tokens",
+			limit: 0,
+			handler: func(page int, w http.ResponseWriter) {
+				next := "cycle-A"
+				if page%2 == 0 {
+					next = "cycle-B"
+				}
+				_, _ = fmt.Fprintf(w, `{"messages":[{"name":"spaces/AAA/messages/a"}],"nextPageToken":%q}`, next)
+			},
+			wantRows:  maxPages,
 			truncated: true,
 		},
 	} {
