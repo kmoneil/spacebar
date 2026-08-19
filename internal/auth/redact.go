@@ -66,7 +66,7 @@ func IsLoopbackHost(host string) bool {
 // to disagree, and the one that disagrees quietly is the one that leaks.
 func SecretParam(name string) bool { return secretParams[name] }
 
-// RedactURL returns raw with every credential-bearing query parameter replaced.
+// RedactURL returns raw with every credential-bearing part replaced.
 //
 // The path survives, because it is the part being checked: an operator reading
 // a dry run wants to see which space the message was going to, and a URL
@@ -74,7 +74,23 @@ func SecretParam(name string) bool { return secretParams[name] }
 //
 // A URL that will not parse is replaced entirely. It cannot be reasoned about,
 // and the one thing certain about it is that it came from a field that holds a
-// credential.
+// credential. The two clauses below are that same argument applied to a part
+// of a URL rather than to the whole of one, and both were found by
+// FuzzARedactedURLCarriesNoCredential rather than by reading this.
+//
+// The query is parsed here rather than read off url.URL.Query, which discards
+// the parse error and answers with whatever it managed. A semicolon is the
+// case that matters: url.ParseQuery refuses the whole pair one appears in, so
+// "?key=SECRET;x=1" yielded no parameters at all, the nothing-to-redact path
+// handed back the raw query untouched, and the credential went to the log. A
+// query this cannot read is replaced whole.
+//
+// A fragment is replaced whenever there is one, unread. It is never sent to a
+// server, so it answers no question a dry run is asked, and the OAuth implicit
+// flow returns an access token in one. Both redaction layers were skipping it:
+// this one looked only at the query, and internal/chat's scrub only knows the
+// values it found in the same place, so a fragment on a profile's base URL
+// reached both the verbose log and a dry run intact.
 func RedactURL(raw string) string {
 	if raw == "" {
 		return ""
@@ -90,8 +106,17 @@ func RedactURL(raw string) string {
 		u.User = url.User(Redacted)
 	}
 
-	query := u.Query()
-	if len(query) == 0 {
+	if u.Fragment != "" || u.RawFragment != "" {
+		u.Fragment, u.RawFragment = Redacted, ""
+	}
+
+	if u.RawQuery == "" {
+		return u.String()
+	}
+
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		u.RawQuery = Redacted
 		return u.String()
 	}
 	for name := range query {
