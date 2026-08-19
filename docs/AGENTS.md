@@ -95,10 +95,14 @@ does not fail usefully either, it prints a URL and blocks for three minutes.
 
 So on exit 4: stop, report it, and name the profile and the command a person
 would run. Do not retry, do not run `auth login` yourself, and do not report the
-work as done. If you are on a machine with no browser, which is the usual case
-for a program, the person also has to replay the failed redirect URL by hand;
-the README section "When there is no browser here" is what they need and it is
-worth naming to them.
+work as done.
+
+If they are on a machine with no browser, which is the usual case wherever you
+are running, `auth login` asks them to paste the URL their browser failed on and
+finishes from that. It only asks when stdin is a terminal, so running it from a
+program neither prompts nor blocks: it waits out its three minutes and changes
+nothing. The README section "When there is no browser here" is what they need
+and is worth naming to them.
 
 The same applies to `spacebar auth setup`, which reads a client secret from
 stdin that only they have.

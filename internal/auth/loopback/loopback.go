@@ -36,6 +36,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -146,28 +148,14 @@ func (s *Server) Close() error {
 // asks for /favicon.ico as soon as it renders the page, and treating that as
 // the answer would end the flow before the real one arrived.
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	code, authErr, state := query.Get("code"), query.Get("error"), query.Get("state")
-
-	if code == "" && authErr == "" {
+	result, ok := s.accept(r.URL.Query())
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	// Constant time, and before anything else is looked at. SPEC.md §15.3: a
-	// callback whose state does not match is rejected, and it is rejected
-	// without saying why, because whoever sent it is not the person who started
-	// this flow and telling them what was wrong with their guess helps only
-	// them.
-	if subtle.ConstantTimeCompare([]byte(state), []byte(s.want)) != 1 {
-		http.NotFound(w, r)
-		return
-	}
-
-	result := Result{Code: code}
 	page := successPage
-	if authErr != "" {
-		result = Result{Err: describeAuthError(authErr, query.Get("error_description"))}
+	if result.Err != nil {
 		page = refusedPage
 	}
 
@@ -178,12 +166,79 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write([]byte(page))
 
-	// Buffered, so a second callback cannot block a handler forever. The first
-	// one wins and the rest are answered and discarded.
+	s.deliver(result)
+}
+
+// accept decides what a callback's values mean.
+//
+// The one place that decision is made, whichever route the values arrived by.
+// Offer parses a pasted URL and comes here too, so a paste cannot go around
+// the state check by taking a different path to the same channel: there is no
+// different path.
+//
+// A request carrying neither a code nor an error is not the callback. A browser
+// asks for /favicon.ico as soon as it renders the page, and treating that as
+// the answer would end the flow before the real one arrived.
+//
+// The state comparison is constant time and happens before any value is used.
+// SPEC.md §15.3: a callback whose state does not match is refused, and refused
+// without saying why, because whoever sent it is not the person who started
+// this flow and telling them what was wrong with their guess helps only them.
+func (s *Server) accept(query url.Values) (Result, bool) {
+	code, authErr, state := query.Get("code"), query.Get("error"), query.Get("state")
+
+	if code == "" && authErr == "" {
+		return Result{}, false
+	}
+	if subtle.ConstantTimeCompare([]byte(state), []byte(s.want)) != 1 {
+		return Result{}, false
+	}
+	if authErr != "" {
+		return Result{Err: describeAuthError(authErr, query.Get("error_description"))}, true
+	}
+	return Result{Code: code}, true
+}
+
+// deliver hands a result to whoever is waiting, if nobody has yet.
+//
+// Buffered and non-blocking, so a second callback cannot hold a handler open
+// forever. The first one wins and the rest are answered and discarded, which is
+// also what makes a paste and a socket callback safe to race: they cannot both
+// be consumed.
+func (s *Server) deliver(result Result) {
 	select {
 	case s.result <- result:
 	default:
 	}
+}
+
+// Offer takes a callback URL that reached this machine by some route other than
+// the browser, and completes the flow with it if it is genuinely this flow's.
+//
+// It exists because the redirect cannot always arrive on its own. The listener
+// is on 127.0.0.1 of the machine running the command, and a browser on a
+// different machine consents successfully and then has nowhere to deliver the
+// result. The authorization is not lost when that happens: it is in the failed
+// URL in the address bar, and this is how it gets back.
+//
+// Every check the socket route runs, this runs, because it is the same
+// function. A URL somebody was talked into pasting is refused by the state
+// comparison exactly as one somebody was talked into visiting would be, and the
+// exchange afterwards is bound to a verifier that never left this process.
+func (s *Server) Offer(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		// The reason is not quoted back. Whatever this is, it was pasted into a
+		// prompt asking for a URL that carries an authorization code.
+		return errors.New("that is not a URL")
+	}
+
+	result, ok := s.accept(u.Query())
+	if !ok {
+		return errors.New("that URL is not this flow's callback")
+	}
+	s.deliver(result)
+	return nil
 }
 
 // describeAuthError turns the authorization server's code into a sentence.

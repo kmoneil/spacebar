@@ -317,79 +317,72 @@ collect your authorization.
 <details>
 <summary><b>When there is no browser here: a container, SSH, a remote dev box</b></summary>
 
-Consent works and the login still fails, with the browser stopping on
-`ERR_CONNECTION_REFUSED` at `http://127.0.0.1:PORT/`.
+Nothing extra to run. `spacebar auth login` prints the consent URL and then
+asks:
 
-Nothing malfunctioned. The authorization comes back to a listener on
-`127.0.0.1`, and `127.0.0.1` in a browser on your laptop is your laptop, not the
-machine running `spacebar`. The two ends of the flow are on different machines
-and the redirect has no way across. The port is chosen by the kernel when the
-command runs, so there is no fixed port to forward ahead of time either.
+```
+Could not open a browser. Go to this URL to authorize:
+https://accounts.google.com/o/oauth2/v2/auth?...
 
-**The authorization is not lost when this happens.** It is in the browser's
-address bar, in the URL that failed to load, and the listener is still waiting
-for it on the machine you ran the command on. Replay it there, in a second
-shell, while the first one is still waiting:
+If the browser is on another machine it cannot reach this one. Paste the URL it
+failed on here, and the authorization in it finishes the login:
+```
+
+Open the URL wherever you have a browser. Consent. The browser lands on
+`ERR_CONNECTION_REFUSED` at `http://127.0.0.1:PORT/`, because the listener is on
+the machine running the command and `127.0.0.1` in your browser is your laptop.
+Copy that failed URL out of the address bar and paste it at the prompt.
+
+The authorization is in that URL. Pasting it finishes the login exactly as if
+the redirect had arrived by itself.
+
+**Both routes run at once and you never choose.** The listener keeps waiting the
+whole time, so on a machine whose browser can reach it the redirect arrives on
+its own and nobody answers the prompt. Where it cannot, the paste is the route.
+There is no flag.
+
+**A wrong paste costs a sentence, not the attempt.** A stray newline, the
+consent URL from the wrong window, a half-copied line: each is refused with a
+reason and it asks again, until the three minutes are up.
+
+**The prompt is only shown when somebody is there to answer it.** Piped or
+redirected input never sees it and never blocks, which is the rule that nothing
+in this tool waits on input when stdin is not a terminal.
+
+### What stops a URL you were talked into pasting
+
+The listener checks the `state` value it generated before it reads anything
+else, and a pasted URL runs that same check because it goes through the same
+function the socket does. A callback from somebody else's flow is refused. Even
+with the right state, the exchange afterwards is bound by PKCE to a verifier
+that never left this process.
+
+So the code in that URL is worth nothing to anybody else, which also means a
+code that ends up on your screen is not an emergency. Finish the flow with it: a
+spent code is inert.
+
+### If you would rather not paste
+
+The listener is an ordinary HTTP server on your own machine, so the failed URL
+can be replayed with anything. In a second shell, while the first is waiting:
 
 ```sh
-# shell 1
-spacebar auth login --profile work
-
-# shell 2, once consent has landed on ERR_CONNECTION_REFUSED
 read -r url
 curl -s "$url" >/dev/null
 ```
 
-`spacebar auth login` then exchanges the code and stores the token as though the
-redirect had arrived by itself.
+Paste at the `read` prompt rather than onto the `curl` line, because a command
+line goes into your shell history and a `read` does not. This is the same route
+by hand, and it is what to reach for if you are driving `auth login` from
+something that is not a terminal.
 
-**Paste at the `read` prompt, never onto the `curl` line.** That URL carries a
-live authorization code. A command line goes into your shell history and into
-anything recording your terminal; a `read` does not.
+### Two more things
 
-### One shell, if you would rather
-
-The two commands can be one line, and it needs more care than it looks like it
-needs:
-
-```sh
-spacebar auth login --profile work & sleep 2
-while :; do
-  printf '\npaste the failed URL, then Enter: '
-  read -r url </dev/tty || break
-  case "$url" in http://127.0.0.1:*) break ;; esac
-done
-curl -s "$url" >/dev/null
-wait
-```
-
-The loop is not decoration. A bare `read -r url` prints no prompt, so once the
-consent URL has scrolled past the terminal looks idle, and **a single stray
-Enter satisfies it with an empty string**: `curl` then fails on a blank
-argument, and the URL you paste afterwards is echoed to the screen and consumed
-by nothing. Which is the one outcome the `read` was there to prevent. That
-happened on the first real run of the short version, in zsh, to somebody who
-had just written it.
-
-### What protects you if the code does end up on screen
-
-It is single use and it is bound to this flow by PKCE: the verifier never leaves
-the waiting process, so the code cannot be exchanged by anyone who reads it
-somewhere else. Complete the flow with it anyway rather than abandoning it, and
-a spent code is inert.
-
-The listener is careful for the same reason. It checks the `state` value it
-generated before it looks at anything else, so a URL you were talked into
-pasting is answered with a 404 and nothing happens.
-
-### Two more things worth knowing before you start
-
-- **You have three minutes from when the URL prints**, and that clock covers
-  opening it elsewhere, consenting, and getting the failed URL back. Have the
-  second shell ready.
-- **If it runs out, nothing changed.** Measured, not assumed: after a timeout
-  `config.json` and the credential store are byte-identical to what they were
-  before, and an existing authorization still works. Run it again.
+- **You have three minutes from when the URL prints**, covering opening it
+  elsewhere, consenting, and getting back.
+- **If it runs out, nothing changed.** Measured rather than assumed: after a
+  timeout the configuration and the credential store are byte-identical to what
+  they were, and an existing authorization still works. Run it again.
 
 On a machine with no OS keyring, which containers usually are, the refresh token
 lands in `credentials.json` at mode `0600` instead, and every later command says
