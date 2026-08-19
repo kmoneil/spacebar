@@ -15,6 +15,7 @@
 package auth
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -283,4 +284,78 @@ func TestSendOnlyIsExactlyOneScope(t *testing.T) {
 			t.Errorf("DefaultScopes[%d] = %q, want %q", i, DefaultScopes[i], scope)
 		}
 	}
+}
+
+// FuzzAClientFileThatIsAcceptedIsComplete fuzzes the one JSON parser in this
+// package that reads a file somebody downloaded from somewhere else.
+//
+// Two claims, and the second is the one worth the target.
+//
+// A client that comes back has both halves. clientFrom refuses an empty
+// client_id and refuses a client_id with no secret beside it, on the grounds
+// that Google issues one for every desktop client and its absence means a
+// truncated file. A half-built client would be stored against a profile and
+// fail at the consent screen instead, which is a long way from the paste that
+// caused it.
+//
+// A web client is never accepted, whatever else the file says. It cannot
+// redirect to a loopback address on a port chosen at runtime, which is the
+// whole of how this authorizes, so accepting one would produce a profile that
+// looks configured and cannot log in. The interesting inputs are the files
+// with both sections and the files where the section this reads is null, which
+// is where a switch on two pointers can pick the wrong one.
+func FuzzAClientFileThatIsAcceptedIsComplete(f *testing.F) {
+	for _, seed := range []string{
+		consoleFile,
+		`{"installed":{"client_id":"a.apps.googleusercontent.com","client_secret":"GOCSPX-x","project_id":"p"}}`,
+		`{"installed":{"client_id":"a","client_secret":""}}`,
+		`{"installed":{"client_id":"","client_secret":"s"}}`,
+		`{"installed":{}}`,
+		`{"installed":null}`,
+		`{"web":{"client_id":"a","client_secret":"s"}}`,
+		`{"web":null}`,
+		`{"installed":null,"web":{"client_id":"a","client_secret":"s"}}`,
+		`{"installed":{"client_id":"a","client_secret":"s"},"web":{"client_id":"b","client_secret":"t"}}`,
+
+		// The endpoints are constants in this repository so that a doctored
+		// file cannot send the consent screen or the secret somewhere else. A
+		// file carrying them is accepted and they are ignored, and that is the
+		// behaviour being pinned rather than a refusal.
+		`{"installed":{"client_id":"a","client_secret":"s","auth_uri":"https://evil.invalid/auth","token_uri":"https://evil.invalid/token"}}`,
+
+		`{}`, `[]`, `null`, `0`, `""`, `{`, ``, "\xff",
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		client, err := ParseClient(raw)
+		if err != nil {
+			if client != nil {
+				t.Fatalf("ParseClient(%q) returned both a client and the error %v", raw, err)
+			}
+			return
+		}
+
+		if client.ID == "" || client.Secret == "" {
+			t.Fatalf("ParseClient(%q) returned a client with an empty half: id %q, secret %q",
+				raw, client.ID, client.Secret)
+		}
+
+		// Whatever was accepted came from the installed section. A file with a
+		// web section and no installed one is refused, and one with both is
+		// read as the desktop client it also is.
+		var file consoleClient
+		if err := json.Unmarshal(raw, &file); err != nil {
+			t.Fatalf("ParseClient accepted %q, which does not decode: %v", raw, err)
+		}
+		if file.Installed == nil {
+			t.Fatalf("ParseClient(%q) accepted a file with no installed section", raw)
+		}
+		if client.ID != file.Installed.ClientID || client.Secret != file.Installed.ClientSecret {
+			t.Fatalf("ParseClient(%q) returned a client that is not the installed one:\n"+
+				"  got  id %q secret %q\n  want id %q secret %q",
+				raw, client.ID, client.Secret, file.Installed.ClientID, file.Installed.ClientSecret)
+		}
+	})
 }

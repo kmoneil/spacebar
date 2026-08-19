@@ -94,6 +94,60 @@ legible anyway.
 The answer a measurement gives is allowed to be "leave it alone", and two of
 them already are.
 
+## Fuzzing
+
+`make fuzz` runs every target for `FUZZTIME` each, discovered by asking the
+toolchain rather than from a list, so a target added to a package nobody
+thought about is still swept. `.github/workflows/fuzz-nightly.yml` runs the same
+thing for ten minutes a target every night, against a corpus carried over in a
+cache: discovery scales with cumulative CPU time against a corpus that persists,
+not with the length of any one run, so a twenty-second leg on every pull request
+would mostly re-derive what last night already explored.
+
+It is scheduled rather than required, because a find is usually about code the
+last change never touched, and a nondeterministic red on somebody's unrelated
+merge teaches people to press re-run. What runs on the pull request is the
+deterministic half, inside `go test`: every seed, and every crasher ever
+committed under `testdata/fuzz`.
+
+**A find is committed twice.** The file Go wrote goes under the target's
+`testdata/fuzz` directory, which is what replays it, and the same value goes in
+as an `f.Add` seed in the same change, which is what makes the regression
+legible to somebody reading the test rather than only to the toolchain.
+
+**Write the property, not the examples.** A target that re-states what the code
+does passes whatever either of them gets wrong. Two habits keep that from
+happening. Plant the value you are looking for and fuzz what surrounds it,
+rather than fuzzing the whole input and then writing a rule for how to
+recognise a failure, because that rule is usually the guess under test. And
+assert the property in the test's own terms rather than by calling the function
+that implements it: `FuzzARecordOnlyAnswersForItsOwnSpace` called `belongs` in
+its first draft, and deleting half of `belongs` did not fail it.
+
+**Then break the code and check that the target notices.** Every target added
+in the sweep that wrote this section was run against a deliberately broken copy
+of what it guards before it was kept, and that found three that could not fail.
+One was the circularity above. Another compared a value against itself: it
+snapshotted a configuration *after* calling `SaveTo` rather than before, so a
+`SaveTo` that dropped a field from the value it was handed still passed. A
+property test that has never failed is a hypothesis.
+
+Break it in the direction that should still pass, too. The gate in
+`internal/lint/fuzz_test.go` derived a package from a corpus path two levels up
+instead of three, so it reported every corpus as orphaned, including the ones
+that were not. Only planting a corpus that should have been *accepted* found
+it, and a gate that fails on everything is as useless as one that fails on
+nothing.
+
+**Expect the first finds to be yours.** Five of the six inputs this sweep
+produced were the test being wrong and not the code: a comparison that could not
+represent what the code correctly preserved, a sentinel that landed somewhere a
+message is supposed to quote it, a harness that crashed on input the real server
+would never pass through, a substring match on a value too short to be
+distinctive. Each one is worth a paragraph where it lives, because the wrong
+conclusion is available and cheap every time, and it is usually "change the code
+so the test passes".
+
 ## Things that will fail CI
 
 - **An unformatted file.** `make fmt`.
@@ -153,6 +207,27 @@ them already are.
   milestone and its whole public existence was the parenthesis at the end of
   `--profile`'s help string, which is not where somebody wiring up a CI job
   looks.
+- **A fuzz target that has gone missing, or one nobody wrote down.**
+  `internal/lint/fuzz_test.go`. `requiredFuzzTargets` names every target and
+  the property it holds, and is checked both ways: a listed target that is gone
+  fails, and a target that exists and is not listed fails too, so the list
+  cannot rot into a subset of what is there. The nightly sweep discovers what
+  to run by asking `go test -list`, which is the right way to run it and the
+  wrong way to guard it, because a workflow that greps for what exists cannot
+  tell "never had one" from "somebody deleted it": it would go green with a
+  shorter matrix and no message.
+
+  A target with no `f.Add` fails too. The nightly sweep is scheduled and does
+  not block a merge, deliberately; what blocks a merge is `go test`, which runs
+  each target against its seed corpus and every crasher ever committed under
+  `testdata/fuzz`, with no fuzzing budget at all. A target with no seeds
+  executes nothing on the gate.
+
+  And a corpus directory that names no target fails. An input Go wrote under
+  `testdata/fuzz` is a bug that happened, replayed on every run by matching the
+  directory name against a function name, so renaming the target orphans it: it
+  stays committed, still reads as coverage in a diff, and is executed by
+  nothing.
 - **A function over the cognitive complexity ceiling.** Split it. Raising the
   ceiling is not the fix.
 - **`go.mod` and a workflow disagreeing about the Go patch version.** They move

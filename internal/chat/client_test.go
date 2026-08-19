@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -783,4 +784,101 @@ func TestPreviewBodyKeepsWhatWouldBeSent(t *testing.T) {
 			}
 		})
 	}
+}
+
+// FuzzAnAcceptedWebhookURLStillSendsTheCredentialItCarried joins the two halves
+// of the webhook credential path, which are checked separately everywhere else
+// and have to agree.
+//
+// auth.CheckWebhookURL decides whether a pasted URL is stored at all, and this
+// package decides what a request built from it looks like and which values get
+// struck out of anything printed. Each has its own tests and neither knows what
+// the other did. The claim that matters to somebody using this tool is the one
+// that spans them: the credential they pasted is the credential that gets sent,
+// and it is the one that gets redacted.
+//
+// It is a real property with a real hole behind it. Both sides reach their
+// query through url.URL.Query, which discards its parse error, so a semicolon
+// anywhere in the query made both of them see no parameters: the check refused
+// the URL as truncated, which is the right outcome by luck rather than by
+// reason, and had it been accepted the request would have gone out with no
+// credential and the scrubber would have had nothing to strike out. This states
+// what must hold whichever way that check is written next.
+//
+// Nothing is dialled. resolve builds a URL and returns it, so a host the
+// fuzzer invents is a string that gets parsed and compared, which is the same
+// reason internal/lint allows a real host in a literal it can see is only ever
+// parsed.
+func FuzzAnAcceptedWebhookURLStillSendsTheCredentialItCarried(f *testing.F) {
+	for _, seed := range []string{
+		"https://chat.example/v1/spaces/AAA/messages?key=" + testKey + "&token=" + testToken,
+		"https://chat.example/v1/spaces/AAA/messages?token=" + testToken + "&key=" + testKey,
+		"https://chat.example/v1/spaces/AAA/messages?key=" + testKey + "&token=" + testToken + ";x=1",
+		"https://chat.example/v1/spaces/AAA/messages?key=" + testKey + "&token=" + testToken + "#f",
+		"https://chat.example/v1/spaces/AAA/messages?key=a&token=b",
+		"https://chat.example/v1/spaces/AAA/messages?key=" + testKey,
+		"https://chat.example/spaces/AAA?key=" + testKey + "&token=" + testToken,
+		"http://127.0.0.1:8080/v1/spaces/AAA/messages?key=" + testKey + "&token=" + testToken,
+		"http://chat.example/v1/spaces/AAA/messages?key=a&token=b",
+		"https://chat.example/messages?key=a&token=b",
+		"https://chat.example/v1/spaces/AAA/messages?key=&token=b",
+		"", "  ", "not a url", "https://",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		if auth.CheckWebhookURL(raw) != nil {
+			return
+		}
+
+		client, err := New(Options{BaseURL: strings.TrimSpace(raw)})
+		if err != nil {
+			// The two disagree about what is usable, which is its own bug:
+			// CheckWebhookURL runs when the URL is pasted and this runs when a
+			// message is sent, so the gap is a profile that stores cleanly and
+			// fails at the first send.
+			t.Fatalf("a webhook URL that was accepted cannot build a client: %v", err)
+		}
+
+		target, err := client.resolve(Request{Method: http.MethodPost})
+		if err != nil {
+			t.Fatalf("a webhook URL that was accepted cannot build a request: %v", err)
+		}
+
+		// Read from the raw string the same way the check read it, so this
+		// compares what the operator pasted against what would be sent.
+		pasted, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			t.Fatalf("a webhook URL that was accepted will not parse: %v", err)
+		}
+		sending := target.Query()
+
+		for _, name := range []string{"key", "token"} {
+			want := pasted.Query().Get(name)
+			if want == "" {
+				t.Fatalf("a webhook URL was accepted with no %s in it: the check and this test "+
+					"disagree about what is there", name)
+			}
+			if got := sending.Get(name); got != want {
+				t.Fatalf("the %s that would be sent is not the one that was pasted:\n"+
+					" got %q\nwant %q", name, got, want)
+			}
+		}
+
+		// And both are values scrub knows about, or the second redaction layer
+		// is switched off for this profile without anybody saying so. Short
+		// values are skipped on purpose, because a two-character token would
+		// match all over an unrelated message.
+		for _, name := range []string{"key", "token"} {
+			value := pasted.Query().Get(name)
+			if len(value) < 8 {
+				continue
+			}
+			if !slices.Contains(client.secrets, value) {
+				t.Fatalf("the %s of an accepted webhook URL is not one of the values scrub strikes out: %v",
+					name, len(client.secrets))
+			}
+		}
+	})
 }

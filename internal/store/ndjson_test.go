@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/rows"
 )
 
@@ -776,4 +777,94 @@ func ids(t *testing.T, found []rows.Message) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+// FuzzARecordOnlyAnswersForItsOwnSpace states the invariant
+// TestARecordInTheWrongFileDoesNotAnswerForAnotherSpace samples, over any line
+// at all rather than over the three that were written by hand.
+//
+// This is the one input in the tree that is neither the API's nor the
+// operator's. It is a line off the local disk, in a file that has been copied,
+// restored from a backup, concatenated, or edited, which is exactly why every
+// record carries its own space: the comment on that field says a copied line
+// "should still say what it is". A hand-written table can only ask about lines
+// somebody imagined; the failure this guards against arrived from a directory
+// nobody was imagining.
+//
+// Three claims, and the second and third are not decoration. What a foreign
+// record costs is more than a wrong row in a search: `--space` selects a file
+// rather than filtering, and Bounds reads the same file to decide where `sync`
+// resumes, so a record with a later timestamp moves the watermark forward and
+// the next sync skips every real message before it. So a record that is
+// admitted has to be in both maps or neither, or the ordering consults a
+// timestamp for a record the result does not carry.
+func FuzzARecordOnlyAnswersForItsOwnSpace(f *testing.F) {
+	other := "spaces/AAAAOtherSpace"
+
+	for _, seed := range []string{
+		// What Append writes, which has to keep being admitted: a target that
+		// only ever refuses is a target that proves nothing.
+		`{"space":"` + testSpace + `","message":{"name":"` + testSpace + `/messages/AAA","text":"deploy done"}}`,
+
+		// The two halves disagreeing with the file, and with each other.
+		`{"space":"` + other + `","message":{"name":"` + other + `/messages/BBB"}}`,
+		`{"space":"` + testSpace + `","message":{"name":"` + other + `/messages/BBB"}}`,
+		`{"space":"` + other + `","message":{"name":"` + testSpace + `/messages/BBB"}}`,
+
+		// A space field that is not a space name at all, and a message name
+		// that is not one.
+		`{"space":"../../etc","message":{"name":"` + testSpace + `/messages/CCC"}}`,
+		`{"space":"` + testSpace + `","message":{"name":"nonsense"}}`,
+		`{"space":"` + testSpace + `","message":{"name":""}}`,
+		`{"space":"` + testSpace + `","message":{}}`,
+
+		// Damage, which is skipped rather than fatal: a process killed
+		// mid-append leaves a partial last line.
+		`{"space":`, `[]`, `null`, `0`, `"a string"`, `{}`, ``, `   `,
+		"\xff\xfe", `{"space":"` + testSpace + `","message":{"name":"` + testSpace + `/messages/D","create_time":"not a time"}}`,
+
+		// A tombstone, which is a record like any other and still has to belong.
+		`{"space":"` + testSpace + `","deleted":true,"message":{"name":"` + testSpace + `/messages/E"}}`,
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, line []byte) {
+		latest := map[string]record{}
+		when := map[string]time.Time{}
+
+		foreign := absorb(line, testSpace, latest, when)
+
+		// A line reported as belonging elsewhere was not also kept.
+		if foreign && len(latest) != 0 {
+			t.Fatalf("a record reported as foreign was kept anyway: %q -> %#v", line, latest)
+		}
+
+		for name, r := range latest {
+			// The claim itself, spelled out rather than asked of belongs.
+			// Calling belongs here would make the target agree with the code
+			// by construction: deleting the second half of that function and
+			// running this was how the circularity was found, and it passed.
+			if r.Space != testSpace {
+				t.Fatalf("a record whose space field is %q was admitted from the file for %q: %q",
+					r.Space, testSpace, line)
+			}
+			within, err := chat.SpaceOfMessage(r.Message.Name)
+			if err != nil || within != testSpace {
+				t.Fatalf("a record whose message name is %q was admitted from the file for %q: %q\n"+
+					"  the name resolves to %q (%v)", r.Message.Name, testSpace, line, within, err)
+			}
+			if r.Message.Name != name {
+				t.Fatalf("a record was filed under %q and calls itself %q: %q", name, r.Message.Name, line)
+			}
+			if _, ok := when[name]; !ok {
+				t.Fatalf("a record was kept with no time beside it, so the ordering would consult "+
+					"a zero value for it: %q", line)
+			}
+		}
+		if len(when) != len(latest) {
+			t.Fatalf("a time was kept for a record that was not: %q\n  latest %v\n  when %v",
+				line, len(latest), len(when))
+		}
+	})
 }
