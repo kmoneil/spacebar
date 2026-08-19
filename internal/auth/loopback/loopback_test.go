@@ -431,3 +431,109 @@ func FuzzACallbackOnlyCompletesOnAnExactStateMatch(f *testing.F) {
 		}
 	})
 }
+
+// TestAPastedCallbackRunsEveryCheckTheSocketRuns is the security claim.
+//
+// A pasted URL is a URL somebody can be talked into pasting, which is the
+// authorization-code injection the state comparison exists for. The paste must
+// not be a second way into the result channel that goes around it.
+//
+// What makes that true is structural rather than careful: Offer and the HTTP
+// handler both go through accept, so there is no second path to get wrong.
+// This asserts it from the outside anyway, because "they call the same
+// function" is a fact about today's code and the claim is about the behaviour.
+func TestAPastedCallbackRunsEveryCheckTheSocketRuns(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw string
+		accepted  bool
+	}{
+		{
+			name:     "this flow's callback",
+			raw:      "http://127.0.0.1:1/?code=4/REALCODE&state=" + testState,
+			accepted: true,
+		},
+		{
+			name: "somebody else's flow, which is the injection this refuses",
+			raw:  "http://127.0.0.1:1/?code=4/ATTACKERCODE&state=" + testState + "x",
+		},
+		{name: "no state at all", raw: "http://127.0.0.1:1/?code=4/REALCODE"},
+		{name: "state but nothing to deliver", raw: "http://127.0.0.1:1/?state=" + testState},
+		{name: "a prefix of the state", raw: "http://127.0.0.1:1/?code=c&state=" + testState[:8]},
+		{name: "the consent URL, pasted by mistake", raw: "https://accounts.google.example/o/oauth2/v2/auth?client_id=x"},
+		{name: "not a URL", raw: "this is not a url"},
+		{name: "empty", raw: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{result: make(chan Result, 1), want: testState}
+
+			err := s.Offer(tc.raw)
+			if tc.accepted && err != nil {
+				t.Fatalf("Offer refused this flow's own callback: %v", err)
+			}
+			if !tc.accepted && err == nil {
+				t.Fatal("Offer accepted a URL that is not this flow's callback")
+			}
+
+			select {
+			case got := <-s.result:
+				if !tc.accepted {
+					t.Fatalf("a refused paste still delivered %+v", got)
+				}
+				if got.Code != "4/REALCODE" {
+					t.Errorf("delivered code %q", got.Code)
+				}
+			default:
+				if tc.accepted {
+					t.Fatal("an accepted paste delivered nothing")
+				}
+			}
+
+			// Nothing about why, for the reason the socket route answers a bad
+			// state with a 404 that explains nothing: whoever sent it is not
+			// the person who started this flow.
+			if err != nil && tc.raw != "" && strings.Contains(err.Error(), tc.raw) {
+				t.Errorf("the refusal quoted the URL back: %v", err)
+			}
+		})
+	}
+}
+
+// TestAPasteAndASocketCallbackCannotBothBeConsumed.
+//
+// fix-02 predicted this holds for free, because the result channel is buffered
+// to one and the first arrival wins. "Should hold for free" is what a test is
+// for, and it stopped being free the moment the two routes became genuinely
+// concurrent: a second value taken after the flow already has one would be an
+// authorization nobody asked for reaching the exchange.
+func TestAPasteAndASocketCallbackCannotBothBeConsumed(t *testing.T) {
+	// Built by Listen rather than by hand, which is the difference between
+	// testing this and testing the test. The first version constructed a
+	// Server with its own one-slot channel, so widening the buffer Listen
+	// actually uses changed nothing and the mutation went unnoticed. The
+	// property is about the server this package builds.
+	s, err := Listen(testState)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	if err := s.Offer("http://127.0.0.1:1/?code=4/FIRST&state=" + testState); err != nil {
+		t.Fatalf("Offer: %v", err)
+	}
+
+	// The browser catching up a moment after the paste.
+	s.handle(httptest.NewRecorder(), &http.Request{
+		Method: http.MethodGet,
+		URL:    &url.URL{Path: "/", RawQuery: "code=4/SECOND&state=" + testState},
+	})
+
+	got := <-s.result
+	if got.Code != "4/FIRST" {
+		t.Errorf("the second arrival won: code = %q", got.Code)
+	}
+	select {
+	case extra := <-s.result:
+		t.Fatalf("both arrivals were consumable: %+v", extra)
+	default:
+	}
+}

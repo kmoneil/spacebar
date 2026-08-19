@@ -15,11 +15,14 @@
 package auth
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"io"
+	"strings"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -118,10 +121,27 @@ type Flow struct {
 	// Timeout bounds the whole flow. Zero means DefaultFlowTimeout.
 	Timeout time.Duration
 
-	// Report receives the consent URL when the browser could not be opened,
-	// and nothing else. Nil is allowed and means a flow nobody is watching,
-	// which is a flow that will time out if the browser does not work.
+	// Report receives the consent URL, the prompt for a pasted callback, and
+	// nothing else. Nil is allowed and means a flow nobody is watching, which
+	// is a flow that will time out if the browser does not work.
 	Report Reporter
+
+	// Paste is where a callback URL may be read from when the redirect cannot
+	// arrive on its own, and nil means that route is off.
+	//
+	// Off unless a caller opts in, and the caller that opts in has to have
+	// established that somebody is there to type. SPEC.md §11.3 and this
+	// repository's own rule say nothing blocks on input when stdin is not a
+	// terminal, and a prompt nobody can answer inside a pipeline is exactly
+	// what that rule exists to prevent. internal/cli passes os.Stdin only when
+	// output.Interactive says so, which keeps the terminal question in the
+	// package that owns streams.
+	//
+	// Reading it cannot hang the flow whatever it is. The read happens in a
+	// goroutine and Login still waits on the socket and on the timeout, so a
+	// reader that never produces a line costs the same three minutes a browser
+	// nobody answers costs.
+	Paste io.Reader
 
 	// HTTPClient is the client the token exchange goes out through, and it is
 	// an any rather than an *http.Client on purpose.
@@ -201,6 +221,8 @@ func (f *Flow) Login(ctx context.Context) (*Token, error) {
 
 	ctx, cancel := context.WithTimeout(ctx, f.timeout())
 	defer cancel()
+
+	f.offerPaste(ctx, server)
 
 	result, err := server.Wait(ctx)
 	if err != nil {
@@ -288,6 +310,56 @@ func (f *Flow) open(url string) {
 		return
 	}
 	f.report("Could not open a browser. Go to this URL to authorize:\n%s", url)
+}
+
+// offerPaste reads callback URLs from Paste until one of them is this flow's.
+//
+// The two routes race and the listener always keeps running, so on a machine
+// whose browser can reach it the socket wins and nobody ever answers the
+// prompt. On a machine where it cannot, which is a container, an SSH session,
+// a remote dev box, the paste is the only route there is. Nothing has to be
+// configured and no flag chooses between them.
+//
+// It reads in a loop rather than taking one line, because the line before the
+// right one is usually a stray newline or a URL from the wrong window, and a
+// route that gives up on the first wrong answer is a route somebody gets three
+// minutes to attempt exactly once. Offer refuses anything that is not this
+// flow's callback, so a wrong line costs a sentence and another go.
+//
+// The goroutine is not waited for and can outlive the call, which is the honest
+// description of reading a terminal: a blocked read on os.Stdin cannot be
+// cancelled. It costs one goroutine for the seconds this command has left, and
+// it can deliver nothing after the flow has finished, because the result
+// channel holds one value and Wait has already taken it.
+func (f *Flow) offerPaste(ctx context.Context, server *loopback.Server) {
+	if f.Paste == nil {
+		return
+	}
+
+	f.report("If the browser is on another machine it cannot reach this one. Paste the URL it " +
+		"failed on here, and the authorization in it finishes the login:")
+
+	go func() {
+		scanner := bufio.NewScanner(f.Paste)
+		for scanner.Scan() {
+			if ctx.Err() != nil {
+				return
+			}
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			if err := server.Offer(line); err != nil {
+				// Said out loud rather than swallowed. A paste that silently
+				// does nothing looks exactly like one that worked, and the
+				// person has minutes rather than attempts.
+				f.report("%v. Paste the whole URL the browser failed on, including everything "+
+					"after the question mark.", err)
+				continue
+			}
+			return
+		}
+	}()
 }
 
 func (f *Flow) report(format string, a ...any) {

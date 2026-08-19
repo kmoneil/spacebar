@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -514,5 +515,133 @@ func TestNoClientIsAUsageFailure(t *testing.T) {
 	}
 	if got := output.ExitCodeOf(err); got != output.ExitUsage {
 		t.Errorf("exit code = %d, want %d", got, output.ExitUsage)
+	}
+}
+
+// TestAPastedCallbackCompletesAFlowTheBrowserCouldNotDeliver is the whole
+// point: a login that finishes on a machine whose browser is somewhere else.
+//
+// Nothing here reaches the listener over a socket, which is the situation being
+// modelled. The consent URL is read off the report, the callback URL a browser
+// would have failed to load is built from it, and it goes in on Paste the way
+// somebody pastes it.
+func TestAPastedCallbackCompletesAFlowTheBrowserCouldNotDeliver(t *testing.T) {
+	s := newAuthServer(t)
+
+	reported := &collectingReporter{}
+	consent := make(chan string, 1)
+	paste, writer := io.Pipe()
+
+	f := flowAgainst(t, s, func(u *url.URL) string {
+		consent <- u.String()
+		return ""
+	}).withTokenEndpoint(s.URL)
+	f.Report = reported
+	f.Timeout = 5 * time.Second
+	f.Paste = paste
+
+	// The browser is on another machine, so it consents and then cannot
+	// deliver anything back here. The launcher still runs, because that is
+	// what feeds the consent URL to the test.
+	launched := f.Browser
+	f.Browser = func(url string) error {
+		_ = launched(url)
+		return fmt.Errorf("no browser on this machine")
+	}
+
+	go func() {
+		callback := callbackFor(<-consent, "theCode")
+		_, _ = writer.Write([]byte(callback + "\n"))
+	}()
+
+	token, err := f.Login(context.Background())
+	if err != nil {
+		t.Fatalf("a pasted callback did not complete the flow: %v", err)
+	}
+	if token == nil || token.RefreshToken == "" {
+		t.Fatalf("the flow completed without a refresh token: %+v", token)
+	}
+	if !strings.Contains(reported.text(), "Paste the URL it failed on") {
+		t.Errorf("nobody was told the paste route exists:\n%s", reported.text())
+	}
+}
+
+// TestAWrongPasteCostsASentenceRatherThanTheAttempt.
+//
+// Three minutes is the whole budget and the line before the right one is
+// usually a stray newline or the consent URL from the wrong window. A route
+// that gave up on the first wrong answer would be a route somebody gets one
+// attempt at.
+func TestAWrongPasteCostsASentenceRatherThanTheAttempt(t *testing.T) {
+	s := newAuthServer(t)
+
+	reported := &collectingReporter{}
+	consent := make(chan string, 1)
+	paste, writer := io.Pipe()
+
+	f := flowAgainst(t, s, func(u *url.URL) string {
+		consent <- u.String()
+		return ""
+	}).withTokenEndpoint(s.URL)
+	f.Report = reported
+	f.Timeout = 5 * time.Second
+	f.Paste = paste
+
+	launched := f.Browser
+	f.Browser = func(url string) error {
+		_ = launched(url)
+		return fmt.Errorf("no browser on this machine")
+	}
+
+	go func() {
+		url := <-consent
+		// A blank line, then something that is not a URL, then the consent URL
+		// pasted by mistake, then the real one.
+		_, _ = writer.Write([]byte("\n"))
+		_, _ = writer.Write([]byte("not a url\n"))
+		_, _ = writer.Write([]byte(url + "\n"))
+		_, _ = writer.Write([]byte(callbackFor(url, "theCode") + "\n"))
+	}()
+
+	if _, err := f.Login(context.Background()); err != nil {
+		t.Fatalf("the flow gave up before the right paste arrived: %v", err)
+	}
+	if !strings.Contains(reported.text(), "not this flow's callback") {
+		t.Errorf("a wrong paste was accepted or was refused silently:\n%s", reported.text())
+	}
+}
+
+// TestNoPasteReaderMeansNoPromptAndNoRead holds the rule that nothing blocks on
+// input when stdin is not a terminal.
+//
+// The gate is internal/cli's: it passes a reader only when output.Interactive
+// says somebody is there. This is the other side of that contract, and it
+// asserts the absence of the prompt as well as the absence of the read, because
+// a prompt printed to somebody who cannot answer it is its own defect.
+func TestNoPasteReaderMeansNoPromptAndNoRead(t *testing.T) {
+	s := newAuthServer(t)
+
+	reported := &collectingReporter{}
+	consent := make(chan string, 1)
+
+	f := flowAgainst(t, s, func(u *url.URL) string {
+		consent <- u.String()
+		return ""
+	}).withTokenEndpoint(s.URL)
+	f.Report = reported
+	f.Timeout = 5 * time.Second
+
+	go func() {
+		resp, err := http.Get(callbackFor(<-consent, "theCode")) //nolint:noctx // a stand-in for a browser
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	if _, err := f.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if strings.Contains(reported.text(), "Paste the URL") {
+		t.Errorf("a paste prompt was printed with no reader to answer it:\n%s", reported.text())
 	}
 }

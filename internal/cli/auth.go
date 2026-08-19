@@ -88,19 +88,16 @@ consent succeeds and the redirect carrying the result has nowhere to arrive.
 That is the normal case over SSH and in a container, and it is what a
 connection error at the end of consent means.
 
-The flow waits three minutes and then gives up, changing nothing. When the
-redirect fails, the authorization is still in the browser's address bar and
-can be replayed against the listener from here, in a second shell, before the
-wait runs out:
+When the redirect cannot arrive, paste it. The authorization is in the URL the
+browser failed on, and this waits for it on stdin at the same time as it waits
+for the listener, so whichever route works is the one that finishes the login.
+There is nothing to choose and no flag. A wrong paste is refused with a reason
+and it asks again.
 
-  read -r url
-  curl -s "$url" >/dev/null
+The prompt appears only when stdin is a terminal, so a scripted login neither
+sees it nor blocks on it.
 
-Paste at the read prompt rather than onto the curl line: that URL carries a
-live authorization code, and a command line goes into your shell history.
-
-The README section "When there is no browser here" has the whole procedure,
-including a one-shell form and why it needs a prompt and a guard.`,
+The flow waits three minutes either way and then gives up, changing nothing.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAuthLogin(cmd, opts, sendOnly)
@@ -156,6 +153,22 @@ func runAuthLogin(cmd *cobra.Command, opts *Options, sendOnly bool) error {
 		Scopes:     scopesFor(sendOnly),
 		Report:     r,
 		HTTPClient: chat.TokenHTTPClient(opts.Timeout),
+	}
+
+	// The paste route is offered only when somebody is there to answer, which
+	// is the rule that nothing blocks on input when stdin is not a terminal.
+	// The question is asked here rather than in internal/auth because
+	// internal/output owns what a stream is, and asked about the reader the
+	// command was given rather than about os.Stdin, for the reason
+	// output.Interactive's own comment gives: in a test those are not the same
+	// file, and a rule verified against os.Stdin is verified against a stream
+	// nothing reads.
+	//
+	// It cannot hang the flow even when it is wrong about the terminal. The
+	// read happens in a goroutine and the flow still ends on the socket or on
+	// the timeout.
+	if in := cmd.InOrStdin(); output.Interactive(in) {
+		flow.Paste = in
 	}
 
 	if opts.DryRun {
