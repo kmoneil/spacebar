@@ -509,7 +509,8 @@ Google Chat offers no socket, so this polls. **The interval floor is 2s and a
 smaller one is refused rather than rounded up**: per-space quota is shared with
 every other app acting in that space, so a tight loop degrades the space for
 everybody in it. After five polls with nothing new the interval doubles, up to
-a minute, and any message resets it.
+a minute, and any message resets it. It never goes below what you asked for, so
+`--interval 5m` stays at five minutes however quiet the space is.
 
 **Ctrl-C exits 0.** It is how the command is meant to end, so it is not a
 failure, and a script wrapping it does not have to special-case the code.
@@ -592,6 +593,11 @@ Below twenty spaces the 2s floor decides and nothing is slowed at all. Above it
 each space comes round less often, thirty spaces every 3s and a hundred every
 10s, and the interval chosen is printed on stderr at startup unless `--quiet` or
 `--json` says the reader is not a person.
+
+A quiet space backs off here exactly as it does when you watch one space: after
+five polls with nothing new it gives up its turn in the rotation, doubling up to
+a minute, and any event puts it back at the pace you asked for. It is per space,
+so one busy space does not hold thirty quiet ones at the base interval.
 
 The pace is recomputed when a space is dropped, so the ones left are polled no
 faster than you asked for. It looks like a detail and is the floor: the gap

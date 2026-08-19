@@ -359,6 +359,13 @@ The same holds while `watch --all` runs. Spaces are dropped from the rotation
 when they go away or stop being readable, and the pace is recomputed each time,
 so the ones left are never polled faster than the interval you gave.
 
+**A quiet space is polled less often, never more.** After five polls with
+nothing new the interval doubles, up to a minute or to the interval you gave if
+that is longer, and any event resets it. Under `watch --all` it is per space. So
+the gap between two events on one stream says nothing about how often anything
+was polled, and a script timing out on silence should use its own clock rather
+than counting polls.
+
 ## Worked invocations
 
 ```sh

@@ -202,15 +202,82 @@ func TestFiveQuietPollsDoubleTheIntervalAndAMessageResetsIt(t *testing.T) {
 }
 
 // TestTheBackoffIsBoundedSoAQuietSpaceStaysCheapAndResponsive.
+//
+// Several bases rather than one. This asserted the floor and the ceiling
+// against MinPollInterval alone, which is the one base where the ceiling
+// question cannot come up, and the bug below lived underneath it for four
+// milestones.
 func TestTheBackoffIsBoundedSoAQuietSpaceStaysCheapAndResponsive(t *testing.T) {
 	client := &Client{}
-	for quiet := range 100 {
-		got := client.backoff(MinPollInterval, quiet)
-		if got < MinPollInterval {
-			t.Fatalf("backoff(%d) = %s, below the floor", quiet, got)
+	for _, base := range []time.Duration{MinPollInterval, DefaultPollInterval, 30 * time.Second, MaxPollInterval, 90 * time.Second, 5 * time.Minute} {
+		ceiling := max(MaxPollInterval, base)
+		for quiet := range 100 {
+			got := client.backoff(base, quiet)
+			if got < base {
+				t.Fatalf("backoff(%s, %d) = %s, below the base it was asked for", base, quiet, got)
+			}
+			if got > ceiling {
+				t.Fatalf("backoff(%s, %d) = %s, above the %s ceiling", base, quiet, got, ceiling)
+			}
 		}
-		if got > MaxPollInterval {
-			t.Fatalf("backoff(%d) = %s, above the %s ceiling", quiet, got, MaxPollInterval)
+	}
+}
+
+// TestGoingQuietNeverPollsFasterThanWasAskedFor.
+//
+// The ceiling was MaxPollInterval flat, so a base above it was cut down to it
+// rather than left alone. `tail --interval 5m` polled every five minutes until
+// a space went quiet for five polls and then polled every minute for the rest
+// of the run: five times the requests, arrived at by the space going quiet,
+// which is the one thing that was supposed to make it poll less.
+//
+// It is reachable without anybody typing a large interval. IntervalForSpaces
+// returns more than a minute above six hundred spaces, so `watch --all` on a
+// large account walks into it on its own.
+//
+// This is the same harm CheckInterval refuses a small interval to prevent,
+// coming from the other side, and it is worse in one way: a refused interval
+// says so, and this one just quietly spends somebody else's quota.
+func TestGoingQuietNeverPollsFasterThanWasAskedFor(t *testing.T) {
+	client := &Client{}
+	for _, base := range []time.Duration{MinPollInterval, 90 * time.Second, 5 * time.Minute, time.Hour} {
+		for quiet := range 40 {
+			if got := client.backoff(base, quiet); got < base {
+				t.Fatalf("a space quiet for %d polls at --interval %s is polled every %s.\n"+
+					"Backing off may only ever make the wait longer.", quiet, base, got)
+			}
+		}
+	}
+}
+
+// TestALongIntervalSurvivesAQuietSpace is the same claim through the loop
+// rather than through the arithmetic, because backoff has no caller that would
+// notice if the two disagreed.
+func TestALongIntervalSurvivesAQuietSpace(t *testing.T) {
+	const asked = 5 * time.Minute
+
+	client, recorded, ctx := tailer(t, 12, func(_ int, w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{"messages":[]}`)
+	})
+
+	for _, err := range client.Tail(ctx, TailRequest{
+		Space:    "spaces/AAAATestSpace",
+		Interval: asked,
+	}) {
+		if err != nil {
+			t.Fatalf("Tail: %v", err)
+		}
+	}
+
+	all := recorded.all()
+	if len(all) < 10 {
+		t.Fatalf("only %d waits recorded, which is too few to reach the backoff", len(all))
+	}
+	for i, wait := range all {
+		if wait < asked {
+			t.Errorf("wait %d was %s against an --interval of %s.\n"+
+				"Twelve polls of a quiet space made it poll faster than it was asked to.",
+				i, wait, asked)
 		}
 	}
 }

@@ -149,6 +149,16 @@ type watched struct {
 	space string
 	since time.Time
 	seen  seenAt
+
+	// quiet is how many polls in a row answered with nothing new, and skip is
+	// how many of this space's turns are left to give up before the next poll.
+	//
+	// Per space, because the whole point is that one busy space in a rotation
+	// does not keep thirty quiet ones being polled at the base interval. A
+	// single counter would be reset by whichever space last had an event, which
+	// is the same mistake seen would be if it were shared.
+	quiet int
+	skip  int
 }
 
 // tickFor is the gap between one request and the next, rather than between one
@@ -164,6 +174,46 @@ type watched struct {
 // is that the rotation is not empty.
 func tickFor(requested time.Duration, spaces int) time.Duration {
 	return IntervalForSpaces(requested, spaces) / time.Duration(spaces)
+}
+
+// restFor is how many of its turns a space gives up before it is polled again.
+//
+// The rotation's unit is a turn and not a duration. A space comes round every
+// IntervalForSpaces because there are that many spaces in the cycle, so waiting
+// twice as long means giving up one turn, and four times means giving up three.
+//
+// In turns rather than a due time on the clock, deliberately. The loop has
+// exactly one notion of time in it, which is tick, and the bug tickFor exists
+// for was a second piece of scheduling arithmetic disagreeing with the first. A
+// due time would also have to be right about how long a request took, and
+// answering "how many turns" needs no such claim.
+//
+// Rounded up, so a base that does not divide the backoff evenly waits longer
+// rather than shorter. At --interval 7s the doublings are 14s, 28s and 56s and
+// then the ceiling at 60s, which is eight and a half turns and becomes nine.
+// Lengthening a gap is the only thing that may happen to it, which is the rule
+// tickFor is held to as well.
+//
+// A space that has just spoken has quiet at zero, backoff returns the base, and
+// this returns no skipped turns at all, so the responsive case costs nothing.
+func (c *Client) restFor(requested time.Duration, spaces, quiet int) int {
+	base := IntervalForSpaces(requested, spaces)
+	turns := (c.backoff(base, quiet) + base - 1) / base
+	return int(turns) - 1
+}
+
+// rest records what one poll of a space said about how often to poll it.
+//
+// Separate from step so that step stays inside the complexity ceiling, and
+// because the two are separate jobs: step decides where the rotation goes next
+// and this decides how often one space is worth asking.
+func (c *Client) rest(w *watched, requested time.Duration, spaces, found int) {
+	if found == 0 {
+		w.quiet++
+	} else {
+		w.quiet = 0
+	}
+	w.skip = c.restFor(requested, spaces, w.quiet)
 }
 
 // rotate is the poll loop, split from WatchMany for the complexity ceiling.
@@ -231,7 +281,16 @@ func (c *Client) rotate(ctx context.Context, req WatchManyRequest, yield func(Sp
 func (c *Client) step(ctx context.Context, req WatchManyRequest, live []watched, at int,
 	yield func(SpaceEvent, error) bool,
 ) ([]watched, int, bool) {
-	newest, pollErr, keepGoing := c.pollSpace(ctx, req, &live[at], yield)
+	// A space resting after a run of quiet polls gives up its turn and costs no
+	// request. Its turn is not given to anybody else: the rotation's pace is the
+	// thing that was already wrong once, and handing a skipped turn to the next
+	// space would poll that one sooner than its own interval allows.
+	if live[at].skip > 0 {
+		live[at].skip--
+		return live, at + 1, false
+	}
+
+	newest, found, keepGoing, pollErr := c.pollSpace(ctx, req, &live[at], yield)
 	switch {
 	case !keepGoing:
 		// The consumer stopped ranging, which ends everything.
@@ -239,6 +298,7 @@ func (c *Client) step(ctx context.Context, req WatchManyRequest, live []watched,
 
 	case pollErr == nil:
 		live[at].since = newest
+		c.rest(&live[at], req.Interval, len(live), found)
 		return live, at + 1, false
 
 	case ctx.Err() != nil:
@@ -249,6 +309,11 @@ func (c *Client) step(ctx context.Context, req WatchManyRequest, live []watched,
 		// is briefly unwell must not cost somebody a space for the rest of a
 		// run that may last days, so this one keeps its place and comes round
 		// again.
+		//
+		// At the pace it already had, rather than backing off. A failure is not
+		// the same fact as a quiet space: this one is being asked and is not
+		// answering, and slowing down would delay noticing that it came back.
+		// It costs one request per rotation and says so every time.
 		return live, at + 1, false
 	}
 
@@ -267,38 +332,49 @@ func (c *Client) step(ctx context.Context, req WatchManyRequest, live []watched,
 // through and ends the walk. Here one space failing is a fact about that space,
 // and the caller decides whether it ends anything.
 //
-// The third return says whether to carry on at all, which is false only when
-// the consumer stopped ranging.
+// keepGoing says whether to carry on at all, and is false only when the
+// consumer stopped ranging.
+//
+// found counts what was yielded rather than what arrived, which is the rule
+// pollEvents already states and this one needed before it could back off: a
+// poll whose only answer is the event that set the watermark has told the
+// rotation nothing new, and counting it would hold quiet at zero forever.
+//
+// The error is last and the count is second, so this reads like pollOnce and
+// pollEvents rather than like the outlier it was. It returned the error in the
+// middle of the tuple, which is the one arrangement Go's own conventions warn
+// about.
 //
 // w is a pointer because its seen set is state that outlives this poll, and
 // taking the space by value here is how the single-space path's version of this
 // bug would have been reintroduced in the copy.
 func (c *Client) pollSpace(ctx context.Context, req WatchManyRequest, w *watched,
 	yield func(SpaceEvent, error) bool,
-) (time.Time, error, bool) {
-	newest := w.since
+) (newest time.Time, found int, keepGoing bool, err error) {
+	newest = w.since
 
-	for event, err := range c.SpaceEvents(ctx, SpaceEventsRequest{
+	for event, eventErr := range c.SpaceEvents(ctx, SpaceEventsRequest{
 		Space:  w.space,
 		Types:  req.Types,
 		Filter: req.Filter,
 		Since:  w.since,
 	}) {
-		if err != nil {
-			return newest, err, true
+		if eventErr != nil {
+			return newest, found, true, eventErr
 		}
 		if w.seen.holds(event) {
 			continue
 		}
 		if !yield(event, nil) {
-			return newest, nil, false
+			return newest, found, false, nil
 		}
+		found++
 		w.seen.record(event)
 		if at, ok := eventTime(event); ok && at.After(newest) {
 			newest = at
 		}
 	}
-	return newest, nil, true
+	return newest, found, true, nil
 }
 
 // permanent reports whether polling this space again could ever answer

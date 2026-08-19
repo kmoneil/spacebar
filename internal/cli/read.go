@@ -48,6 +48,16 @@ const (
 	untilHelp = "only messages created strictly before this, in the same two forms as --since"
 )
 
+// intervalHelp is the same flag on tail and on watch, and one constant because
+// the two poll the same way. Two copies of it drifted apart once already, in
+// the loop rather than in the help: watch --all had no backoff at all while
+// tail had one.
+//
+// It says the direction rather than the number, because the number depends on
+// what was asked for. A quiet space doubles up to a minute, or stays where it
+// is if a minute is more often than the interval given.
+const intervalHelp = "how often to poll, at least 2s; a space with nothing new is polled less often, never more"
+
 // watchSinceHelp is the same flag on watch, worded separately because it bounds
 // a different thing, which is the one reason worth breaking a shared wording
 // for.

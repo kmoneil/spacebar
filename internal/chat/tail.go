@@ -298,18 +298,38 @@ func report[T any](ctx context.Context, err error, yield func(T, error) bool) {
 // backoff is the interval to wait before the next poll.
 //
 // A space that has said nothing for five polls is probably going to say nothing
-// for a while, so the interval doubles up to the maximum and any message resets
-// it. The floor still applies: backoff only ever makes the wait longer.
+// for a while, so the interval doubles up to the ceiling and any message resets
+// it. Backing off only ever makes the wait longer.
+//
+// That last sentence was false for four milestones, in the direction that costs
+// somebody else quota. The ceiling was MaxPollInterval flat, so a base above it
+// was cut down to it rather than left alone: `tail --interval 5m` polled every
+// five minutes until a space went quiet for five polls, and then polled every
+// minute for as long as the command ran. Five times faster than was asked for,
+// arrived at by going quiet, which is the one thing that was supposed to make it
+// slower.
+//
+// It is reachable without anybody typing a large interval, because
+// IntervalForSpaces returns more than a minute above six hundred spaces, so
+// `watch --all` on a large account would find it on its own.
+//
+// A silently shortened interval is what CheckInterval refuses a small interval
+// to prevent, arriving from the other side, and this project does not alter a
+// value to make it acceptable. So the ceiling is the larger of MaxPollInterval
+// and the base: a quiet space costs at most one request a minute, unless
+// somebody asked for less often than that, in which case they get what they
+// asked for.
 func (c *Client) backoff(base time.Duration, quiet int) time.Duration {
 	if quiet < quietPollsBeforeBackoff {
 		return base
 	}
 
+	ceiling := max(MaxPollInterval, base)
 	wait := base
 	for range quiet - quietPollsBeforeBackoff + 1 {
 		wait *= 2
-		if wait >= MaxPollInterval {
-			return MaxPollInterval
+		if wait >= ceiling {
+			return ceiling
 		}
 	}
 	return wait
