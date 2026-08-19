@@ -211,14 +211,39 @@ Three child processes exist, and only the first is limited to authentication:
   separate argument and never through a shell, so it cannot become a command.
   The argument is refused unless it is an `http` or `https` URL, because the set
   of schemes a desktop will act on includes ones that run things, and refused if
-  it starts with a dash, which would be read as a flag.
+  it starts with a dash, which would be read as a flag. That check ran untested
+  for four milestones and has one now, including the ordering it depends on:
+  a refused URL is refused before anything is spawned, so no process ever sees
+  it. `TestOnlyAnHTTPURLIsHandedToTheDesktop` and
+  `TestAURLTheDesktopMayNotHaveNeverReachesAProcess`.
 
   If the launch fails the flow does not:
   `TestABrowserThatWillNotLaunchDoesNotFailTheFlow`. That matters on exactly the
-  machines this tool is built for. On the development box this was written on
-  there is no `xdg-open` at all, so the real failure is `exec.ErrNotFound`
-  rather than a non-zero exit, and the URL is printed for the operator to open
-  themselves.
+  machines this tool is built for.
+
+  **What "the launch failed" means was wrong until 2026-08-19**, and this
+  paragraph said so in the wrong direction. It recorded that the development
+  box has no `xdg-open`, so the failure is `exec.ErrNotFound`. Re-measured:
+  `xdg-open` is present, `DISPLAY` is unset, and it exits 3 having opened
+  nothing, in 61.8ms at the slowest over forty runs. `os/exec`'s `Start`
+  reports whether a process was spawned, not whether a browser opened, so the
+  flow told the operator "Opened a browser to authorize" on every containerised
+  machine there is.
+
+  That is not a disclosure, and it is here because it is a false statement made
+  by the one command whose whole job is to be trusted with an authorization.
+  The launcher is now given a short window to fail in, and a non-zero exit
+  inside it is a failure; still running when the window closes is a launch,
+  which is what a desktop that keeps the launcher alive for the browser looks
+  like. Nothing waits for the browser itself, because that would hang the flow
+  until it was closed. `TestALauncherThatFailedIsNotALaunch`,
+  `TestALauncherStillRunningIsALaunchAndIsNotWaitedFor`,
+  `TestOpenBrowserReportsWhatTheLauncherDid`, and
+  `TestTheFlowSaysWhichOfTheTwoThingsHappened` for the sentence a person reads.
+
+  The launcher's own diagnostics do not reach the operator either way: `exec.Cmd`
+  with a nil `Stderr` connects the child to the null device, so a failing
+  `xdg-open` is silent rather than printing over this tool's output.
 - **The macOS keyring helper.** `zalando/go-keyring` calls `/usr/bin/security`
   on darwin, once per credential read or write. On Windows it uses the
   credential API in-process and starts nothing. This applies to a webhook
