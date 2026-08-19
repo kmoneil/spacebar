@@ -649,7 +649,17 @@ func TestAWebhookWithAllowWriteRegistersExactlyOneTool(t *testing.T) {
 // substring of some words: the sentence is a promise to whoever reads the tool
 // list, and a reworded one is a different promise. SPEC.md §14.2 specifies it
 // exactly.
+//
+// The write set is computed rather than filtered by name: the tools advertised
+// with --allow-write and absent without it, which is the definition the
+// registration gate itself uses. A send_ name-prefix filter was here before,
+// and it skipped react_to_message, so that tool's sentence was asserted by
+// nothing while this test's name promised every write tool, and the next write
+// tool added behind the flag would have been skipped the same way.
 func TestEveryWriteToolSaysToConfirmFirst(t *testing.T) {
+	closed := connect(t, &fake{kind: config.TransportUserOAuth, caps: full()})
+	reads := advertised(t, closed)
+
 	session := connectWith(t, Options{
 		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
 		AllowWrite: true,
@@ -670,7 +680,7 @@ func TestEveryWriteToolSaysToConfirmFirst(t *testing.T) {
 
 	writes := 0
 	for _, tool := range result.Tools {
-		if !strings.HasPrefix(tool.Name, "send_") {
+		if slices.Contains(reads, tool.Name) {
 			continue
 		}
 		writes++
