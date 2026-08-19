@@ -6,12 +6,50 @@
 # mechanical mistake, not the substantive one.
 set -e
 
-header=$(head -1 "$1")
+# The subject is what git will call the subject, which is not the first line of
+# this file.
+#
+# git takes everything up to the first blank line and joins it with spaces, so a
+# subject wrapped across two lines is one long subject to every reader there
+# will ever be. This hook read `head -1` for four milestones, which meant a
+# wrapped subject was measured at the width of its first line and passed a gate
+# that exists to refuse it: an eighty-character subject landed on a branch that
+# way, and nobody had to make a mistake to do it, because an editor that
+# soft-wraps does it for them.
+#
+# Comment lines are skipped because git strips them before recording the
+# message, and this hook runs before that happens.
+subject_of() {
+	awk '
+		/^#/ { next }
+		/^[[:space:]]*$/ { if (started) exit; next }
+		{ started = 1; print }
+	' "$1"
+}
+
+lines=$(subject_of "$1")
+header=$(printf '%s' "$lines" | tr '\n' ' ' | sed 's/[[:space:]]*$//')
 
 # A merge, revert, or fixup carries its own conventions.
 case "$header" in
 	Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
 esac
+
+# One line, and a blank one after it. The length check below would catch a
+# wrapped subject that got long, and this catches one that stayed short, which
+# is the same defect with a smaller blast radius: two lines that git will show
+# as one, in a file where somebody meant the second to be the body.
+if [ "$(printf '%s' "$lines" | wc -l)" -gt 0 ]; then
+	echo "commit-msg: the subject runs over more than one line."
+	echo
+	printf '%s\n' "$lines" | sed 's/^/  /'
+	echo
+	echo "  git joins those into one subject:"
+	echo "    $header"
+	echo
+	echo "  Put a blank line after the subject, and let the body be the body."
+	exit 1
+fi
 
 pattern='^(feat|fix|docs|test|refactor|perf|chore|build|ci)(\([a-z0-9._/-]+\))?!?: .+'
 if ! printf '%s' "$header" | grep -Eq "$pattern"; then

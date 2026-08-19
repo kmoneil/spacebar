@@ -139,6 +139,23 @@ that were not. Only planting a corpus that should have been *accepted* found
 it, and a gate that fails on everything is as useless as one that fails on
 nothing.
 
+**Say which mutation you checked.** When a test is added for a defect, its
+comment names the change that made it fail. Not a machine gate: it is legible,
+it is reviewable, and a test with no such line is one somebody can ask about.
+The habit is worth the line because it keeps paying. Three tests that could not
+fail at all were found this way in a single session, and each had been written
+carefully by somebody who believed it worked:
+
+- one asserted its property by calling the function that implements it;
+- one tested both halves of a change and neither the wire between them, so
+  reverting the fix to the line that shipped passed everything;
+- one built the object under test by hand rather than with the constructor the
+  production code uses, so changing that constructor changed nothing.
+
+The last two are the same mistake wearing different clothes: **the test
+exercised something the shipped code does not do.** That is the thing to look
+for when a mutation does not fail.
+
 **Expect the first finds to be yours.** Five of the six inputs this sweep
 produced were the test being wrong and not the code: a comparison that could not
 represent what the code correctly preserved, a sentinel that landed somewhere a
@@ -147,6 +164,53 @@ would never pass through, a substring match on a value too short to be
 distinctive. Each one is worth a paragraph where it lives, because the wrong
 conclusion is available and cheap every time, and it is usually "change the code
 so the test passes".
+
+## Verify it against a real space before you open the pull request
+
+A change to what a command *does* is run against a real Google Chat space before
+it is proposed, not after it is merged. What was run and what came back goes in
+the pull request. If some part cannot be run live, say which part and why, so
+that a reader knows the difference between checked and assumed.
+
+`_plans/live-testing.md` records which space has a Google Group in it, which
+identifiers are real, and what the placeholders in the tree stand for. It is
+gitignored, like everything under `_plans`.
+
+**This is not belt and braces on top of the tests. It is the step that catches a
+different class of thing.** On the day this section was written, four separate
+defects were found this way and every one of them had passed a full test run:
+
+- A URL fragment reached a verbose log, because the two redaction layers each
+  looked only at the query.
+- `auth login` said "Opened a browser to authorize" on a machine with no
+  display, because `exec.Cmd.Start` answers whether a process spawned and the
+  caller was asking whether a browser opened.
+- A warning about an incomplete member list used `Renderer.Note`, which is
+  suppressed under `--json`, so the fix carried the defect it was fixing for the
+  reader that cannot check.
+- A member list omitted a Google Group in `--json` as well as on the terminal,
+  which the card that carded it had ruled out of scope.
+
+They share a shape. **The code was right about the API and wrong about the
+reader.** A test is not a reader: it does not have a terminal, or a pipe, or a
+program parsing its stdout, and it never notices that the thing it asserted went
+to a stream nobody is listening on.
+
+## Undoing a change while you work
+
+Two rules, both from losing something.
+
+**Never `git checkout` or `git restore` a file to undo an edit** when that file
+has uncommitted work in it. It reverts the whole file, not the edit. Copy the
+file somewhere first and copy it back, which is what to do when temporarily
+breaking code to check that a test notices. Two tests were destroyed this way in
+one session, and a grep found them missing later by luck.
+
+**Never hand somebody a command you have not run.** A one-line replacement for a
+two-shell procedure was reasoned about carefully and never executed. It printed
+no prompt, so a stray Enter satisfied its `read`, and the authorization code it
+existed to protect was echoed to the screen instead. Running it once, even
+against a deliberately wrong input, would have shown that.
 
 ## Things that will fail CI
 
@@ -228,6 +292,17 @@ so the test passes".
   directory name against a function name, so renaming the target orphans it: it
   stays committed, still reads as coverage in a diff, and is executed by
   nothing.
+- **A commit message the hook cannot vouch for.** `.githooks/commit-msg`, held
+  by `internal/lint/hook_test.go`, which runs the hook itself rather than
+  reimplementing its rules in Go.
+
+  It reads the subject the way git does: everything up to the first blank line,
+  joined with spaces. It read `head -1` for four milestones, so a subject
+  wrapped over two lines was measured at the width of its first line and passed
+  a gate written to refuse it. An eighty-character subject landed that way, and
+  nobody has to make a mistake for it to happen, because an editor that
+  soft-wraps does it for them. The subject is now required to be one line with
+  a blank one after it.
 - **A function over the cognitive complexity ceiling.** Split it. Raising the
   ceiling is not the fix.
 - **`go.mod` and a workflow disagreeing about the Go patch version.** They move
