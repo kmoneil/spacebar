@@ -84,6 +84,10 @@ var requiredFuzzTargets = map[string]map[string]string{
 			"names a message rather than a space, so the space read out of a message name is checked again.",
 		"FuzzRetryAfterIsAlwaysSaneOrIgnored": "a Retry-After is a number chosen by the far end, and a " +
 			"far end that wants this process to stop for a week should not get it.",
+		"FuzzAParsedTimeSurvivesTheTripToTheWire": "an oracle target, and the oracle is the inverse " +
+			"rather than the parser: ParseWhen calls time.Parse, so comparing it against time.Parse " +
+			"would be a program agreeing with itself. wireTime formats and this parses, and between " +
+			"them is the claim that a window asked for is the window sent.",
 	},
 	"internal/cli": {
 		"FuzzASafeFilenameIsAlwaysOneNameInTheDirectory": "an attachment's contentName is chosen by " +
