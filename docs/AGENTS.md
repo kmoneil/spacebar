@@ -119,7 +119,8 @@ reasons, and the exit code separates them:
 - `--limit` was reached: exit 0, complete, because a limit is an instruction
 - the caller stopped reading: exit 0
 - a request failed: non-zero
-- the server would not advance its page token: non-zero
+- the server would not finish paginating, stuck on one page token or cycling
+  through several: non-zero
 
 The fourth and fifth cases still write every row fetched before the failure, so
 a partial answer arrives with a non-zero exit. That is deliberate: rows already

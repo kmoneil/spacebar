@@ -39,6 +39,26 @@ import (
 // pages that read like the end of the list.
 const maxPageSize = 1000
 
+// maxPages bounds how many pages one walk may fetch, so that no sequence of
+// tokens a server hands out can keep a list open forever.
+//
+// The repeat check in paginate catches a far end that will not advance its
+// token, and only that: a server alternating two tokens never repeats the one
+// just used, and was measured walking 5,000 pages with no sign of stopping
+// before the harness cut it off. A bound on the page count ends a cycle of
+// any length for one comparison. Remembering the tokens seen would do the
+// same at the price of memory whose size the far end chooses, which is the
+// thing readBody refuses to accept.
+//
+// The number is far past any real walk rather than near one. The largest walk
+// this tool has produced against the live API is a single page, measured
+// 2026-08-19 over the biggest space this account reaches, and a page carries
+// up to maxPageSize items, so reaching this bound honestly would take ten
+// million messages in one list. A walk that hits it is a defect being
+// contained, not a result being clipped, and it still ends the honest way:
+// errTruncated, a non-zero exit, and every row already yielded stays.
+const maxPages = 10_000
+
 // The orderings messages.list accepts.
 //
 // Newest first is this tool's default and the reason is in m3-04: a caller who
@@ -287,7 +307,7 @@ func paginate[T any](ctx context.Context, c *Client, p pager[T]) iter.Seq2[T, er
 
 		seen := 0
 		token := ""
-		for {
+		for pages := 1; ; pages++ {
 			items, next, err := p.fetch(ctx, c, token, seen)
 			if err != nil {
 				yield(zero, err)
@@ -297,30 +317,57 @@ func paginate[T any](ctx context.Context, c *Client, p pager[T]) iter.Seq2[T, er
 				return
 			}
 
-			if next == "" {
+			stop, err := p.advance(next, token, pages)
+			if err != nil {
+				yield(zero, err)
 				return
 			}
-
-			// A token identical to the one just used is a server that would keep
-			// answering forever. It cannot happen against the real API and it
-			// costs one comparison to make it impossible here, because the
-			// alternative is a command that never returns and a quota spent
-			// finding out.
-			//
-			// Stopping is right and stopping silently is not. Every other way a
-			// walk ends early is either the caller's own doing or an error that
-			// exits non-zero, so a caller checking the exit code cannot be
-			// misled by any of them. This one ends short, with no error, at exit
-			// zero, which is a truncated result reported as complete: this
-			// repository's own defence producing the failure the defence exists
-			// to prevent. So it yields one.
-			if next == token {
-				yield(zero, errTruncated(p.path))
+			if stop {
 				return
 			}
 			token = next
 		}
 	}
+}
+
+// advance says whether the walk may follow next, and what stops it if not.
+//
+// Three answers, and only one of them is an error: an empty token is the far
+// end saying the list is over, an error is the far end misbehaving, and
+// otherwise the walk goes on. Split from paginate for the complexity ceiling,
+// and the split is where the jobs already were: paginate owns the loop and
+// the yielding, this owns the judgement about the token.
+//
+// Stopping on a misbehaving far end is right and stopping silently is not.
+// Every other way a walk ends early is either the caller's own doing or an
+// error that exits non-zero, so a caller checking the exit code cannot be
+// misled by any of them. Ending short with no error, at exit zero, is a
+// truncated result reported as complete: this repository's own defence
+// producing the failure the defence exists to prevent. So both refusals here
+// are errors.
+func (p pager[T]) advance(next, token string, pages int) (stop bool, err error) {
+	if next == "" {
+		return true, nil
+	}
+
+	// A token identical to the one just used is a server that would keep
+	// answering forever. It cannot happen against the real API and it costs
+	// one comparison to make it impossible here, because the alternative is a
+	// command that never returns and a quota spent finding out.
+	if next == token {
+		return true, errTruncated(p.path, "the server kept handing back the same page token")
+	}
+
+	// The check above is one comparison deep, so a cycle of two tokens walks
+	// straight through it forever: A, B, A, B never repeats the one just
+	// used. The bound catches a cycle of any length, and it is a count rather
+	// than a set of tokens seen, because a set is memory whose size the far
+	// end chooses. maxPages says why the number cannot clip a real walk.
+	if pages >= maxPages {
+		return true, errTruncated(p.path, fmt.Sprintf(
+			"the server promised another page after %d had already been fetched", maxPages))
+	}
+	return false, nil
 }
 
 // fetch gets one page and decodes it.
@@ -379,21 +426,21 @@ func (p pager[T]) pageSize(seen int) int {
 }
 
 // errTruncated reports a walk that stopped early through no fault of the
-// caller's.
+// caller's, with reason saying what the far end did.
 //
 // An error rather than a warning, because the exit code is what a script checks
 // and this is the one truncation that would otherwise be indistinguishable from
 // success. The rows already written stay: they were real, and a partial answer
 // with a non-zero exit is honest where a partial answer with a zero exit is not.
-func errTruncated(path string) error {
+func errTruncated(path, reason string) error {
 	return &output.Error{
 		Code: "TRUNCATED",
 		Exit: output.ExitAPI,
 		Message: fmt.Sprintf(
-			"the list of %s stopped early: the server kept handing back the same page token, "+
+			"the list of %s stopped early: %s, "+
 				"so the results above are incomplete.\n"+
 				"Nothing was wrong with the request. Try again, and if it repeats, the far end is not paginating.",
-			path),
+			path, reason),
 		Err: ErrTruncated,
 	}
 }
