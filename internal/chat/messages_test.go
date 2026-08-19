@@ -743,9 +743,20 @@ func FuzzTheSpaceOfAMessageIsAlwaysASpaceName(f *testing.F) {
 			}
 			return
 		}
-		if err := CheckSpaceName(space); err != nil {
-			t.Errorf("SpaceOfMessage(%q) returned %q, which is not a space name: %v", message, space, err)
-		}
+		// Deliberately not "CheckSpaceName(space) passes", which was the
+		// assertion here until 2026-08-19 and could not fail.
+		//
+		// SpaceOfMessage calls CheckSpaceName and refuses to return a value
+		// that fails it, so asserting it passes is asserting a function
+		// enforces what it enforces. Measured rather than reasoned: deleting
+		// that call from SpaceOfMessage and fuzzing this target for 45 seconds
+		// over 2,130,611 executions found nothing.
+		//
+		// What holds the property is the pattern rather than the check, and
+		// the pattern is what TestTheMessagePatternIsNoWiderThanTheSpaceOne
+		// states. This is the half that is genuinely about the return value:
+		// the space it gave back is the one the message starts with, so it
+		// named this message's space and not some other well-formed space.
 		if !strings.HasPrefix(message, space+"/messages/") {
 			t.Errorf("SpaceOfMessage(%q) returned %q, which the message does not begin with", message, space)
 		}
@@ -1043,4 +1054,63 @@ func FuzzAMediaNameThatIsAcceptedIsSafeUnescaped(f *testing.F) {
 			t.Fatalf("accepted name %q changed the query to %v", name, got)
 		}
 	})
+}
+
+// TestTheMessagePatternIsNoWiderThanTheSpaceOne is what actually holds the
+// property FuzzTheSpaceOfAMessageIsAlwaysASpaceName was written for.
+//
+// SpaceOfMessage cuts a message name at "/messages/" and hands back the front
+// half. That half is a space name because the message pattern's own prefix is
+// the space pattern, and for no other reason. The CheckSpaceName call inside
+// SpaceOfMessage is depth rather than the guarantee: measured on 2026-08-19,
+// deleting it changes nothing that any test or 2.1 million fuzz executions can
+// see, because no string can pass one pattern and fail the other.
+//
+// CLAUDE.md argues the opposite and argues it backwards: "the message pattern
+// is what guarantees the prefix is a space, and a first layer that needs the
+// layer below it to be safe is not a first layer". If the pattern guarantees
+// it, the check is exactly redundant. Keeping the check is still reasonable and
+// costs one comparison. Believing a test holds it was the problem.
+//
+// So the claim is stated where it lives, between the two patterns, and it fails
+// the day somebody widens either one. That is the day it matters: the message
+// pattern admits a dot in the identifier and the space pattern does not, so a
+// dot creeping leftward across "/messages/" is the realistic drift.
+func TestTheMessagePatternIsNoWiderThanTheSpaceOne(t *testing.T) {
+	// The space half of a message name, extracted the way SpaceOfMessage
+	// extracts it, has to satisfy the space pattern for every string the
+	// message pattern accepts. Stated over generated candidates rather than
+	// over prose, because "no wider" is a claim about two character classes
+	// and a reader cannot diff two regexps by eye.
+	alphabet := "aZ0_-." + "/+%: " + "\x00\n"
+
+	var walk func(prefix string, depth int)
+	checked := 0
+	walk = func(prefix string, depth int) {
+		if depth == 0 {
+			candidate := "spaces/" + prefix + "/messages/x"
+			if CheckMessageName(candidate) != nil {
+				return
+			}
+			checked++
+			space, _, _ := strings.Cut(candidate, "/messages/")
+			if err := CheckSpaceName(space); err != nil {
+				t.Fatalf("the message pattern accepts %q whose space half %q the space pattern refuses: %v\n"+
+					"The two have drifted apart, and SpaceOfMessage now depends on its own "+
+					"CheckSpaceName call rather than on the pattern.", candidate, space, err)
+			}
+			return
+		}
+		for _, r := range alphabet {
+			walk(prefix+string(r), depth-1)
+		}
+	}
+	for depth := 1; depth <= 3; depth++ {
+		walk("", depth)
+	}
+
+	if checked == 0 {
+		t.Fatal("no candidate passed the message pattern, so this proved nothing")
+	}
+	t.Logf("%d message names checked against the space pattern", checked)
 }

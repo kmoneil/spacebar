@@ -124,6 +124,41 @@ assert the property in the test's own terms rather than by calling the function
 that implements it: `FuzzARecordOnlyAnswersForItsOwnSpace` called `belongs` in
 its first draft, and deleting half of `belongs` did not fail it.
 
+**Find the second implementation.** The strongest property is one checked
+against something somebody else wrote, because a program compared with itself
+passes when it is wrong the same way twice. That is worth a name: an **oracle**.
+
+This tree has several and did not always use them.
+
+| For | The oracle |
+| --- | --- |
+| redaction | `net/url`, parsed permissively rather than through the same `url.Values` the code uses |
+| the configuration round trip | `encoding/json`, rather than `reflect.DeepEqual` over Go values |
+| `chat.ParseWhen` | not `time.Parse`, which it calls. The inverse: `wireTime` formats, the test parses |
+| everything a command does | **the live API** |
+
+The last row is the point of the section below on verifying against a real
+space. Live verification is an oracle comparison, and calling it that explains
+why it catches things a full test run does not: the test suite is the same
+program, and Google's API is not.
+
+**Equivalence means agreement, not acceptance.** Compare only where both accept.
+Where this tool refuses and the oracle does not, there is nothing to compare:
+`ParseWhen` deliberately takes less than `time.Parse` does, refusing a bare date
+because honouring one means choosing a timezone on somebody's behalf. Do not try
+to enumerate what the other implementation is lenient about; that enumeration
+grows one crasher at a time. This wording is taken from `kmoneil/dateparsa`,
+which learned it the expensive way.
+
+**A property the code cannot violate is not a property.** The failure has a
+shape: the test asserts P of what a function returned, and the function already
+refuses to return anything that is not P. It passes forever and says nothing.
+`FuzzTheSpaceOfAMessageIsAlwaysASpaceName` was this until 2026-08-19, and it was
+not caught by reading: deleting the check it existed to hold and fuzzing for 45
+seconds over two million executions found nothing. The property was really about
+two regexps, so it is stated between them now, where widening either one fails
+it.
+
 **Then break the code and check that the target notices.** Every target added
 in the sweep that wrote this section was run against a deliberately broken copy
 of what it guards before it was kept, and that found three that could not fail.
