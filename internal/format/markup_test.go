@@ -525,3 +525,103 @@ func decodeJSON(raw []byte) (any, error) {
 	}
 	return v, nil
 }
+
+// FuzzNothingInsideACodeSpanIsTransformed states the rule this package calls
+// its own most likely bug, and which nothing stated as a property.
+//
+// Three places in the tree say it: format.go's header, format_test.go's, and
+// CLAUDE.md. All three call code-span handling the most likely thing to be
+// wrong here, and it was covered by fifteen table cases, which are fifteen
+// inputs somebody thought of. A translator works by scanning for characters,
+// and a code span is the region where those characters mean nothing, so every
+// rule in the package has to ask whether it is inside one. That is a question
+// with fifteen answers written down and an infinite number of inputs.
+//
+// The claim is byte-identity of the whole span, backticks included, which is
+// what the table shows: "run `__init__`" comes back exactly, not with the
+// underscores eaten. So the assertion is that the span appears verbatim in the
+// output, and the fuzzer supplies what is inside it.
+func FuzzNothingInsideACodeSpanIsTransformed(f *testing.F) {
+	for _, seed := range []string{
+		// The characters the translator scans for, which is what a span has to
+		// stop meaning anything.
+		"**bold**", "*italic*", "~~strike~~", "__init__", "[text](url)",
+		"![alt](url)", "<users/all>", "# heading", "> quote", "- item",
+		"| a | b |", "2 * 3 * 4", "a_b_c", "***", "____",
+
+		// Shapes that interact with the span itself.
+		"a ` b", "``", "\\`", "\n", "a\nb", " ", "",
+
+		// And something ordinary, which is most of what anybody writes.
+		"go test ./...", "SELECT * FROM t WHERE a > 1",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, inner string) {
+		// A span cannot contain its own fence. Skipping these is not ducking
+		// the case: a backtick inside a single-backtick span closes it, so the
+		// input is a different document rather than a span with a backtick in
+		// it, and what it should do is the parser's business rather than this
+		// property's.
+		if inner == "" || strings.Contains(inner, "`") {
+			return
+		}
+
+		// An inline span does not cross a newline, and finding that out is what
+		// this target did first. It failed within a second on "`\n# `" and the
+		// output was right: block.go splits the document with splitLines and
+		// translateInline scans one line, so the two backticks are on different
+		// lines and neither has a partner. CommonMark would join them; a
+		// line-oriented translator cannot, and should not.
+		//
+		// So the assertion was wrong rather than the code, which is the sixth
+		// time in a day a fuzz target found the test. The limit was in no
+		// comment and no table case before this: fifteen cases cover code spans
+		// and not one puts a newline inside an inline one.
+		multiline := strings.ContainsAny(inner, "\n\r")
+
+		for _, tc := range []struct{ what, src string }{
+			{"an inline span", "`" + inner + "`"},
+			{"an inline span with text around it", "before `" + inner + "` after"},
+			{"a fenced block", "```\n" + inner + "\n```"},
+			{"a fenced block with a language", "```go\n" + inner + "\n```"},
+			{"a fence with translation after it", "```\n" + inner + "\n```\n**after**"},
+		} {
+			fenced := strings.HasPrefix(tc.what, "a fence")
+
+			// A fence needs its content on its own lines, so an inner value
+			// carrying its own fence changes which lines the fence is on.
+			if fenced && strings.Contains(inner, "```") {
+				continue
+			}
+			// And an inline span is a within-a-line claim. A fenced block is
+			// not: that one is block.go's and spans lines by definition, so it
+			// is still asserted here.
+			if !fenced && multiline {
+				continue
+			}
+
+			got, _, err := Translate(tc.src)
+			if err != nil {
+				// Invalid UTF-8 and a link that cannot be represented are the
+				// only refusals, and both are valid outcomes.
+				continue
+			}
+
+			span := tc.src
+			if i := strings.Index(tc.src, "`"); i > 0 {
+				span = tc.src[i:]
+			}
+			if j := strings.LastIndex(span, "`"); j >= 0 {
+				span = span[:j+1]
+			}
+
+			if !strings.Contains(got, span) {
+				t.Fatalf("%s was transformed:\n  in   %q\n  out  %q\n  span %q\n"+
+					"Nothing inside a code span is translated, which this package calls its own "+
+					"most likely bug.", tc.what, tc.src, got, span)
+			}
+		}
+	})
+}

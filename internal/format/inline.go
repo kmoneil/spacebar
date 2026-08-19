@@ -67,6 +67,19 @@ func scanOne(src string, i int, b *strings.Builder, warn *collector) (int, error
 // Chat writes inline code with backticks exactly as CommonMark does, so there
 // is nothing to translate, and everything to leave alone: the contents are
 // somebody's shell command and every asterisk in it is theirs.
+//
+// Within one line, and that limit was undocumented until 2026-08-19 when
+// FuzzNothingInsideACodeSpanIsTransformed found it in under a second. block.go
+// splits the document before anything here runs, so a backtick on one line and
+// a backtick on the next are two unterminated runs rather than a span, and each
+// is literal text. CommonMark would join them into one span whose newline
+// becomes a space.
+//
+// Deliberately not followed. Joining lines would mean a stray backtick in a
+// paragraph swallowing everything down to the next one, which is the failure the
+// unterminated rule below exists to avoid, made worse by spanning lines. What it
+// costs is that a shell command pasted across two lines is not one span, and
+// somebody who wants that has a fenced block.
 func scanCode(src string, i int, b *strings.Builder) int {
 	ticks := runLength(src, i, '`')
 	end := findRun(src, i+ticks, '`', ticks)

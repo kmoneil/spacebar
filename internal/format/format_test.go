@@ -84,6 +84,26 @@ func TestNothingInsideACodeSpanIsTransformed(t *testing.T) {
 			want: "```\n**kept**\n```\n*translated*",
 		},
 		{
+			// The limit on a span's reach, which had no case until
+			// FuzzNothingInsideACodeSpanIsTransformed went looking. A span
+			// does not cross a newline, so these are two unterminated runs on
+			// two lines: the first is literal, and the second is inside a
+			// heading, which Chat has no syntax for and which becomes bold.
+			name: "a backtick on each of two lines is not one span",
+			src:  "`\n# `",
+			want: "`\n*`*",
+		},
+		{
+			// The same limit without a heading in the way. Both lines carry
+			// one unterminated backtick, both are literal, and the result
+			// looks unchanged for that reason rather than because a span was
+			// preserved. Worth its own case because the first one could be
+			// read as being about headings.
+			name: "two unterminated runs on two lines are both literal",
+			src:  "a `b\nc` d",
+			want: "a `b\nc` d",
+		},
+		{
 			name: "a double backtick span may contain a single backtick",
 			src:  "``a ` b **c**`` and **d**",
 			want: "``a ` b **c**`` and *d*",

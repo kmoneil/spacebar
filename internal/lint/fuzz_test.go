@@ -102,6 +102,10 @@ var requiredFuzzTargets = map[string]map[string]string{
 			"valid UTF-8 out.",
 		"FuzzCardsAreCheckedWithoutBeingRewritten": "a card is carried raw on purpose, so a card that is " +
 			"accepted has to reach the wire as the one that was written.",
+		"FuzzNothingInsideACodeSpanIsTransformed": "the rule this package calls its own most likely bug, " +
+			"stated as a property rather than as the fifteen inputs somebody thought of. A translator " +
+			"scans for characters and a code span is where those characters mean nothing, so every rule " +
+			"has to ask whether it is inside one.",
 	},
 	"internal/output": {
 		"FuzzSanitize": "a data column never carries an escape sequence, and a cell can forge neither a " +
