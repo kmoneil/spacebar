@@ -15,8 +15,10 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -448,5 +450,257 @@ func TestABadProfileNameIsRefusedOnLoad(t *testing.T) {
 
 	if _, err := LoadFrom(path); err == nil {
 		t.Error("a profile name with a slash in it loaded")
+	}
+}
+
+// refFields are the JSON names on Profile whose values name a secret rather
+// than being one, found by reflection rather than listed.
+//
+// Listing them here would put a second copy of validate's own list beside it,
+// and two lists of the same thing is the drift every gate in this repository
+// exists to prevent. Reflection means a field added tomorrow is covered the
+// day it is added: the rule is "a key whose name ends in _ref", which is the
+// naming convention the file already has, so the gate holds a field nobody has
+// written yet.
+func refFields(t testing.TB) []string {
+	t.Helper()
+
+	var found []string
+	profile := reflect.TypeOf(Profile{})
+	for i := range profile.NumField() {
+		name, _, _ := strings.Cut(profile.Field(i).Tag.Get("json"), ",")
+		if strings.HasSuffix(name, "_ref") {
+			found = append(found, name)
+		}
+	}
+	if len(found) == 0 {
+		t.Fatal("no _ref field was found on Profile, so this gate would pass by having nothing to check")
+	}
+	return found
+}
+
+// refValue reads one _ref field off a profile by its JSON name.
+func refValue(t testing.TB, p Profile, jsonName string) string {
+	t.Helper()
+
+	v := reflect.ValueOf(p)
+	for i := range v.NumField() {
+		name, _, _ := strings.Cut(v.Type().Field(i).Tag.Get("json"), ",")
+		if name == jsonName {
+			return v.Field(i).String()
+		}
+	}
+	t.Fatalf("no field is tagged %q", jsonName)
+	return ""
+}
+
+// FuzzAConfigThatLoadsHoldsNoSecret states the rule
+// TestASecretIsRefusedInTheConfigFile samples, over any file body rather than
+// over the handful somebody wrote out.
+//
+// The rule is worth a property rather than a table because of how it is
+// implemented. validate walks a hand-written list of two fields, and a third
+// _ref field added to Profile without a line in that list would be a
+// credential this tool writes to a file it tells people is safe to read, with
+// nothing failing. refFields is what makes this catch that: the target does
+// not carry a list of its own, it asks the struct, so a field added tomorrow
+// is covered the day it is added rather than the day somebody remembers.
+//
+// The second claim is the round trip, and it belongs in the same target
+// because the first one is only worth having if the file survives being
+// rewritten. SaveTo runs the same validate, so a config that loads and then
+// cannot be saved is a profile somebody can read and never change again.
+func FuzzAConfigThatLoadsHoldsNoSecret(f *testing.F) {
+	fields := refFields(f)
+
+	for _, seed := range []string{
+		`{}`,
+
+		// Found by this target within two seconds of being written, and kept
+		// as a seed as well as under testdata/fuzz so that the case reads in
+		// the source. An empty profiles object is not the same Go value as an
+		// absent one and is the same configuration. See sameProfiles.
+		`{"profiles":{}}`,
+
+		`{"profiles":{"work":{"transport":"webhook","webhook_url_ref":"keyring:spacebar/work/webhook-url"}}}`,
+		`{"profiles":{"work":{"transport":"webhook","webhook_url_ref":"https://chat.googleapis.com/v1/spaces/A/messages?key=K&token=T"}}}`,
+		`{"profiles":{"work":{"transport":"useroauth","client_secret_ref":"GOCSPX-plaintext"}}}`,
+		`{"profiles":{"work":{"transport":"webhook","webhook_url":"https://leak.example"}}}`,
+		`{"profiles":{"work":{"transport":"webhook","webhook_url_ref":"keyring:"}}}`,
+		`{"profiles":{"work":{"transport":"webhook","webhook_url_ref":" keyring:x"}}}`,
+		`{"profiles":{"work":{"transport":"webhook","webhook_url_ref":"KEYRING:x"}}}`,
+		`{"default_profile":"missing"}`,
+		`{"profiles":{"":{"transport":"webhook"}}}`,
+		`{"profiles":{"../escape":{"transport":"webhook"}}}`,
+		`{"profiles":{"work":{"transport":"nonsense"}}}`,
+
+		// Found by this target, and the reason the secret is planted in a
+		// known field rather than searched for anywhere in the body: a
+		// refusal that names an invalid transport is doing its job.
+		`{"profiles":{"0":{"trAnsport":"GOCSPX-plaintext"}}}`,
+
+		// And the same nil-against-empty confusion one level down, found
+		// after the map case was fixed and the slice case was not. See
+		// document.
+		`{"profiles":{"0":{"trAnsport":"useroauth","sCopes":[]}}}`,
+		`{"profiles":{"work":{"transport":"webhook","aliases":{"deploys":"spaces/AAA"}}}}`,
+		`{"profiles":{"work":{"transport":"useroauth","scopes":["https://www.googleapis.com/auth/chat.messages"]}}}`,
+		`[]`, `null`, ``, `{`, "\xff",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, body string) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, FileName)
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("writing the fixture: %v", err)
+		}
+
+		// A secret planted where one would be, with the fuzzed text around it,
+		// so that the second claim can be exact about where it looked.
+		//
+		// The first draft asserted that no refusal ever quotes the sentinel
+		// back, over the whole fuzzed body, and this target refuted it in
+		// twenty-four seconds by putting the sentinel in `transport`, where
+		// naming the bad value is the message doing its job. What must not be
+		// quoted is the contents of a field that holds a credential, and that
+		// is a claim about a known field rather than about a string.
+		for _, field := range fields {
+			refused := loadWithRef(t, field, secretSentinel+body)
+			if refused == nil {
+				t.Fatalf("%s = %q was accepted, and it is not a %s reference", field, secretSentinel+body, RefScheme)
+			}
+			if strings.Contains(refused.Error(), secretSentinel) {
+				t.Fatalf("the refusal quoted the secret back: %v", refused)
+			}
+		}
+
+		cfg, err := LoadFrom(path)
+		if err != nil {
+			// A refusal is the common outcome for an arbitrary body and is a
+			// valid one. The claim below is about what loads.
+			return
+		}
+
+		for name, profile := range cfg.Profiles {
+			for _, field := range fields {
+				value := refValue(t, profile, field)
+				if value != "" && !strings.HasPrefix(value, RefScheme) {
+					t.Fatalf("profile %q loaded with %s = something that is not a reference, "+
+						"so a credential is sitting in a file this tool says is safe to read\n  body: %q",
+						name, field, body)
+				}
+			}
+		}
+
+		// It loaded, so it has to be writable. Anything else is a file
+		// somebody can read and never change.
+		//
+		// The snapshot is taken before the write and not after, which is the
+		// difference between this holding and this being decoration. Written
+		// after, it compares whatever SaveTo left behind against itself, so a
+		// SaveTo that dropped a field from the value it was handed would pass:
+		// that mutation was tried, and it did.
+		wrote := document(t, cfg)
+
+		out := filepath.Join(dir, "written.json")
+		if err := cfg.SaveTo(out); err != nil {
+			t.Fatalf("a configuration that loaded could not be saved: %v\n  body: %q", err, body)
+		}
+		again, err := LoadFrom(out)
+		if err != nil {
+			t.Fatalf("a configuration this tool wrote could not be read back: %v\n  body: %q", err, body)
+		}
+		if read := document(t, again); wrote != read {
+			t.Fatalf("a round trip through the file changed the configuration\n  body: %q\n   was %s\n   now %s",
+				body, wrote, read)
+		}
+	})
+}
+
+// document is the configuration as it would be written, which is the level the
+// round-trip claim is really about.
+//
+// The first two drafts compared Go values and this target refuted both of them,
+// which is worth the paragraph because the wrong conclusion was available and
+// cheap each time. `{"profiles":{}}` loads with an empty map and `"scopes":[]`
+// loads with an empty slice; `omitempty` writes neither, so both read back as
+// nil, and reflect.DeepEqual says an empty container and an absent one differ.
+// A configuration does not. Names answers the same for either, ScopedCapabilities
+// grants nothing either way, and SaveClient already creates the map when it is
+// nil, which is the only place the difference could have mattered.
+//
+// The alternative was to make the encoder write an empty object, which is
+// changing a file format to satisfy an assertion. Comparing the encoded document
+// states what the claim actually is: writing this out, reading it back, and
+// writing it again produces the same file, so every later load sees what this
+// one did. It also collapses empty and absent the way the format does rather
+// than the way Go does, and it keeps holding when a field is added, because
+// there is no list of fields in it.
+func document(t *testing.T, c *Config) string {
+	t.Helper()
+
+	body, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		t.Fatalf("encoding the configuration: %v", err)
+	}
+	return string(body)
+}
+
+// secretSentinel is long and shaped like nothing a message would say on its
+// own, so that finding it in an error is the planted value and not a
+// coincidence in the fuzzer's own text.
+const secretSentinel = "sentinelPLAINTEXTSECRET0123456789abcdef"
+
+// loadWithRef writes a configuration whose named reference field holds value,
+// and returns what reading it back said.
+func loadWithRef(t testing.TB, field, value string) error {
+	t.Helper()
+
+	body, err := json.Marshal(map[string]any{
+		"profiles": map[string]any{
+			"work": map[string]any{"transport": "webhook", field: value},
+		},
+	})
+	if err != nil {
+		t.Fatalf("building the fixture: %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, FileName)
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatalf("writing the fixture: %v", err)
+	}
+
+	_, err = LoadFrom(path)
+	return err
+}
+
+// TestEveryRefFieldOnAProfileIsValidated is the other half, and it is a
+// separate test because the fuzz target above cannot state it.
+//
+// That target checks the fields it was given. This checks that the list it was
+// given is all of them, so adding a _ref field to Profile without teaching
+// validate about it fails here rather than passing there for the reason that
+// nobody mentioned it.
+func TestEveryRefFieldOnAProfileIsValidated(t *testing.T) {
+	checked := map[string]bool{"webhook_url_ref": true, "client_secret_ref": true}
+
+	for _, field := range refFields(t) {
+		if !checked[field] {
+			t.Errorf("Profile has a %q field that nothing holds to the %q rule.\n"+
+				"Add it to the refs list in Profile.validate, or a credential written there "+
+				"reaches the file. FuzzAConfigThatLoadsHoldsNoSecret finds the field on its "+
+				"own and will start failing too.",
+				field, RefScheme)
+			continue
+		}
+
+		// And the rule is really enforced for it, rather than only listed.
+		body := `{"profiles":{"work":{"transport":"webhook","` + field + `":"a-plain-secret"}}}`
+		if _, err := LoadFrom(write(t, body)); err == nil {
+			t.Errorf("a plain value in %q was accepted", field)
+		}
 	}
 }

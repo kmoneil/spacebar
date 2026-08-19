@@ -60,17 +60,18 @@ jobs:
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           if [ "$packages" = "[]" ]; then
             echo "any=false" >> "$GITHUB_OUTPUT"
-            # Not a failure, and not a silent pass either. There is genuinely
-            # nothing to fuzz until internal/format lands in Milestone 2, which
-            # is the first package that parses and escapes anything.
+            # Reaching this now means every fuzz target in the repository has
+            # gone, which is a state internal/lint/fuzz_test.go fails the build
+            # for. It is left here rather than turned into a failure because a
+            # discovery step that cannot find anything and a gate that says
+            # what should have been found are different jobs, and the one with
+            # the list is the one that can name what is missing.
             #
-            # The gate against *losing* a target is not this job. A workflow
-            # that greps for what exists cannot tell "never had one" from
-            # "someone deleted it". That gate is
-            # internal/lint/fuzz_test.go, written alongside internal/format,
-            # which names the packages that must carry a fuzz target and fails
-            # the build when one does not.
-            echo "::notice::No fuzz targets yet. See internal/lint/fuzz_test.go for the gate that will hold this."
+            # That is the gate against *losing* a target, and it is not this
+            # job: a workflow that greps for what exists cannot tell "never had
+            # one" from "someone deleted it". requiredFuzzTargets names every
+            # target and the property it holds, and is checked both ways.
+            echo "::error::No fuzz targets found. internal/lint/fuzz_test.go names the ones that must exist."
           else
             echo "any=true" >> "$GITHUB_OUTPUT"
           fi

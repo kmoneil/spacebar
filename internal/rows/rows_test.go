@@ -520,3 +520,104 @@ func TestAMessageWithNoContentStillHasNoContent(t *testing.T) {
 		t.Errorf("text column = %q, want empty when there is nothing to show", cells[2])
 	}
 }
+
+// FuzzAnIndexedMessageCarriesNoCredential holds the claim SECURITY.md makes
+// about what is on the operator's disk.
+//
+// The local index is a plaintext copy of message content under XDG_DATA_HOME,
+// and that is a real change to what is on somebody's machine which SECURITY.md
+// states at length. The one thing it must never contain is a secret. The API's
+// downloadUri and thumbnailUri each carry an attachment_token that grants
+// access to the bytes, which is why internal/chat's schema comment calls them
+// credentials wearing the costume of a link and why neither is ever decoded.
+//
+// What holds that today is an absence: chat.Attachment has no field for either,
+// so encoding/json drops them at the boundary and nothing downstream can carry
+// what it never received. An absence is exactly the kind of defence that gets
+// undone by somebody adding a field for a good reason, in a change that looks
+// like it is about something else, with no test between them.
+//
+// So the value is planted rather than searched for. The sentinel goes where the
+// API puts a token, the fuzzer supplies everything around it, and the only
+// question is whether it reached the published shape. A field added for either
+// URI fails this the moment it is added, which is the point at which the
+// question "should this be on disk" is cheap to ask.
+//
+// The columns are checked as well as the JSON. They are a different document
+// and a different projection, and a value can reach one of them without the
+// other.
+func FuzzAnIndexedMessageCarriesNoCredential(f *testing.F) {
+	for _, seed := range []string{
+		"deploy done", "", "spaces/AAA/messages/BBB", "report.pdf",
+		"a\tb", "\x00", "café", `{"nested":"json"}`, `"`, "\\",
+		strings.Repeat("a", 300),
+	} {
+		f.Add(seed)
+	}
+
+	// Long and unmistakable, so a match is the planted value and never a
+	// coincidence in the fuzzer's own text.
+	const sentinel = "sentinelATTACHMENTTOKEN0123456789abcdef"
+
+	f.Fuzz(func(t *testing.T, around string) {
+		if strings.Contains(around, sentinel) {
+			return
+		}
+
+		// The wire document, shaped the way the API sends one, with the two
+		// token-bearing URIs where the API puts them. The fuzzed string is
+		// every field a message body can reach.
+		wire, err := json.Marshal(map[string]any{
+			"name":       "spaces/AAAATestSpace/messages/" + around,
+			"text":       around,
+			"createTime": around,
+			"sender":     map[string]any{"name": "users/1", "displayName": around},
+			"attachment": []any{
+				map[string]any{
+					"name":         "spaces/AAAATestSpace/messages/BBB/attachments/CCC",
+					"contentName":  around,
+					"contentType":  "application/pdf",
+					"downloadUri":  "https://chat.google.example/api/get_attachment_url?token=" + sentinel,
+					"thumbnailUri": "https://chat.google.example/api/get_attachment_url?token=" + sentinel,
+					"source":       "UPLOADED_CONTENT",
+					"attachmentDataRef": map[string]any{
+						"resourceName": "ClpzcGFjZXM",
+					},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("building the wire document: %v", err)
+		}
+
+		var m chat.Message
+		if err := json.Unmarshal(wire, &m); err != nil {
+			t.Fatalf("decoding the wire document: %v", err)
+		}
+
+		row, cells := ForMessage(m)
+
+		// The attachments alone, because Cards and CardsV2 are deliberately
+		// carried raw and a sentinel the fuzzer put inside one of those would
+		// be the caller's own JSON rather than an attachment token.
+		published, err := json.Marshal(row.Attachments)
+		if err != nil {
+			t.Fatalf("marshalling the published attachments: %v", err)
+		}
+		if strings.Contains(string(published), sentinel) {
+			t.Fatalf("an attachment access token reached the published shape, and so the local index:\n%s",
+				published)
+		}
+		for i, cell := range cells {
+			if strings.Contains(cell, sentinel) {
+				t.Fatalf("an attachment access token reached column %d: %q", i, cell)
+			}
+		}
+
+		// And the projection still carried what it is for, or the check above
+		// would be passing because nothing came through at all.
+		if len(row.Attachments) != 1 || row.Attachments[0].ResourceName != "ClpzcGFjZXM" {
+			t.Fatalf("the attachment did not survive the projection: %#v", row.Attachments)
+		}
+	})
+}

@@ -15,6 +15,9 @@
 package format
 
 import (
+	"bytes"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -419,4 +422,106 @@ func TestAMentionStillRefusesWhatWouldCloseItsOwnWrapper(t *testing.T) {
 			t.Errorf("Mention(%q) built %q instead of refusing it", name, got)
 		}
 	}
+}
+
+// FuzzCardsAreCheckedWithoutBeingRewritten states the design decision in
+// Cards' own comment as a property: "The elements are not decoded."
+//
+// That sentence is the whole argument for the function's shape. A struct
+// written here for a card would be a guess reviewed as though it were
+// knowledge, and every widget field this tool had not heard of would drop
+// silently out of somebody's message. So what has to hold is not that a card
+// is valid, which this cannot know, but that a card which is accepted arrives
+// on the wire as the one that was written.
+//
+// It is fuzzed rather than tabled because this is a JSON parser over a file
+// somebody passed on the command line, which is the shape of input a table
+// samples worst. The seeds are the mistakes: a single card where a list
+// belongs, a list of things that are not objects, an element with no card
+// inside it.
+func FuzzCardsAreCheckedWithoutBeingRewritten(f *testing.F) {
+	for _, seed := range []string{
+		`[{"cardId":"a","card":{"header":{"title":"Deploy"}}}]`,
+		`[{"cardId":"a","card":{}},{"cardId":"b","card":{}}]`,
+		`{"cardId":"a","card":{}}`,
+		`[]`, `[{}]`, `[1]`, `["a"]`, `[null]`, `[[]]`,
+		`[{"card":{}}]`, `[{"cardId":"a"}]`,
+		`null`, `0`, `""`, `{`, ``, `   `,
+		`[{"cardId":"a","card":{"sections":[{"widgets":[{"textParagraph":{"text":"<b>hi</b>"}}]}]}}]`,
+		"[{\"cardId\":\"a\",\"card\":{\"x\":\"\\u0000\"}}]",
+		`[{"cardId":"a","card":{"n":1e400}}]`,
+	} {
+		f.Add([]byte(seed))
+	}
+
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		cards, err := Cards(raw)
+		if err != nil {
+			// A refusal is a valid outcome and the common one. What matters is
+			// that it is a refusal rather than a panic, and that it never
+			// half-succeeds.
+			if cards != nil {
+				t.Fatalf("Cards(%q) returned both %d cards and the error %v", raw, len(cards), err)
+			}
+			return
+		}
+
+		if len(cards) == 0 {
+			t.Fatalf("Cards(%q) succeeded with no cards, which send would put on the wire as an empty list", raw)
+		}
+
+		// Every element is still an object with a card in it, which is the
+		// only shape claim this function makes.
+		for i, one := range cards {
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(one, &fields); err != nil {
+				t.Fatalf("Cards(%q) returned element %d that is not an object: %v", raw, i, err)
+			}
+			if _, ok := fields["card"]; !ok {
+				t.Fatalf("Cards(%q) returned element %d with no card in it: %s", raw, i, one)
+			}
+		}
+
+		// And nothing was dropped or rewritten on the way through. Compared
+		// after decoding rather than byte for byte, because whitespace and key
+		// order are not what the claim is about: what was written has to be
+		// what is sent.
+		out, err := json.Marshal(cards)
+		if err != nil {
+			t.Fatalf("the cards Cards returned cannot be marshalled back: %v", err)
+		}
+		wrote, err := decodeJSON(raw)
+		if err != nil {
+			t.Fatalf("Cards accepted %q, which is not JSON: %v", raw, err)
+		}
+		sending, err := decodeJSON(out)
+		if err != nil {
+			t.Fatalf("the cards Cards returned do not re-parse: %v", err)
+		}
+		if !reflect.DeepEqual(wrote, sending) {
+			t.Fatalf("a card was altered on the way through:\n  in %q\n out %q", raw, out)
+		}
+	})
+}
+
+// decodeJSON reads a document into comparable Go values, keeping every number
+// as the text it was written as.
+//
+// UseNumber rather than the default, and the fuzz target found the reason in
+// its own seeds within a second of being written. Decoding into `any` turns
+// every number into a float64, and 1e400 does not fit in one, so the
+// comparison failed on a card the code had passed through perfectly correctly.
+// That was the assertion being wrong rather than Cards: json.RawMessage carries
+// the bytes, so a number too large for a float64 reaches the wire intact and
+// should. A test that cannot represent what the code preserves is a test that
+// reports a false failure, which is the kind that gets a real one waved through.
+func decodeJSON(raw []byte) (any, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil, err
+	}
+	return v, nil
 }

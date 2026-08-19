@@ -21,6 +21,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -319,4 +320,114 @@ func TestClosingTwiceIsNotAFailure(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
 	}
+}
+
+// FuzzACallbackOnlyCompletesOnAnExactStateMatch is the state check stated as a
+// property over any callback at all.
+//
+// The state parameter is the whole defence against a code injected by another
+// page in the same browser, and it is the kind of check that survives being
+// written and then quietly stops applying: a rearrangement that reads the code
+// first, an early return added for a new case, a comparison that starts
+// tolerating a prefix. None of those look like removing a security check while
+// somebody is writing them.
+//
+// It calls handle directly rather than through a listener. That is not only for
+// speed: this test never opens a socket, and a fuzz target that stood up a
+// server per execution would be a test talking to something on the machine it
+// runs on, which is the rule internal/lint holds the rest of the tree to.
+//
+// The third claim is about the page rather than the flow. Both pages are
+// constants today, so a callback's own values cannot be reflected into one,
+// and asserting it is what keeps that true on the day somebody makes the
+// refusal page say what went wrong. A page that echoed the query would put the
+// authorization code into a document, which is the one place this handler is
+// careful not to leave it.
+func FuzzACallbackOnlyCompletesOnAnExactStateMatch(f *testing.F) {
+	for _, seed := range []string{
+		"code=4/FAKECODE&state=" + testState,
+		"code=4/FAKECODE&state=" + testState + "x",
+		"code=4/FAKECODE&state=" + testState[:len(testState)-1],
+		"code=4/FAKECODE&state=" + strings.ToUpper(testState),
+		"code=4/FAKECODE",
+		"code=4/FAKECODE&state=",
+		"state=" + testState,
+		"error=access_denied&state=" + testState,
+		"error=access_denied&code=4/FAKECODE&state=" + testState,
+		"error=admin_policy_enforced&error_description=blocked&state=" + testState,
+		"code=4/FAKECODE&state=" + testState + "&state=wrong",
+		"code=4/FAKECODE&state=" + testState + ";x=1",
+		"", "&", "%", "code=%zz&state=" + testState,
+
+		// Two inputs this target found on its first two sweeps, kept as seeds
+		// as well as under testdata/fuzz. Both were the test being wrong
+		// rather than the handler: a space crashed the harness, and a
+		// one-character code matched inside a 404 page.
+		" ", "code=0",
+	} {
+		f.Add(seed)
+	}
+
+	f.Fuzz(func(t *testing.T, query string) {
+		s := &Server{result: make(chan Result, 1), want: testState}
+
+		// Built by hand rather than with httptest.NewRequest, which parses its
+		// argument as a request line and panics on a space in it. That panic
+		// is the harness rather than the handler: net/http refuses a malformed
+		// request line long before a handler sees it, so the input that
+		// produced it is one this code can never be given. RawQuery is the
+		// field handle actually reads, and setting it directly is both the
+		// honest model of what a server hands over and the one that spends the
+		// budget on queries rather than on request lines.
+		req := &http.Request{
+			Method: http.MethodGet,
+			URL:    &url.URL{Path: "/", RawQuery: query},
+		}
+		w := httptest.NewRecorder()
+		s.handle(w, req)
+
+		var got Result
+		var answered bool
+		select {
+		case got = <-s.result:
+			answered = true
+		default:
+		}
+
+		// What the handler was given, read the same way it reads it. Asked of
+		// the parsed request rather than of the fuzzer's string, because the
+		// claim is about the value the handler compared and not about the
+		// characters that produced it.
+		values := req.URL.Query()
+		state, code, authErr := values.Get("state"), values.Get("code"), values.Get("error")
+
+		if answered && state != testState {
+			t.Fatalf("a callback carrying the state %q was answered against the state %q: %q",
+				state, testState, query)
+		}
+		if answered && code == "" && authErr == "" {
+			t.Fatalf("a request that is neither a code nor a refusal was taken as the callback: %q", query)
+		}
+		if answered && got.Err == nil && got.Code != code {
+			t.Fatalf("the callback completed with the code %q where the request carried %q: %q",
+				got.Code, code, query)
+		}
+		if answered && authErr != "" && got.Code != "" {
+			t.Fatalf("a refusal completed carrying the code %q: %q", got.Code, query)
+		}
+
+		// Nothing the caller sent came back in the page. The code above all:
+		// it is in the address bar already and this handler exists partly to
+		// keep it from being written anywhere else.
+		//
+		// Short values are skipped, which is the same allowance internal/chat's
+		// baseSecrets makes and for the same reason: a one-character code
+		// matches somewhere in any page, and this target reported "code=0" as
+		// an echo when what it had found was the 0 in a 404. A substring test
+		// on a short value measures coincidence rather than behaviour.
+		const shortest = 8
+		if body := w.Body.String(); len(code) >= shortest && strings.Contains(body, code) {
+			t.Fatalf("the page echoed the authorization code back: %q", query)
+		}
+	})
 }

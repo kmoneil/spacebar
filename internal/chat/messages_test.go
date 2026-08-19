@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"testing"
@@ -974,4 +975,72 @@ func TestAnEditIsHeldToTheSameLengthAsASend(t *testing.T) {
 	if r.count() != 0 {
 		t.Errorf("the refusal arrived after %d requests", r.count())
 	}
+}
+
+// FuzzAMediaNameThatIsAcceptedIsSafeUnescaped is the third of these, and it
+// exists because the pattern's own comment already makes the claim: "What the
+// pattern accepts is safe in a path unescaped, which is the same promise
+// CheckSpaceName and CheckMessageName make." Both of those promises have a
+// property test holding them and this one did not, which is the shape of a
+// comment that is true until somebody widens a regexp.
+//
+// Worth stating separately rather than folded into the other two, because this
+// name is the one nobody chose. A space name is typed or resolved, a message
+// name is typed or read out of a message, and an attachment resource name is
+// whatever the API put in attachmentDataRef and is pasted onward by a script.
+// It is also the only one of the three that is base64, so the alphabet
+// question is live in a way it is not for the others: `+` and `/` are refused
+// rather than escaped, and `/` is refused because it would add a path segment
+// to a value the far end chose.
+func FuzzAMediaNameThatIsAcceptedIsSafeUnescaped(f *testing.F) {
+	for _, seed := range []string{
+		"ClpzcGFjZXMvQUFBQUV4YW1wbGVPbmUvbWVzc2FnZXMv", "AAAA", "a-b_c",
+		"AAAA=", "AAAA==", "=", "", "a/b", "a+b", "..", ".", "a.b",
+		"../../etc/passwd", "a%2fb", "a?key=stolen", "a#f", "a\x00b",
+		"café", "a b", "media/x",
+	} {
+		f.Add(seed)
+	}
+
+	client, err := New(Options{BaseURL: "https://chat.example/v1?key=" + testKey})
+	if err != nil {
+		f.Fatalf("New: %v", err)
+	}
+
+	f.Fuzz(func(t *testing.T, name string) {
+		if CheckMediaName(name) != nil {
+			return
+		}
+
+		// The one path this name ever takes, built the way Download builds it.
+		query := url.Values{}
+		query.Set("alt", "media")
+		target, err := client.resolve(Request{
+			Method: http.MethodGet,
+			Path:   "media/" + name,
+			Query:  query,
+		})
+		if err != nil {
+			t.Fatalf("a name that passed the check was refused as a path: %q: %v", name, err)
+		}
+
+		want := "/v1/media/" + name
+		if target.EscapedPath() != want || target.Path != want {
+			t.Fatalf("accepted name %q was altered on the way to a request:\n got %q (raw %q)\nwant %q",
+				name, target.Path, target.EscapedPath(), want)
+		}
+		if target.Host != "chat.example" || target.Scheme != "https" {
+			t.Fatalf("accepted name %q reached %s://%s", name, target.Scheme, target.Host)
+		}
+		if target.Fragment != "" || target.RawFragment != "" {
+			t.Fatalf("accepted name %q produced a fragment %q", name, target.Fragment)
+		}
+
+		// alt=media and the profile's own credential, and nothing the name
+		// added. A `?` surviving the pattern would land here.
+		got := target.Query()
+		if got.Get("key") != testKey || got.Get("alt") != "media" || len(got) != 2 {
+			t.Fatalf("accepted name %q changed the query to %v", name, got)
+		}
+	})
 }

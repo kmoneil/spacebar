@@ -99,6 +99,14 @@ itself, on the same host, with the profile's own credential and no parameter
 the name added. `FuzzASpaceNameThatIsAcceptedIsSafeUnescaped` and
 `FuzzAMessageNameThatIsAcceptedIsSafeUnescaped`.
 
+There is a third pattern making the same promise and it had no property test
+until later: `CheckMediaName`, which is base64url and admits `=` padding, and
+which refuses `+` and `/` rather than escaping them because a `/` would add a
+path segment to a value the server chose. It is the one of the three whose
+value nobody typed and nobody resolved: it is whatever the API put in an
+attachment's `attachmentDataRef`, pasted onward by a script.
+`FuzzAMediaNameThatIsAcceptedIsSafeUnescaped`.
+
 That claim was false when it was first written down, which is the argument for
 stating it as a property rather than as the cases somebody thought of.
 `CheckMessageName` admitted a dot, because the API's own generated IDs contain
@@ -275,6 +283,14 @@ it is pasted rather than as a `400` about an API key days later.
   `webhook_url` written where `webhook_url_ref` belongs would otherwise be a
   credential in a file, silently ignored by the tool that put it there.
 
+  `FuzzAConfigThatLoadsHoldsNoSecret` states it over any file body, and finds
+  the fields by reflection over the struct rather than from a list. That is
+  what makes it hold a field nobody has written yet: `validate` walks two
+  fields by hand, and a third `*_ref` added without a line there would be a
+  credential written to a file this tool calls safe to read, with nothing
+  failing. `TestEveryRefFieldOnAProfileIsValidated` is the other half, because
+  a target can only check the fields it was given.
+
   This is why `client_secret` from SPEC.md §5.1 is written as
   `client_secret_ref`. RFC 8252 is right that a native-app secret is not
   confidential and none of this tool's security rests on it, but a user who
@@ -401,6 +417,38 @@ it is pasted rather than as a `400` about an API key days later.
   where the failure is built, and struck out again by a second pass that knows
   the profile's own secret values by sight, because the first pass can only
   redact what somebody anticipated the shape of.
+
+  Both passes are stated over any URL rather than over the table of examples
+  beside them. `FuzzARedactedURLCarriesNoCredential` plants a value in a place
+  the redactor has promised to cover and fuzzes everything around it, which is
+  the way round that avoids the target agreeing with the code by construction:
+  a fuzzer asked "is there a credential left in this" would need a rule for
+  what one looks like, and that rule is the guess being tested. It found two
+  ways through on the day it was written.
+
+  A **query the redactor cannot parse is now replaced whole**. `url.URL.Query`
+  discards its error and answers with whatever it managed, and `url.ParseQuery`
+  refuses the entire pair a semicolon appears in, so `?key=SECRET;x=1` yielded
+  no parameters at all, the nothing-to-redact path handed back the raw query,
+  and the credential went to the log. It was not reachable with a real
+  credential through today's callers, and that is worth stating rather than
+  overclaiming: `internal/chat` builds the URL this is called on and its own
+  `Query` call drops the same pair on the way, so such a profile sends a
+  request with no key rather than a leaked one. What made it worth fixing is
+  the second consequence of the same silent drop: it leaves `internal/chat`'s
+  scrub with an empty list of secrets, so on that profile both layers are off
+  at once.
+
+  A **fragment is now replaced whenever there is one**, unread. It is never
+  sent to a server, so nothing about a request is learned by reading one, and
+  the OAuth implicit flow returns an access token in one. This one was
+  reachable end to end: `internal/chat` copies the base URL wholesale when it
+  builds a request, so a fragment on a profile's webhook URL is on every
+  request URL, and the second pass collects its known values out of the query
+  and had never seen the fragment's. Telling `#top` from `#access_token=...`
+  means reading a fragment to decide, and they are the same syntax, so neither
+  is read. `TestAFragmentIsRedactedWhetherOrNotItLooksLikeACredential` and
+  `TestARedactedURLKeepsNothingBackFromAQueryItCannotRead`.
 - **Redaction happens where the request is built, not where it is printed**
   (SPEC.md §15.1). No present or future formatter is ever handed a token,
   including at `--verbose`, where the `Authorization` header prints as
@@ -530,6 +578,14 @@ identifies bytes and does not grant them, and fetching them still needs the
 credential. The API's `downloadUri` and `thumbnailUri`, which do carry an access
 token, never reach `internal/rows` and so cannot reach the index.
 
+What holds that is an absence: `chat.Attachment` has no field for either, so
+`encoding/json` drops them at the boundary and nothing downstream can carry what
+it never received. An absence is the kind of defence somebody undoes for a good
+reason in a change that looks like it is about something else, so
+`FuzzAnIndexedMessageCarriesNoCredential` plants a token where the API puts one
+and fails the moment a field for it exists. A sweep of a real sync is a
+measurement of one day; this is a gate.
+
 **The index also holds a message's non-text content, as of the change that
 added it.** A GIF's URL and a card's JSON are message content, and a record of
 what was said that drops them is a record of something else. Two things follow
@@ -596,6 +652,17 @@ therefore a decision the operator makes, with `rm`, knowing what it costs.
   `TestAMismatchedStateIsNotAnswered` and
   `TestACallbackWithTheWrongStateIsRejected`, which also asserts that no code
   from such a callback is exchanged.
+
+  `FuzzACallbackOnlyCompletesOnAnExactStateMatch` states it over any callback
+  at all, because this is the kind of check that survives being written and
+  then quietly stops applying: a rearrangement that reads the code first, an
+  early return for a new case, a comparison that starts tolerating a prefix.
+  None of those look like removing a security check while somebody is writing
+  them. It also holds that neither page echoes the callback's own values, which
+  is true by both pages being constants and is worth a gate for the day the
+  refusal page starts saying what went wrong: the authorization code is in the
+  address bar already, and this handler exists partly to keep it from being
+  written anywhere else.
 - **The whole flow times out at 180 seconds**, and the listener shuts down
   within 2 seconds of the callback. A loopback listener left open is a loopback
   listener something else can talk to.
@@ -1275,6 +1342,15 @@ says what it is, and nothing read it. Both halves of a record now have to agree
 with the file it was read from: the `space` field and the space inside the
 message's own resource name. The file name is the half with checked provenance.
 `TestARecordInTheWrongFileDoesNotAnswerForAnotherSpace`.
+
+`FuzzARecordOnlyAnswersForItsOwnSpace` states it over any line at all. This is
+the one input in the tree that is neither the API's nor the operator's: it is a
+line off the local disk, in a file that may have been copied, restored, or
+edited, which is the provenance the check exists for and is exactly the case a
+hand-written table cannot enumerate. It asserts the two halves separately rather
+than by calling `belongs`, which the first draft did: deleting half of that
+function and running the target was how the circularity was found, and it
+passed.
 
 That is a truncation claim rather than a tidiness one. `--space` selects a file
 rather than filtering, so a record in the wrong file answered a search scoped to
