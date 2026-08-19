@@ -82,9 +82,25 @@ A browser opens, you consent, and the authorization comes back to a listener on
 address as a literal, never by the name "localhost", which resolves through
 whatever the machine's resolver says.
 
-If the browser cannot be opened, which is the normal case over SSH and in a
-container, the URL is printed for you to open yourself. The flow waits three
-minutes for an answer and then gives up, changing nothing.`,
+The URL is printed either way, so a browser that will not launch is not the
+problem. A browser on a different machine is: the listener is on this one, so
+consent succeeds and the redirect carrying the result has nowhere to arrive.
+That is the normal case over SSH and in a container, and it is what a
+connection error at the end of consent means.
+
+The flow waits three minutes and then gives up, changing nothing. When the
+redirect fails, the authorization is still in the browser's address bar and
+can be replayed against the listener from here, in a second shell, before the
+wait runs out:
+
+  read -r url
+  curl -s "$url" >/dev/null
+
+Paste at the read prompt rather than onto the curl line: that URL carries a
+live authorization code, and a command line goes into your shell history.
+
+The README section "When there is no browser here" has the whole procedure,
+including a one-shell form and why it needs a prompt and a guard.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runAuthLogin(cmd, opts, sendOnly)

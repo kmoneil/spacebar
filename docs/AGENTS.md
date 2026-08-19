@@ -76,7 +76,7 @@ anything. The codes never change meaning; new conditions get new codes.
 | 1 | A failure with nothing more specific to say | Report it |
 | 2 | Bad flag, bad argument, or a target that resolved to nothing | Fix the invocation; do not retry it unchanged |
 | 3 | An API or network failure | Retry a read; never retry a write. A 400, 403 or 404 is also 3 and retrying it never helps |
-| 4 | Missing or expired authorization | `spacebar auth login --profile NAME` |
+| 4 | Missing or expired authorization | Stop and tell the person. `spacebar auth login` needs a browser and a human; you cannot complete it. See below |
 | 5 | The profile's transport cannot do this at all | Use a different profile; retrying never helps |
 | 6 | Rate limited beyond the backoff | Wait, then retry |
 | 7 | A confirmation was required and not given | Pass `--yes`, having actually asked |
@@ -85,6 +85,23 @@ Exit 5 is the one worth handling deliberately. It means the capability is
 missing rather than the request being wrong, it is decided before any network
 call, and the message names both the profile and the fix. A webhook profile is
 write-only and fixed to one space, so every read against one is exit 5 forever.
+
+**Exit 4 is the one you cannot fix yourself, and saying so is the whole
+instruction.** Authorizing opens a consent screen in a browser and waits for a
+redirect to come back to a listener on `127.0.0.1`. There is no headless form of
+it: the out-of-band copy/paste redirect Google used to offer is retired, so a
+person has to consent in a browser. Running `spacebar auth login` from a program
+does not fail usefully either, it prints a URL and blocks for three minutes.
+
+So on exit 4: stop, report it, and name the profile and the command a person
+would run. Do not retry, do not run `auth login` yourself, and do not report the
+work as done. If you are on a machine with no browser, which is the usual case
+for a program, the person also has to replay the failed redirect URL by hand;
+the README section "When there is no browser here" is what they need and it is
+worth naming to them.
+
+The same applies to `spacebar auth setup`, which reads a client secret from
+stdin that only they have.
 
 ## `--json`
 

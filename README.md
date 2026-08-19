@@ -315,6 +315,90 @@ because a file that could redirect the consent screen would be a file that could
 collect your authorization.
 
 <details>
+<summary><b>When there is no browser here: a container, SSH, a remote dev box</b></summary>
+
+Consent works and the login still fails, with the browser stopping on
+`ERR_CONNECTION_REFUSED` at `http://127.0.0.1:PORT/`.
+
+Nothing malfunctioned. The authorization comes back to a listener on
+`127.0.0.1`, and `127.0.0.1` in a browser on your laptop is your laptop, not the
+machine running `spacebar`. The two ends of the flow are on different machines
+and the redirect has no way across. The port is chosen by the kernel when the
+command runs, so there is no fixed port to forward ahead of time either.
+
+**The authorization is not lost when this happens.** It is in the browser's
+address bar, in the URL that failed to load, and the listener is still waiting
+for it on the machine you ran the command on. Replay it there, in a second
+shell, while the first one is still waiting:
+
+```sh
+# shell 1
+spacebar auth login --profile work
+
+# shell 2, once consent has landed on ERR_CONNECTION_REFUSED
+read -r url
+curl -s "$url" >/dev/null
+```
+
+`spacebar auth login` then exchanges the code and stores the token as though the
+redirect had arrived by itself.
+
+**Paste at the `read` prompt, never onto the `curl` line.** That URL carries a
+live authorization code. A command line goes into your shell history and into
+anything recording your terminal; a `read` does not.
+
+### One shell, if you would rather
+
+The two commands can be one line, and it needs more care than it looks like it
+needs:
+
+```sh
+spacebar auth login --profile work & sleep 2
+while :; do
+  printf '\npaste the failed URL, then Enter: '
+  read -r url </dev/tty || break
+  case "$url" in http://127.0.0.1:*) break ;; esac
+done
+curl -s "$url" >/dev/null
+wait
+```
+
+The loop is not decoration. A bare `read -r url` prints no prompt, so once the
+consent URL has scrolled past the terminal looks idle, and **a single stray
+Enter satisfies it with an empty string**: `curl` then fails on a blank
+argument, and the URL you paste afterwards is echoed to the screen and consumed
+by nothing. Which is the one outcome the `read` was there to prevent. That
+happened on the first real run of the short version, in zsh, to somebody who
+had just written it.
+
+### What protects you if the code does end up on screen
+
+It is single use and it is bound to this flow by PKCE: the verifier never leaves
+the waiting process, so the code cannot be exchanged by anyone who reads it
+somewhere else. Complete the flow with it anyway rather than abandoning it, and
+a spent code is inert.
+
+The listener is careful for the same reason. It checks the `state` value it
+generated before it looks at anything else, so a URL you were talked into
+pasting is answered with a 404 and nothing happens.
+
+### Two more things worth knowing before you start
+
+- **You have three minutes from when the URL prints**, and that clock covers
+  opening it elsewhere, consenting, and getting the failed URL back. Have the
+  second shell ready.
+- **If it runs out, nothing changed.** Measured, not assumed: after a timeout
+  `config.json` and the credential store are byte-identical to what they were
+  before, and an existing authorization still works. Run it again.
+
+On a machine with no OS keyring, which containers usually are, the refresh token
+lands in `credentials.json` at mode `0600` instead, and every later command says
+so on stderr. That is by design and worth knowing before you authorize on a
+shared box.
+
+</details>
+
+<details>
 <summary><b>Scopes, the seven-day testing-mode limit, and what your admin has to allow</b></summary>
 
 **Scopes are requested narrowly.** `--send-only` asks for
