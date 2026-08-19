@@ -315,6 +315,62 @@ because a file that could redirect the consent screen would be a file that could
 collect your authorization.
 
 <details>
+<summary><b>When the browser is on another machine: SSH, a container, a remote dev box</b></summary>
+
+Consent works and the login still fails, with the browser stopping on
+`ERR_CONNECTION_REFUSED` at `http://127.0.0.1:PORT/`.
+
+Nothing malfunctioned. The authorization comes back to a listener on
+`127.0.0.1`, and `127.0.0.1` in a browser on your laptop is your laptop, not the
+machine running `spacebar`. The two ends of the flow are on different machines
+and the redirect has no way across. The port is chosen by the kernel when the
+command runs, so there is no fixed port to forward ahead of time either.
+
+**The authorization is not lost when this happens.** It is in the browser's
+address bar, in the URL that failed to load, and the listener is still waiting
+for it on the machine you ran the command on. Replay it there, in a second
+shell, while the first one is still waiting:
+
+```sh
+read -r url                  # paste the failed URL at the prompt
+curl -s "$url" >/dev/null
+```
+
+`spacebar auth login` then exchanges the code and stores the token as though
+the redirect had arrived by itself.
+
+Three things about that, in the order they will bite:
+
+- **The paste goes on its own line, not onto the `curl` line.** That URL
+  carries a live authorization code. A command line goes into your shell
+  history; a `read` does not.
+- **You have three minutes from when the URL printed**, and that clock covers
+  opening it elsewhere, consenting, and getting the failed URL back. Have the
+  second shell open before you start.
+- **A code from somebody else's flow will not work**, which is the point. The
+  listener checks the `state` value it generated before it looks at anything
+  else, and the token exchange is bound to a verifier that never left the
+  process, so a URL you were talked into pasting fails rather than authorizing
+  an attacker.
+
+If the three minutes run out, nothing was changed: run `spacebar auth login`
+again.
+
+> Measured once, on 2026-08-18, against a real container and a real Google
+> consent screen: the listener answered `200`, the exchange completed, and
+> `spacebar auth status` went from `authorized no` to `authorized yes` with all
+> three scopes. Whether three minutes is comfortable for somebody doing this
+> alone is not settled, and if it turns out not to be, the window is the thing
+> that should change.
+
+On a machine with no OS keyring, which containers usually are, the refresh
+token this stores lands in `credentials.json` at mode `0600` instead, and every
+later command says so on stderr. That is by design and worth knowing before you
+authorize on a shared box.
+
+</details>
+
+<details>
 <summary><b>Scopes, the seven-day testing-mode limit, and what your admin has to allow</b></summary>
 
 **Scopes are requested narrowly.** `--send-only` asks for
