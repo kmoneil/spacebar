@@ -136,7 +136,10 @@ var listMembersTool = &mcp.Tool{
 		"An app's membership has no affiliation at all. This API returns no display names on a " +
 		"user-authorized read, so the resource name is the only identifier. By default only members who " +
 		"have joined are listed; people who were invited and have not accepted are returned only when " +
-		"show_invited is set, and a membership held by a Google Group only when show_groups is. A group " +
+		"show_invited is set, and a membership held by a Google Group only when show_groups is, in which " +
+		"case hidden_groups says how many were left out. A non-zero hidden_groups means this list is not " +
+		"the whole answer to who is in the space, because everybody in such a group is in it without a " +
+		"membership of their own: say so rather than reporting the list as complete. A group " +
 		"membership has group_member set to groups/NNN instead of member, and carries no role and no " +
 		"affiliation because the API sends neither. Everybody in that group is in the space, so without " +
 		"show_groups this is not the whole answer to who can see what is posted there, and even with it " +
@@ -153,6 +156,14 @@ type listMembersIn struct {
 type listMembersOut struct {
 	Members []rows.Member `json:"members"`
 	HasMore bool          `json:"has_more,omitempty" jsonschema:"true when more memberships exist beyond the limit"`
+
+	// HiddenGroups is in the result and not on the audit stream, for the reason
+	// search_messages carries skipped there: stderr is invisible to a model,
+	// and a model is who acts on this answer. The CLI can say this in a
+	// sentence on stderr because a person is reading a terminal; there is no
+	// equivalent here, so an omission nobody can see is an omission that gets
+	// reported as the whole truth.
+	HiddenGroups int `json:"hidden_groups,omitempty" jsonschema:"how many memberships held by a Google Group were left out because show_groups was not set; everybody in such a group is in the space, so a non-zero value means this list is not the whole answer to who is in it"`
 }
 
 func (s *Server) listMembers(ctx context.Context, _ *mcp.CallToolRequest, in listMembersIn) (*mcp.CallToolResult, listMembersOut, error) {
@@ -168,17 +179,19 @@ func (s *Server) listMembers(ctx context.Context, _ *mcp.CallToolRequest, in lis
 		return nil, listMembersOut{}, err
 	}
 
+	hidden := 0
 	found, more, err := collect(s.profile.Transport.Members(ctx, chat.ListMembersRequest{
-		Space:       target,
-		ShowInvited: in.ShowInvited,
-		ShowGroups:  in.ShowGroups,
-		Limit:       limit + 1,
+		Space:        target,
+		ShowInvited:  in.ShowInvited,
+		ShowGroups:   in.ShowGroups,
+		HiddenGroups: &hidden,
+		Limit:        limit + 1,
 	}), limit)
 	if err != nil {
 		return nil, listMembersOut{}, err
 	}
 
-	out := listMembersOut{Members: make([]rows.Member, 0, len(found)), HasMore: more}
+	out := listMembersOut{Members: make([]rows.Member, 0, len(found)), HasMore: more, HiddenGroups: hidden}
 	for _, member := range found {
 		row, _ := rows.ForMember(member)
 		out.Members = append(out.Members, row)

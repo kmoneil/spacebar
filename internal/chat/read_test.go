@@ -654,15 +654,19 @@ func TestInvitedMembersAreAskedForOnlyWhenTheyAreWanted(t *testing.T) {
 	}
 }
 
-// TestGroupMembershipsAreAskedForOnlyWhenTheyAreWanted.
+// TestGroupMembershipsAreAlwaysAskedForAndNotAlwaysYielded records a contract
+// that changed, and why.
 //
-// The same shape as the invited case and for the same reason, but the stakes
-// are not the same. An invited person is one person who is not in the space
-// yet. A group is everybody in it, all of whom are in the space, and none of
-// whom appear anywhere in this list. Off by default because that is the API's
-// default and because the parameter is the whole difference between the two
-// questions; documented loudly because the default answer is the narrow one.
-func TestGroupMembershipsAreAskedForOnlyWhenTheyAreWanted(t *testing.T) {
+// This asserted the opposite until 2026-08-19: that the default request does
+// not carry showGroups, so the server never sends a group membership. That was
+// the defect rather than the design. A row the server drops is a row nothing
+// here can count, and a count is the only way to tell somebody that the answer
+// they are reading is narrower than the question they asked.
+//
+// So the parameter is on every request now and the flag decides what comes out
+// the other end. The cost is rows fetched and discarded, which is why the
+// filtering sits where the limit is not yet counted.
+func TestGroupMembershipsAreAlwaysAskedForAndNotAlwaysYielded(t *testing.T) {
 	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprint(w, `{"memberships": []}`)
 	})
@@ -681,11 +685,10 @@ func TestGroupMembershipsAreAskedForOnlyWhenTheyAreWanted(t *testing.T) {
 	if len(paths) != 2 {
 		t.Fatalf("paths = %q", paths)
 	}
-	if strings.Contains(paths[0], "showGroups") {
-		t.Errorf("the default request asked for group memberships: %s", paths[0])
-	}
-	if !strings.Contains(paths[1], "showGroups=true") {
-		t.Errorf("--show-groups did not reach the request: %s", paths[1])
+	for i, path := range paths {
+		if !strings.Contains(path, "showGroups=true") {
+			t.Errorf("request %d did not ask for group memberships, so one could not be counted: %s", i, path)
+		}
 	}
 }
 
@@ -1082,5 +1085,163 @@ func TestAMessageCarriesEveryRouteAGifArrivesBy(t *testing.T) {
 	}
 	if len(carded.CardsV2) != 0 {
 		t.Errorf("a legacy card decoded into cardsV2, which is a different field: %+v", carded.CardsV2)
+	}
+}
+
+// memberPage is one page of memberships, groups first, which is the ordering
+// the live API can produce and the fixture that found this could not.
+//
+// Measured 2026-08-19: the caller's own membership came back first in one
+// direct message and second in another, one call apart on the same profile.
+// So the order memberships arrive in is not something to reason from, and a
+// test that only ever puts a group last is testing the easy half.
+func memberPage(t *testing.T, groups, humans int, token string) string {
+	t.Helper()
+
+	items := make([]string, 0, groups+humans)
+	for i := range groups {
+		items = append(items, fmt.Sprintf(
+			`{"name": "spaces/AAA/members/group-0%d", "state": "JOINED",
+			  "groupMember": {"name": "groups/0%d"}}`, i, i))
+	}
+	for i := range humans {
+		items = append(items, fmt.Sprintf(
+			`{"name": "spaces/AAA/members/10000000000000000000%d", "state": "JOINED",
+			  "member": {"name": "users/10000000000000000000%d", "type": "HUMAN"},
+			  "role": "ROLE_MEMBER", "affiliation": "INTERNAL"}`, i, i))
+	}
+
+	next := ""
+	if token != "" {
+		next = fmt.Sprintf(`, "nextPageToken": %q`, token)
+	}
+	return fmt.Sprintf(`{"memberships": [%s]%s}`, strings.Join(items, ","), next)
+}
+
+// TestAGroupMembershipIsCountedRatherThanSilentlyAbsent is the defect.
+//
+// A space can grant access to a Google Group, and everybody in that group is
+// then in the space with no membership of their own. The default answer to
+// "who is in here" left them out and said nothing, so it was a narrower answer
+// to the question than the one that was asked, with nothing on any stream
+// admitting it.
+//
+// The request asks for groups now whatever the caller wanted, because a row
+// that is never fetched cannot be counted, and the count is what makes the
+// omission speakable. What the caller asked for decides what is yielded.
+func TestAGroupMembershipIsCountedRatherThanSilentlyAbsent(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, memberPage(t, 2, 3, ""))
+	})
+
+	hidden := 0
+	members, err := collect(r.client.Members(context.Background(), ListMembersRequest{
+		Space:        "spaces/AAA",
+		HiddenGroups: &hidden,
+	}))
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+
+	if len(members) != 3 {
+		t.Fatalf("got %d memberships, want the 3 human ones: %+v", len(members), members)
+	}
+	for _, m := range members {
+		if m.GroupMember != nil {
+			t.Errorf("a group membership was yielded without being asked for: %+v", m)
+		}
+	}
+	if hidden != 2 {
+		t.Errorf("hidden = %d, want 2: the omission is not countable, so it cannot be reported", hidden)
+	}
+}
+
+// TestAskingForGroupsYieldsThemAndCountsNothingHidden, the other half. Nothing
+// is being withheld, so there is nothing to say, and a warning on a list that
+// is complete would be noise that teaches people to ignore the one that is not.
+func TestAskingForGroupsYieldsThemAndCountsNothingHidden(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, memberPage(t, 2, 3, ""))
+	})
+
+	hidden := 0
+	members, err := collect(r.client.Members(context.Background(), ListMembersRequest{
+		Space:        "spaces/AAA",
+		ShowGroups:   true,
+		HiddenGroups: &hidden,
+	}))
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+
+	if len(members) != 5 {
+		t.Fatalf("got %d memberships, want all 5", len(members))
+	}
+	if hidden != 0 {
+		t.Errorf("hidden = %d, want 0: nothing was withheld", hidden)
+	}
+}
+
+// TestALimitCountsMembersRenderedRatherThanFetched is the claim the live space
+// could not settle.
+//
+// The fixture it was measured against returned its human before its group, so
+// a limit was satisfied before a dropped row could matter and the interaction
+// never fired. This puts the groups first, which the API can do.
+//
+// What would go wrong without the seam: the limit is counted in pager.emit
+// over rows yielded, and pageSize under-asks the server from the same counter.
+// Drop a row anywhere downstream of emit and it has already burnt limit budget
+// and already shortened the next page, so `--limit 2` on a space whose first
+// two memberships are groups answers with nothing at all and calls it complete.
+func TestALimitCountsMembersRenderedRatherThanFetched(t *testing.T) {
+	pages := 0
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		pages++
+		if pages == 1 {
+			// Groups first, and a token, so the walk has to go on to find a
+			// human at all.
+			_, _ = fmt.Fprint(w, memberPage(t, 2, 0, "more"))
+			return
+		}
+		_, _ = fmt.Fprint(w, memberPage(t, 0, 4, ""))
+	})
+
+	hidden := 0
+	members, err := collect(r.client.Members(context.Background(), ListMembersRequest{
+		Space:        "spaces/AAA",
+		Limit:        2,
+		HiddenGroups: &hidden,
+	}))
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+
+	if len(members) != 2 {
+		t.Fatalf("a limit of 2 delivered %d memberships: a dropped row spent limit budget", len(members))
+	}
+	for _, m := range members {
+		if m.GroupMember != nil {
+			t.Errorf("a group row was counted against the limit: %+v", m)
+		}
+	}
+	if hidden != 2 {
+		t.Errorf("hidden = %d, want 2", hidden)
+	}
+}
+
+// TestNobodyCountingIsNotAFailure. HiddenGroups is optional, and a caller that
+// does not want the number still gets the filtering.
+func TestNobodyCountingIsNotAFailure(t *testing.T) {
+	r := newReader(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, memberPage(t, 1, 1, ""))
+	})
+
+	members, err := collect(r.client.Members(context.Background(), ListMembersRequest{Space: "spaces/AAA"}))
+	if err != nil {
+		t.Fatalf("Members: %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("got %d memberships, want the 1 human one", len(members))
 	}
 }

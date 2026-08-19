@@ -186,6 +186,20 @@ role and no affiliation because the API sends neither, and the group's own
 members are not reachable at all, so this row tells you a group has access and
 not who that is.
 
+**Without `--show-groups` you are told when one was left out.** The rows on
+stdout are unchanged, and a warning goes to stderr, which in `--json` mode is
+an envelope like every other warning:
+
+```json
+{"warning":{"message":"1 membership(s) held by a Google Group were not listed, and everybody in such a group is in this space without a membership of their own.\n..."}}
+```
+
+Read it. A space whose access comes through a group grants that access to
+everybody in the group, so a member list that omitted one is a narrower answer
+than "who is in this space" and reporting it as complete is wrong. Either pass
+`--show-groups` and say a group has access, or say the list may be short. The
+exit code is still 0, because the rows that were returned are correct.
+
 ### A message
 
 <!-- shape: rows.Message -->

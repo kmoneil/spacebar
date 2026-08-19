@@ -268,3 +268,48 @@ func TestEveryWindowFlagSaysWhatItBounds(t *testing.T) {
 		}
 	}
 }
+
+// TestTheNoteAboutAHiddenGroupSaysWhatItCanAndPromisesNothingElse.
+//
+// The sentence is the whole of this fix on the CLI side, so its wording is the
+// thing under test rather than an implementation detail. It has to say the
+// list is short, say why that matters, and name the flag. It must not imply
+// anything about who is in the group: a Chat scope reaches groups/NNN and no
+// further, so there is no name, no address and no head count to offer, and a
+// sentence that hinted otherwise would send somebody looking for a command
+// that does not exist.
+//
+// What this does not cover, said rather than left to be discovered: the guard
+// that prints it only when something was withheld. `spaces members` needs a
+// user-OAuth profile and no test here can point one at a test server, because
+// chat.BaseURL is a constant so that nothing can redirect where a credential
+// goes. The counting and filtering underneath are held in internal/chat, and
+// the same reporting over MCP is held in internal/mcpsrv, where a fake
+// transport can stand in.
+func TestTheNoteAboutAHiddenGroupSaysWhatItCanAndPromisesNothingElse(t *testing.T) {
+	note := hiddenGroupsNote(3)
+
+	for _, want := range []string{
+		"3 membership",         // how many
+		"Google Group",         // what kind of thing
+		"without a membership", // why it matters
+		"--show-groups",        // what to type
+	} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note does not mention %q:\n%s", want, note)
+		}
+	}
+
+	// Nothing that reads as a promise about the people inside the group.
+	for _, forbidden := range []string{"members of the group", "who is in the group", "expand"} {
+		if strings.Contains(note, forbidden) {
+			t.Errorf("the note implies it can say who is in the group, which no Chat scope can:\n%s", note)
+		}
+	}
+
+	// And it is about this list rather than about groups in general, or it is
+	// a fact somebody reads once and stops seeing.
+	if !strings.Contains(note, "this space") && !strings.Contains(note, "not the whole answer") {
+		t.Errorf("the note does not say that the list in front of them is short:\n%s", note)
+	}
+}
