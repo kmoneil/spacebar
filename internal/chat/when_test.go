@@ -253,3 +253,84 @@ func TestSinceAndBackfillAreRefusedBeforeAnyRequest(t *testing.T) {
 		t.Errorf("--backfill alone was refused: %v", err)
 	}
 }
+
+// FuzzAParsedTimeSurvivesTheTripToTheWire is an oracle target, and choosing the
+// oracle was the whole difficulty.
+//
+// The obvious one is wrong. ParseWhen *calls* time.ParseDuration and
+// time.Parse, so comparing it against them is comparing a program with itself
+// and a program that is wrong the same way twice passes. That is the trap
+// dateparsa's oracle_test.go names, and this package can fall into it more
+// easily than most because its parser is three lines of stdlib.
+//
+// What is not circular is the inverse. wireTime formats with Format and this
+// parses with Parse, which are different code, and between them sits the claim
+// that actually matters: **a time this accepts survives being written into a
+// filter and read back as the same instant.** The API sees the formatted form
+// and nothing else, so a value that does not survive that trip is a window the
+// caller asked for and did not get.
+//
+// Equivalence means agreement, not acceptance, which is dateparsa's rule and
+// worth restating because it is the half that gets this wrong. Where ParseWhen
+// refuses there is nothing to compare: it deliberately takes less than
+// time.Parse does, refusing a bare date because honouring one means choosing a
+// timezone on somebody's behalf. Do not enumerate what the stdlib is lenient
+// about; that list grows one crasher at a time.
+func FuzzAParsedTimeSurvivesTheTripToTheWire(f *testing.F) {
+	for _, seed := range []string{
+		// The two forms it takes.
+		"2026-08-16T09:00:00Z", "2026-08-16T09:00:00-05:00", "90m", "2h", "36h", "168h",
+		"2026-08-16T09:00:00.123456789Z",
+
+		// The edges of a duration, where a time can be pushed out of the range
+		// a formatter can write.
+		"2562047h47m16s", "2562047h47m16.854775807s", "1ns", "0.0000001s",
+
+		// Refused, and here so the target spends time on the refusal path too.
+		"2026-08-16", "-1h", "0s", "", "   ", "tomorrow", "1d",
+	} {
+		f.Add(seed)
+	}
+
+	// Fixed, so that a failure is about the value and not about when the test
+	// ran. Chosen mid-range rather than at an extreme, because the extremes are
+	// what the durations above reach for.
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+
+	f.Fuzz(func(t *testing.T, value string) {
+		got, err := ParseWhen(value, now)
+		if err != nil {
+			// A refusal is a valid outcome and the common one. Nothing to
+			// compare: this takes less than the stdlib does, on purpose.
+			if !got.IsZero() {
+				t.Fatalf("ParseWhen(%q) refused and still returned %s", value, got)
+			}
+			return
+		}
+
+		// The one round trip that matters. wireTime is what reaches the filter
+		// and therefore what the API is told; if that string does not read back
+		// as the same instant, the caller asked for a window and got another.
+		wire := wireTime(got)
+		back, perr := time.Parse(time.RFC3339Nano, wire)
+		if perr != nil {
+			t.Fatalf("ParseWhen(%q) = %s, which wireTime wrote as %q and the stdlib cannot read: %v",
+				value, got, wire, perr)
+		}
+		if !back.Equal(got) {
+			t.Fatalf("a window changed on the way to the wire:\n  in   %q\n  time %s\n  wire %q\n  back %s",
+				value, got, wire, back)
+		}
+
+		// And the filter clause it lands in is one clause. The time is written
+		// with %q, so a quote or a newline in the formatted form would end the
+		// clause early and the rest would be filter somebody else wrote.
+		clause := messageFilter(ListMessagesRequest{Since: got})
+		if strings.Count(clause, `"`) != 2 {
+			t.Fatalf("the filter clause for %q is not one quoted value: %q", value, clause)
+		}
+		if strings.ContainsAny(clause, "\n\r") {
+			t.Fatalf("the filter clause for %q spans lines: %q", value, clause)
+		}
+	})
+}
