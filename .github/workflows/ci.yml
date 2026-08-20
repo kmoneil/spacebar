@@ -92,12 +92,80 @@ jobs:
       # convenience.
       - name: gocognit
         run: go install github.com/uudashr/gocognit/cmd/gocognit@$(make -s print-GOCOGNIT_VERSION)
-      # -race, and so deliberately not with CGO_ENABLED=0: the race detector
-      # needs cgo. The shipped binary is built without it (see the Makefile),
-      # but a test run that cannot see a data race is worth less than the
-      # symmetry costs.
-      - name: test
-        run: make test
+      # Everything the run needs has to be on disk before the next step, since
+      # after it nothing can be fetched. setup-go sets GOTOOLCHAIN=local, so
+      # the toolchain is already settled; this is the module cache.
+      #
+      # `download all` rather than `download`, and the `go list` after it is not
+      # a belt on a brace. TestNoDependencyShipsANotice shells out to
+      # `go list -m -f '{{.Path}}\t{{.Dir}}' all`, which needs the whole module
+      # graph resolved and every module in it extracted, so it reaches the
+      # network when the cache holds only what the build imports. That is what
+      # the first run of this step found, and it is the kind of thing the step
+      # exists to find: a test nobody thought was talking to anybody.
+      - name: fill the module cache
+        run: |
+          go mod download all
+          go list -m all > /dev/null
+      # The tests run in a network namespace with nothing in it but loopback,
+      # which is the second half of "a test never talks to anybody".
+      #
+      # internal/lint/hosts_test.go reads every URL literal in every test file
+      # and requires a reserved TLD, a loopback address, or an entry saying why
+      # that host is only ever parsed. That catches the realistic accident, a
+      # real URL pasted into a new fixture, and it catches it on the machine
+      # the test was written on. What it cannot see is an address built at run
+      # time, or a request a dependency makes on our behalf: x/oauth2 builds
+      # the token request itself and no literal here names the host it goes to.
+      #
+      # SECURITY.md claimed this step for several milestones before it existed.
+      # It exists now, and the claim names the job it covers rather than "CI",
+      # because the release gate runs `make ci`, which includes `make vuln`,
+      # and govulncheck has to reach vuln.go.dev.
+      #
+      # It is a namespace and not a firewall rule, and that is the whole point
+      # of this step rather than a preference. The first attempt was
+      #
+      #     sudo iptables -A OUTPUT -o lo -j ACCEPT
+      #     sudo iptables -A OUTPUT        -j REJECT
+      #
+      # which blocks the runner agent along with the tests. The agent holds its
+      # own connection to GitHub to stream logs and report step results, so the
+      # job died with "The hosted runner lost communication with the server",
+      # no logs and no step conclusions, after forty-five minutes of looking
+      # like a hang rather than a failure. A namespace contains the process
+      # under test and leaves the agent where it was, which is the distinction
+      # a rule on the OUTPUT chain cannot make.
+      #
+      # `make test` is -race, and so deliberately not CGO_ENABLED=0: the race
+      # detector needs cgo. The shipped binary is built without it, see the
+      # Makefile, but a test run that cannot see a data race is worth less than
+      # the symmetry costs.
+      #
+      # Loopback is brought up because the tests are full of httptest servers.
+      # The proof fetch runs inside the namespace and must fail: a namespace
+      # that still had a route out would leave this job proving nothing, and
+      # reading exactly like one that proved something. The script is built by
+      # the outer shell so that PATH and HOME reach `make test` as the runner
+      # user, which sudo would otherwise reset to root's.
+      - name: test with no network
+        run: |
+          cat > /tmp/no-network.sh <<SH
+          #!/bin/sh
+          set -e
+          ip link set lo up
+          if ! command -v curl > /dev/null; then
+            echo "curl is not installed, so the egress proof cannot run"
+            exit 1
+          fi
+          if curl -sS --max-time 10 https://proxy.golang.org/ > /dev/null 2>&1; then
+            echo "the namespace has a route out, so this job would prove nothing"
+            exit 1
+          fi
+          exec sudo -u runner env "PATH=$PATH" "HOME=$HOME" make test
+          SH
+          chmod +x /tmp/no-network.sh
+          sudo unshare --net /tmp/no-network.sh
 
   licensing:
     name: licence gate
