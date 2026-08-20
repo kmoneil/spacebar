@@ -1049,3 +1049,198 @@ func TestCoverageSaysWhatWasLookedInAndWhatWasNot(t *testing.T) {
 			searched, missing)
 	}
 }
+
+// TestARecordNamingAnotherSpaceIsRefusedRatherThanWritten.
+//
+// belongs already refuses such a record when it is read back, counts it, and
+// says the file has been copied, restored, or edited by hand. That warning is
+// true of a file that arrived from somewhere else and would be a lie about one
+// this tool wrote itself, and the record would be invisible either way: in the
+// file, never answered with, and named by nothing.
+//
+// So the writer refuses it, which is the same argument NewCache makes for
+// checking a profile name three packages of validation have already checked. A
+// first layer that needs the layer below it to be safe is not a first layer.
+func TestARecordNamingAnotherSpaceIsRefusedRatherThanWritten(t *testing.T) {
+	const elsewhere = "spaces/AAAASomewhereElse"
+	foreign := elsewhere + "/messages/AAA"
+
+	root := t.TempDir()
+	index := NewNDJSON(root)
+	ctx := context.Background()
+
+	if err := index.Append(ctx, testSpace, []rows.Message{{Name: foreign, CreateTime: at(1)}}); err == nil {
+		t.Error("Append wrote a message belonging to another space")
+	}
+	if err := index.Update(ctx, testSpace, rows.Message{Name: foreign, CreateTime: at(1)}); err == nil {
+		t.Error("Update wrote a message belonging to another space")
+	}
+	if err := index.Delete(ctx, testSpace, foreign); err == nil {
+		t.Error("Delete wrote a tombstone belonging to another space")
+	}
+
+	// A batch is refused whole. The records are encoded and written by one
+	// locked Write, so a batch that was checked line by line as it went would
+	// leave the good half on disk and report a failure, which is the shape an
+	// interrupted append is specifically designed not to have.
+	if err := index.Append(ctx, testSpace, []rows.Message{
+		{Name: testSpace + "/messages/AAA", CreateTime: at(1)},
+		{Name: foreign, CreateTime: at(5)},
+	}); err == nil {
+		t.Error("Append wrote a batch with a message belonging to another space in it")
+	}
+
+	spaces, err := index.Spaces()
+	if err != nil {
+		t.Fatalf("Spaces: %v", err)
+	}
+	if len(spaces) != 0 {
+		t.Errorf("a refused write left the index holding %v", spaces)
+	}
+	if found := collect(t, index, Query{}); len(found) != 0 {
+		t.Errorf("a refused write is searchable: %+v", found)
+	}
+}
+
+// TestOnlyAppendBringsASpaceIntoTheIndex.
+//
+// The writer-level half of the coverage rule. A space's file is what says the
+// space has been looked at, so a writer that creates one is claiming a sync
+// that never happened: Spaces reads the directory, Coverage compares it against
+// the profile's cached space list, and `search` names what is missing so that a
+// narrow answer is never reported as a whole one.
+//
+// Append may create, because a first message is how a space's file starts and
+// because Visit has already made one by the time a sync appends. Update and
+// Delete may not, because both record a change to a space the index is supposed
+// to hold already, and neither has anything to record when it does not.
+func TestOnlyAppendBringsASpaceIntoTheIndex(t *testing.T) {
+	index := NewNDJSON(t.TempDir())
+	ctx := context.Background()
+	message := testSpace + "/messages/AAA"
+
+	if err := index.Update(ctx, testSpace, rows.Message{Name: message, CreateTime: at(1)}); err != nil {
+		t.Fatalf("Update on a space the index does not hold: %v", err)
+	}
+	if err := index.Delete(ctx, testSpace, message); err != nil {
+		t.Fatalf("Delete on a space the index does not hold: %v", err)
+	}
+
+	spaces, err := index.Spaces()
+	if err != nil {
+		t.Fatalf("Spaces: %v", err)
+	}
+	if len(spaces) != 0 {
+		t.Fatalf("recording a change created %v", spaces)
+	}
+
+	// And once the space is genuinely held, both write.
+	if err := index.Append(ctx, testSpace, []rows.Message{
+		{Name: message, CreateTime: at(1), Text: "the original words"},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := index.Update(ctx, testSpace, rows.Message{
+		Name: message, CreateTime: at(1), LastUpdateTime: at(9), Text: "the replacement words",
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if found := collect(t, index, Query{Text: "replacement"}); len(found) != 1 {
+		t.Errorf("Update did not supersede the record it was given: %+v", found)
+	}
+	if err := index.Delete(ctx, testSpace, message); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if found := collect(t, index, Query{}); len(found) != 0 {
+		t.Errorf("Delete did not suppress the message: %+v", found)
+	}
+}
+
+// TestAVisitedSpaceCanRecordAChangeEvenWithNothingInIt.
+//
+// The boundary between the two rules above, and it is not an edge case: Visit
+// creates an empty file for a space that was synced and had no messages, and a
+// message sent into that space afterwards can be edited or deleted before
+// anybody syncs again. The file is what says the space is held, so an empty one
+// still takes a record.
+func TestAVisitedSpaceCanRecordAChangeEvenWithNothingInIt(t *testing.T) {
+	index := NewNDJSON(t.TempDir())
+	ctx := context.Background()
+
+	if err := index.Visit(testSpace); err != nil {
+		t.Fatalf("Visit: %v", err)
+	}
+	if err := index.Update(ctx, testSpace, rows.Message{
+		Name: testSpace + "/messages/AAA", CreateTime: at(1), Text: "the replacement words",
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if found := collect(t, index, Query{Text: "replacement"}); len(found) != 1 {
+		t.Errorf("a visited space did not take the record: %+v", found)
+	}
+}
+
+// FuzzAWrittenRecordIsNeverForeignToItsOwnFile closes the loop between the
+// writer and the reader.
+//
+// belongs decides what a record is worth when it is read back, and refuses one
+// whose space field or whose message name disagrees with the file it is in.
+// FuzzARecordOnlyAnswersForItsOwnSpace states that from the reading side, over
+// any line at all. This is the other half: whatever this index accepts, it can
+// answer with.
+//
+// The two halves matter separately because a writer that produces a record its
+// own reader rejects loses it silently. The line is in the file, it is never
+// answered with, the count of what is held does not include it, and the warning
+// somebody eventually sees says the file has been copied or edited by hand,
+// which would be untrue of a file this tool wrote itself.
+//
+// So the property is a disjunction, and either side is a pass: the write is
+// refused, or the record comes back. What would fail it is a write that
+// succeeded and a search that cannot find what it wrote.
+func FuzzAWrittenRecordIsNeverForeignToItsOwnFile(f *testing.F) {
+	for _, seed := range []struct{ space, message string }{
+		{testSpace, testSpace + "/messages/AAA"},
+		{testSpace, "spaces/AAAAOtherSpace/messages/AAA"},
+		{testSpace, testSpace + "/messages/"},
+		{testSpace, testSpace},
+		{testSpace, "nonsense"},
+		{testSpace, ""},
+		{"", testSpace + "/messages/AAA"},
+		{"spaces/../../etc", "spaces/../../etc/messages/AAA"},
+		{"spaces/AAA", "spaces/AAA/messages/../BBB"},
+		{"spaces/AAA%2F", "spaces/AAA%2F/messages/AAA"},
+	} {
+		f.Add(seed.space, seed.message)
+	}
+
+	f.Fuzz(func(t *testing.T, space, message string) {
+		index := NewNDJSON(t.TempDir())
+		ctx := context.Background()
+
+		if err := index.Append(ctx, space, []rows.Message{
+			{Name: message, CreateTime: at(1), Text: "deploy done"},
+		}); err != nil {
+			return
+		}
+
+		found := collect(t, index, Query{Space: space, Text: "deploy done"})
+		if len(found) != 1 {
+			t.Fatalf("Append(%q, %q) was accepted and %d records came back, want 1",
+				space, message, len(found))
+		}
+		if warnings := index.Warnings(); len(warnings) != 0 {
+			t.Fatalf("a record this index wrote was read back as belonging elsewhere: %v", warnings)
+		}
+
+		// And the tombstone for it lands in the same file and suppresses it,
+		// which is the same property for the writer that has no message to
+		// carry a name for it.
+		if err := index.Delete(ctx, space, message); err != nil {
+			t.Fatalf("Delete(%q, %q) refused a message Append accepted: %v", space, message, err)
+		}
+		if found := collect(t, index, Query{Space: space, Text: "deploy done"}); len(found) != 0 {
+			t.Fatalf("the tombstone did not suppress the record: %+v", found)
+		}
+	})
+}

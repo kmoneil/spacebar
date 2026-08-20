@@ -22,6 +22,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/rows"
+	"github.com/kmoneil/spacebar/internal/store"
 	"github.com/kmoneil/spacebar/internal/transport"
 )
 
@@ -199,7 +200,12 @@ Editing is limited to messages this account sent, measured rather than assumed:
 editing your own answers 200 and editing somebody else's answers 403, in the
 same space, on the same token, a second apart. The refusal comes from the API
 rather than from this tool, because whose message it is is not something this
-tool can know without asking.`,
+tool can know without asking.
+
+If this space is in your local index, the new text is recorded there too, so
+` + meta.AppName + ` search stops answering with the words you replaced. Nothing else
+would ever correct it: sync walks createTime and an edit does not change it, so
+a message already in the index is never read again.`,
 
 		Args: exactlyTwo("messages edit needs a message and the new text.\n" +
 			"  %s messages edit spaces/AAAAAAA/messages/BBBBBBB 'the new text'"),
@@ -220,10 +226,21 @@ tool can know without asking.`,
 				return err
 			}
 
-			edited, err := opened.Transport.EditMessage(cmd.Context(), chat.EditRequest{
-				Message: args[0],
-				Text:    text,
-			})
+			// Through internal/store rather than straight at the transport,
+			// so that the local copy is corrected in the same breath. The
+			// index is a snapshot of what sync fetched and sync walks
+			// createTime, which an edit does not change, so nothing else in
+			// this tool would ever re-read this message.
+			index, err := openIndex()
+			if err != nil {
+				return err
+			}
+
+			// A second set, and not the markup ones above: these say the
+			// message changed in the space and the local copy did not.
+			edited, unrecorded, err := store.EditMessage(cmd.Context(), index, opened.Transport,
+				chat.EditRequest{Message: args[0], Text: text})
+			r.Warnings(unrecorded)
 			if err != nil {
 				return finish(r, opened, err)
 			}
@@ -259,7 +276,13 @@ prompting. --yes answers in advance, which is what a script does.
 Deleting is not limited to your own messages the way editing is. This account
 deleted a message sent by somebody else, in a space where it is a manager, and
 the API allowed it. So read the name twice before you type this: what stops a
-mistake here is the confirmation and nothing else.`,
+mistake here is the confirmation and nothing else.
+
+If this space is in your local index, the deletion is recorded there too, so
+` + meta.AppName + ` search stops answering with a message that is no longer in the space.
+The copy of the text stays in the file and is never answered with, because
+the index is append-only and rewriting it is how a crash would cost the only
+copy of a message the API will not serve again.`,
 
 		Args: exactlyOne("messages delete needs a message.\n" +
 			"  %s messages delete spaces/AAAAAAA/messages/BBBBBBB"),
@@ -274,6 +297,16 @@ mistake here is the confirmation and nothing else.`,
 				return err
 			}
 
+			// Opened before the question is asked, for the reason the
+			// capability check comes before it: a command that cannot finish
+			// should say so rather than ask about something it is not going to
+			// do. It fails only when there is no data directory to be had,
+			// which is a machine where sync and search do not work either.
+			index, err := openIndex()
+			if err != nil {
+				return err
+			}
+
 			// After the capability check and before the request. "This profile
 			// cannot delete" is a better first answer than a question about
 			// something that was never going to happen.
@@ -281,7 +314,12 @@ mistake here is the confirmation and nothing else.`,
 				return err
 			}
 
-			if err := opened.Transport.DeleteMessage(cmd.Context(), args[0]); err != nil {
+			// Through internal/store, which writes the tombstone once the API
+			// has said the message is gone. A search that still answered with
+			// it would be answering with words nobody can find in the space.
+			warnings, err := store.DeleteMessage(cmd.Context(), index, opened.Transport, args[0])
+			r.Warnings(warnings)
+			if err != nil {
 				return finish(r, opened, err)
 			}
 
