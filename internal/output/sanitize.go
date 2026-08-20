@@ -86,7 +86,7 @@ func escape(s string, strict bool) string {
 		// that looks like a right one.
 		if r == utf8.RuneError && size == 1 {
 			grow(&b, s, i)
-			_, _ = fmt.Fprintf(&b, `\x%02x`, s[i])
+			writeHexByte(&b, s[i])
 			i += size
 			continue
 		}
@@ -197,4 +197,26 @@ func grow(b *strings.Builder, s string, upTo int) {
 		b.Grow(len(s) + 8)
 		b.WriteString(s[:upTo])
 	}
+}
+
+// writeHexByte writes c as \xNN, and exists so that escape's Builder can stay
+// on the stack.
+//
+// It was fmt.Fprintf(&b, `\x%02x`, c) until 2026-08-20, which converts &b to
+// an io.Writer, and a Builder that reaches an interface escapes to the heap.
+// That is 32 bytes and one allocation on every call to escape, including the
+// calls that escape nothing, on the path of every cell this tool prints. The
+// branch it sits in runs only for a byte that is not valid UTF-8, so the cost
+// was paid by all the callers who never reached it, and grow's comment said
+// the common case never allocates while it always did.
+//
+// strings.Builder's own methods are written to keep the receiver on the stack,
+// so WriteString and WriteByte do not have this effect. BenchmarkEscape is
+// what shows the difference, and `go build -gcflags=-m` names the cause.
+func writeHexByte(b *strings.Builder, c byte) {
+	const hexDigits = "0123456789abcdef"
+
+	b.WriteString(`\x`)
+	b.WriteByte(hexDigits[c>>4])
+	b.WriteByte(hexDigits[c&0x0f])
 }
