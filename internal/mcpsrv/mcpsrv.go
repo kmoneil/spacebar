@@ -34,6 +34,7 @@ import (
 	"encoding/json"
 	"io"
 	"iter"
+	"slices"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -155,10 +156,35 @@ func New(opts Options) (*Server, error) {
 		register(s, caps, transport.CanReact, reactToMessageTool, s.reactToMessage)
 	}
 
+	// The sync tool, behind --allow-write as well as behind CanRead. Two gates,
+	// and the flag is the one that stretches: it says "writes", and this writes
+	// nothing to a space. What it means is that a model may cause a side effect
+	// the operator would care about, and copying somebody's messages onto a disk
+	// in plain text while spending a shared per-space quota is one. See
+	// syncSpaceTool for the argument that was had about building it at all.
+	//
+	// An index is required for the obvious reason: there is nowhere to put the
+	// messages otherwise.
+	if opts.AllowWrite && s.index != nil {
+		register(s, caps, transport.CanRead, syncSpaceTool, s.syncSpace)
+	}
+
 	// The index tool, gated on there being an index rather than on a
 	// capability. It needs no transport at all: a webhook profile can search
 	// what a user-authorized one copied down, because the answer is on disk.
-	if s.indexed() {
+	//
+	// Or on this session being able to fill one, which is the half sync_space
+	// added. The gate's reason was that an empty index answers every search with
+	// nothing, and a model reads that as "nobody said that" rather than as
+	// "nobody has synced anything". That reason held while the emptiness was
+	// permanent for the length of a session and while the answer could not say
+	// which it was. Neither is true now: search_messages reports searched,
+	// unsearched and coverage_known, so an empty index answers "I looked in
+	// nothing, here is what nobody has synced", and sync_space is how the model
+	// acts on it. Registering search only after a sync would need the client to
+	// have subscribed to tools/list_changed, which the SDK makes optional, so a
+	// client that had not would never learn the tool existed.
+	if s.indexed() || slices.Contains(s.tools, syncSpaceTool.Name) {
 		mcp.AddTool(s.srv, searchMessagesTool, s.searchMessages)
 		s.tools = append(s.tools, searchMessagesTool.Name)
 	}

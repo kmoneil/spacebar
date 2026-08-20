@@ -753,10 +753,11 @@ command with the profile as an argument.
 ```
 
 Five read tools: `list_spaces`, `get_space`, `list_members`, `list_messages`,
-`get_message`. Two write tools, `send_message` and `react_to_message`, off
-unless you ask for them. And `search_messages`, which appears only when this
-machine has a local index. They return the same shapes `--json` does, because
-both come from one place.
+`get_message`. Three behind `--allow-write`: `send_message`,
+`react_to_message`, and `sync_space`, which posts nothing but copies a space
+onto your disk and spends its shared quota. And `search_messages`, which
+appears when this machine has a local index or when `sync_space` can fill one.
+They return the same shapes `--json` does, because both come from one place.
 
 A model is never shown a tool this profile cannot serve, writes are off until
 `--allow-write` says otherwise, `--allow-space` narrows where they may land, and

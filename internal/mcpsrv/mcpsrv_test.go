@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -61,6 +63,11 @@ type fake struct {
 	// same error as one before it.
 	sends     int
 	reactions int
+
+	// messageRequests is every Messages query, in order. A sync makes two per
+	// space, and both which space and how many were asked for are claims a test
+	// has to settle by looking at the request rather than at the answer.
+	messageRequests []chat.ListMessagesRequest
 
 	// spacesLimit is the Limit the last Spaces request carried.
 	//
@@ -132,8 +139,53 @@ func (f *fake) Members(_ context.Context, req chat.ListMembersRequest) iter.Seq2
 	return yield(kept, f.fail)
 }
 
-func (f *fake) Messages(context.Context, chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
-	return yield(f.messages, f.fail)
+// Messages honours the query, which a sync needs it to.
+//
+// The canned list was enough while the only caller was list_messages, which
+// asks once. store.Sync asks twice, forwards from the newest message held and
+// backwards from the oldest, and a fake that answered both with everything
+// would make the walk look like it was copying twice as much as it was. Since
+// and Until are exclusive, matching what messageFilter builds, and Limit
+// truncates, which is what an assertion about a bounded call rests on.
+//
+// The space is recorded because that is how an allowlist claim is settled:
+// counting what reached the transport rather than reading the error, since a
+// refusal after the request carries the same error as one before it.
+func (f *fake) Messages(_ context.Context, req chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
+	f.messageRequests = append(f.messageRequests, req)
+
+	kept := make([]chat.Message, 0, len(f.messages))
+	for _, m := range f.messages {
+		at, err := time.Parse(time.RFC3339Nano, m.CreateTime)
+		if err != nil {
+			continue
+		}
+		if !req.Since.IsZero() && !at.After(req.Since) {
+			continue
+		}
+		if !req.Until.IsZero() && !at.Before(req.Until) {
+			continue
+		}
+		kept = append(kept, m)
+	}
+	if req.OrderBy != chat.OrderOldestFirst {
+		slices.Reverse(kept)
+	}
+	if req.Limit > 0 && req.Limit < len(kept) {
+		kept = kept[:req.Limit]
+	}
+	return yield(kept, f.fail)
+}
+
+// syncedSpaces is the spaces a sync actually asked about, deduplicated.
+func (f *fake) syncedSpaces() []string {
+	var seen []string
+	for _, req := range f.messageRequests {
+		if !slices.Contains(seen, req.Space) {
+			seen = append(seen, req.Space)
+		}
+	}
+	return seen
 }
 
 func (f *fake) GetMessage(_ context.Context, name string) (*chat.Message, error) {
@@ -706,12 +758,31 @@ func TestAWebhookWithAllowWriteRegistersExactlyOneTool(t *testing.T) {
 // nothing while this test's name promised every write tool, and the next write
 // tool added behind the flag would have been skipped the same way.
 func TestEveryWriteToolSaysToConfirmFirst(t *testing.T) {
-	closed := connect(t, &fake{kind: config.TransportUserOAuth, caps: full()})
+	// The write set is the difference the flag makes, so the two servers have to
+	// be identical in every other way. Both carry an index, and both halves of
+	// that matter.
+	//
+	// Without one on the open server, a write tool gated on something besides
+	// the flag is invisible: sync_space needs an index, so a set computed from a
+	// server with none skipped it silently, which is the hole this test's own
+	// history is about.
+	//
+	// Without one on the closed server, search_messages is absent there and
+	// present here, so a read tool lands in the write set and is asked for a
+	// confirmation sentence it should not have. Whichever way they differ, the
+	// difference stops being the flag.
+	const space = "spaces/AAAATestSpace"
+
+	closed := connectWith(t, Options{
+		Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		Index:   indexWith(t, space),
+	})
 	reads := advertised(t, closed)
 
 	session := connectWith(t, Options{
 		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
 		AllowWrite: true,
+		Index:      indexWith(t, space),
 	})
 
 	result, err := session.ListTools(context.Background(), nil)
@@ -719,26 +790,57 @@ func TestEveryWriteToolSaysToConfirmFirst(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 
-	// Spelled out here rather than compared against the constant, which is what
-	// the first version of this test did and which asserted nothing: rewording
-	// the constant moved both sides of the comparison together, and a planted
-	// reword passed. SPEC.md §14.2 specifies these words, so these words are in
-	// the test.
-	const want = "This posts a visible message to a real Google Chat space. " +
-		"Confirm with the user before calling."
+	// Spelled out here rather than compared against the constants, which is what
+	// the first version of this test did and which asserted nothing: rewording a
+	// constant moved both sides of the comparison together, and a planted reword
+	// passed. SPEC.md §14.2 specifies the first of these words, so those words
+	// are in the test.
+	//
+	// Two sentences, not one, and the count is asserted below. A tool that acts
+	// in a space gets §14.2's sentence; sync_space changes this machine and
+	// posts nothing, so ending it with "This posts a visible message to a real
+	// Google Chat space" would be a false sentence written for a reader who
+	// cannot check it. The last five words are the same five words, because it
+	// is the same promise about a different side effect.
+	sentences := map[string]string{
+		"a space": "This posts a visible message to a real Google Chat space. " +
+			"Confirm with the user before calling.",
+		"this machine": "This copies message bodies onto this machine's disk in plain text and " +
+			"spends the space's shared API quota. Confirm with the user before calling.",
+	}
 
+	used := map[string]int{}
 	writes := 0
 	for _, tool := range result.Tools {
 		if slices.Contains(reads, tool.Name) {
 			continue
 		}
 		writes++
-		if !strings.HasSuffix(tool.Description, want) {
-			t.Errorf("%s does not end with the confirmation sentence:\n%s", tool.Name, tool.Description)
+
+		matched := ""
+		for what, sentence := range sentences {
+			if strings.HasSuffix(tool.Description, sentence) {
+				matched = what
+			}
 		}
+		if matched == "" {
+			t.Errorf("%s ends with neither confirmation sentence:\n%s", tool.Name, tool.Description)
+			continue
+		}
+		used[matched]++
 	}
 	if writes == 0 {
 		t.Fatal("no write tool was registered, so this asserted nothing")
+	}
+
+	// A sentence nobody uses fails the build rather than sitting there inviting
+	// a third. That is what stops two becoming six, which is the risk the
+	// constant's own comment names.
+	for what := range sentences {
+		if used[what] == 0 {
+			t.Errorf("no write tool ends with the sentence for %s, so it is a promise nobody makes.\n"+
+				"Delete it, or the set grows a wording at a time.", what)
+		}
 	}
 }
 
@@ -1235,7 +1337,14 @@ func indexWith(t *testing.T, spaces ...string) *store.NDJSON {
 func TestEveryToolThatNamesASpaceIsHeldToTheAllowlist(t *testing.T) {
 	const outside = "spaces/BBB"
 
-	for _, tc := range []struct {
+	// Filters rather than refuses, with the reason, because a model asking what
+	// it can reach is answered with what it can reach. Each has its own test.
+	filters := map[string]string{
+		"list_spaces": "answers with the allowed spaces rather than refusing, held by " +
+			"TestListingSpacesUnderAnAllowlistShowsOnlyThose",
+	}
+
+	refuses := []struct {
 		tool string
 		args map[string]any
 	}{
@@ -1244,7 +1353,37 @@ func TestEveryToolThatNamesASpaceIsHeldToTheAllowlist(t *testing.T) {
 		{"list_messages", map[string]any{"space": outside}},
 		{"get_message", map[string]any{"message": outside + "/messages/CCC"}},
 		{"search_messages", map[string]any{"query": "deploy", "space": outside}},
-	} {
+		{"send_message", map[string]any{"space": outside, "text": "deploy done"}},
+		{"react_to_message", map[string]any{"message": outside + "/messages/CCC", "emoji": "\U0001F44D"}},
+		{"sync_space", map[string]any{"space": outside}},
+	}
+
+	// The table was hand-written and a tool added later escaped it, which is the
+	// same hole the send_ name prefix left in the confirmation gate: the list
+	// promised every tool and checked the ones somebody remembered. So the
+	// registered set is read off a maximal server and every tool in it has to be
+	// in one column or the other.
+	covered := map[string]bool{}
+	for _, tc := range refuses {
+		covered[tc.tool] = true
+	}
+	for tool := range filters {
+		covered[tool] = true
+	}
+	for _, tool := range advertised(t, connectWith(t, Options{
+		Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+		AllowWrite: true,
+		Index:      indexWith(t, "spaces/AAAATestSpace"),
+	})) {
+		if !covered[tool] {
+			t.Errorf("%s is registered and this gate does not exercise it.\n"+
+				"Decide which it is. A tool that names a space is refused outside the allowlist and "+
+				"belongs in refuses; one that answers with what is allowed belongs in filters with "+
+				"the reason. A tool in neither is one an operator believes is confined and is not.", tool)
+		}
+	}
+
+	for _, tc := range refuses {
 		t.Run(tc.tool, func(t *testing.T) {
 			reached := &fake{kind: config.TransportUserOAuth, caps: full()}
 			session := connectWith(t, Options{
@@ -1660,6 +1799,214 @@ func TestASearchOverMCPNamesTheSpacesNobodySynced(t *testing.T) {
 		}
 		if want := []string{never}; !slices.Equal(out.Unsearched, want) {
 			t.Errorf("unsearched = %v, want %v", out.Unsearched, want)
+		}
+	})
+}
+
+// syncable is a server that can sync, with an index that starts empty.
+//
+// Empty on purpose: the whole argument for building sync_space is that a
+// session which starts with nothing should be able to fix that itself rather
+// than telling a person to go and run a command.
+func syncable(t *testing.T, messages []chat.Message, allow ...string) (*mcp.ClientSession, *fake, *store.NDJSON) {
+	t.Helper()
+
+	transport := &fake{kind: config.TransportUserOAuth, caps: full(), messages: messages}
+	index := store.NewNDJSON(t.TempDir())
+	session := connectWith(t, Options{
+		Profile:     &profile.Open{Name: "work", Transport: transport},
+		AllowWrite:  true,
+		AllowSpaces: allow,
+		Index:       index,
+	})
+	return session, transport, index
+}
+
+// syncFixture is a handful of messages in one space, oldest first.
+func syncFixture(space string, count int) []chat.Message {
+	out := make([]chat.Message, 0, count)
+	for i := range count {
+		out = append(out, chat.Message{
+			Name:       fmt.Sprintf("%s/messages/%03d", space, i),
+			CreateTime: time.Date(2026, 8, 17, 9, i, 0, 0, time.UTC).Format(time.RFC3339Nano),
+			Text:       fmt.Sprintf("deploy number %d", i),
+		})
+	}
+	return out
+}
+
+// TestSearchBecomesReachableInASessionThatStartedWithAnEmptyIndex.
+//
+// The whole point of sync_space, and the claim feat-07 said was worth an
+// end-to-end test rather than an assertion about registration.
+//
+// A model that can search and cannot sync gives a confidently wrong answer the
+// first time it is asked about a space nobody synced, and it cannot fix that:
+// it has to ask a person to run a command it cannot see. So the sequence a real
+// session would follow is the test: search an empty index, read that nothing
+// was searched, sync, search again.
+//
+// The first search is the half that used to be unreachable, because
+// search_messages was registered only when the index already held something. It
+// is registered alongside sync_space now, and the honest answer it gives is what
+// makes that safe: an empty searched, an unsearched naming what nobody has
+// copied, and a coverage_known saying whether that list means anything.
+func TestSearchBecomesReachableInASessionThatStartedWithAnEmptyIndex(t *testing.T) {
+	const space = "spaces/AAAATestSpace"
+
+	session, _, _ := syncable(t, syncFixture(space, 3))
+
+	tools := advertised(t, session)
+	for _, want := range []string{"sync_space", "search_messages"} {
+		if !slices.Contains(tools, want) {
+			t.Fatalf("%s is not advertised, so a session starting empty cannot fill and then "+
+				"search its own index: %v", want, tools)
+		}
+	}
+
+	var before searchMessagesOut
+	callTool(t, session, "search_messages", map[string]any{"query": "deploy"}, &before)
+	if len(before.Messages) != 0 || len(before.Searched) != 0 {
+		t.Fatalf("an empty index answered with %+v", before)
+	}
+
+	var synced store.Result
+	callTool(t, session, "sync_space", map[string]any{"space": space}, &synced)
+	if synced.Fetched != 3 || synced.Held != 3 {
+		t.Fatalf("sync fetched %d and holds %d, want 3 and 3", synced.Fetched, synced.Held)
+	}
+
+	var after searchMessagesOut
+	callTool(t, session, "search_messages", map[string]any{"query": "deploy"}, &after)
+	if len(after.Messages) != 3 {
+		t.Errorf("after syncing, a search found %d of 3 messages", len(after.Messages))
+	}
+	if want := []string{space}; !slices.Equal(after.Searched, want) {
+		t.Errorf("searched = %v, want %v", after.Searched, want)
+	}
+}
+
+// TestAnOmittedSyncLimitIsStillBounded.
+//
+// The CLI's --limit 0 means every message in the space, which is a decision
+// somebody typed. An omitted tool argument is not a decision, and must never
+// mean an unbounded walk over a quota shared with every other app acting in
+// that space.
+//
+// Asserted on the request rather than on the answer, because the answer looks
+// the same either way when the fixture is smaller than the default: what is
+// being claimed is what was asked for.
+func TestAnOmittedSyncLimitIsStillBounded(t *testing.T) {
+	const space = "spaces/AAAATestSpace"
+
+	session, transport, _ := syncable(t, syncFixture(space, 3))
+
+	var out store.Result
+	callTool(t, session, "sync_space", map[string]any{"space": space}, &out)
+
+	if len(transport.messageRequests) == 0 {
+		t.Fatal("no request was made, so this asserted nothing")
+	}
+	for i, req := range transport.messageRequests {
+		if req.Limit <= 0 {
+			t.Errorf("request %d carried Limit %d, which is every message in the space", i, req.Limit)
+		}
+		if req.Limit > maxSyncLimit {
+			t.Errorf("request %d carried Limit %d, over the %d ceiling", i, req.Limit, maxSyncLimit)
+		}
+	}
+}
+
+// TestASyncLimitBeyondTheCeilingIsRefusedRatherThanClamped.
+//
+// The house rule: a value is never silently altered to make it acceptable.
+// Somebody who asked for fifty thousand and quietly got five thousand has a
+// wrong idea of what one call does and no way to find out.
+func TestASyncLimitBeyondTheCeilingIsRefusedRatherThanClamped(t *testing.T) {
+	const space = "spaces/AAAATestSpace"
+
+	session, transport, _ := syncable(t, syncFixture(space, 3))
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "sync_space",
+		Arguments: map[string]any{"space": space, "limit": maxSyncLimit + 1},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("a limit over the ceiling was accepted")
+	}
+	if len(transport.messageRequests) != 0 {
+		t.Errorf("%d requests were made by a refused call", len(transport.messageRequests))
+	}
+}
+
+// TestASyncOutsideTheAllowlistReachesNoSpace.
+//
+// Counted rather than read off the error, which is the house pattern for a
+// refusal: one that arrives after the request carries the same error as one
+// that arrives before it, and only the count tells them apart.
+func TestASyncOutsideTheAllowlistReachesNoSpace(t *testing.T) {
+	const allowed = "spaces/AAAAAllowed"
+	const outside = "spaces/AAAAOutside"
+
+	messages := append(syncFixture(allowed, 2), syncFixture(outside, 2)...)
+	session, transport, _ := syncable(t, messages, allowed)
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "sync_space",
+		Arguments: map[string]any{"space": outside},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatal("a space outside the allowlist was synced")
+	}
+	if got := transport.syncedSpaces(); len(got) != 0 {
+		t.Errorf("a refused sync reached %v", got)
+	}
+
+	// And the allowed one still works, so this is a gate rather than a break.
+	var out store.Result
+	callTool(t, session, "sync_space", map[string]any{"space": allowed}, &out)
+	if want := []string{allowed}; !slices.Equal(transport.syncedSpaces(), want) {
+		t.Errorf("the sync reached %v, want %v", transport.syncedSpaces(), want)
+	}
+}
+
+// TestTheSyncToolNeedsBothTheFlagAndAnIndex.
+//
+// Two gates, and each is asserted on its own. --allow-write is the operator
+// agreeing that a model may cause a side effect they would care about, which
+// here is somebody's messages landing on a disk in plain text and a shared
+// per-space quota being spent. An index is where the messages go.
+//
+// The second half also holds the search co-registration: with no index there is
+// no sync tool, so search_messages goes back to being gated on the index alone.
+func TestTheSyncToolNeedsBothTheFlagAndAnIndex(t *testing.T) {
+	t.Run("no flag", func(t *testing.T) {
+		session := connectWith(t, Options{
+			Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			Index:   store.NewNDJSON(t.TempDir()),
+		})
+		if tools := advertised(t, session); slices.Contains(tools, "sync_space") {
+			t.Errorf("sync_space is advertised without --allow-write: %v", tools)
+		}
+	})
+
+	t.Run("no index", func(t *testing.T) {
+		session := connectWith(t, Options{
+			Profile:    &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			AllowWrite: true,
+		})
+		tools := advertised(t, session)
+		if slices.Contains(tools, "sync_space") {
+			t.Errorf("sync_space is advertised with nowhere to put anything: %v", tools)
+		}
+		if slices.Contains(tools, "search_messages") {
+			t.Errorf("search_messages is advertised over an index that cannot be filled: %v", tools)
 		}
 	})
 }

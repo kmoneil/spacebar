@@ -70,6 +70,7 @@ var servedByMCP = map[string]string{
 	"spacebar send":           "send_message",
 	"spacebar react":          "react_to_message",
 	"spacebar search":         "search_messages",
+	"spacebar sync":           "sync_space",
 }
 
 // cliOnly is a command that deliberately has no tool, and why.
@@ -173,17 +174,6 @@ var owedTools = map[string]owed{
 		capability: "CanRead",
 		why: "writes a file to this machine, so it needs a decision about where a tool may write " +
 			"before it needs code; the CLI answers that with --out and a model has no cwd to mean",
-	},
-	"spacebar sync": {
-		tool:       "sync_space",
-		capability: "CanRead",
-		why: "no longer blocked on anything structural: the walk is store.Sync and either adapter " +
-			"can call it. What is left is a decision rather than an absence, and it is the one " +
-			"tool in this table with a real argument against building it. A sync spends per-space " +
-			"quota in a loop for as long as the space is long, on a quota shared with every other " +
-			"app acting in that space, and it writes plaintext message bodies to disk. Handing " +
-			"that to something that chooses on its own when to call it is a different risk from " +
-			"handing it to somebody typing a command",
 	},
 }
 
