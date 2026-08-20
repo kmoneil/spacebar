@@ -25,33 +25,11 @@
 package store
 
 import (
-	"context"
-	"iter"
 	"strings"
 	"time"
 
 	"github.com/kmoneil/spacebar/internal/rows"
 )
-
-// Index is the storage contract (SPEC.md §12.1).
-//
-// One interface with two implementations planned: NDJSON now, and SQLite with
-// FTS5 later if search quality ever demands it, which is a decision m6-03 is
-// meant to take with numbers rather than a task to be done because it was
-// written down. Callers see neither.
-type Index interface {
-	// Append records messages for one space. It is safe to call from more than
-	// one process at a time.
-	Append(ctx context.Context, space string, msgs []rows.Message) error
-
-	// Search yields every message matching q, newest first.
-	Search(ctx context.Context, q Query) iter.Seq2[rows.Message, error]
-
-	// LastSeen is the create time and resource name of the newest message
-	// recorded for a space, which is where a sync resumes from. Both are zero
-	// when nothing has been recorded.
-	LastSeen(ctx context.Context, space string) (time.Time, string, error)
-}
 
 // Query is what to look for.
 type Query struct {

@@ -228,23 +228,6 @@ func (s *NDJSON) write(ctx context.Context, space string, records []record) erro
 	return nil
 }
 
-// LastSeen is where a sync resumes from.
-func (s *NDJSON) LastSeen(ctx context.Context, space string) (time.Time, string, error) {
-	var newest time.Time
-	var name string
-
-	for m, err := range s.Search(ctx, Query{Space: space}) {
-		if err != nil {
-			return time.Time{}, "", err
-		}
-		at, ok := parseTime(m.CreateTime)
-		if ok && at.After(newest) {
-			newest, name = at, m.Name
-		}
-	}
-	return newest, name, nil
-}
-
 // Bounds is the window a space's index covers, and how many messages are in it.
 //
 // This is what makes `sync` resumable without a cursor file of its own. The

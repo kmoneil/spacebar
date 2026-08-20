@@ -177,8 +177,13 @@ var owedTools = map[string]owed{
 	"spacebar sync": {
 		tool:       "sync_space",
 		capability: "CanRead",
-		why: "blocked on the walk itself: syncOne and fetchInto live in internal/cli, so there is no " +
-			"package a tool could call. Moving them down is the change this one waits on",
+		why: "no longer blocked on anything structural: the walk is store.Sync and either adapter " +
+			"can call it. What is left is a decision rather than an absence, and it is the one " +
+			"tool in this table with a real argument against building it. A sync spends per-space " +
+			"quota in a loop for as long as the space is long, on a quota shared with every other " +
+			"app acting in that space, and it writes plaintext message bodies to disk. Handing " +
+			"that to something that chooses on its own when to call it is a different risk from " +
+			"handing it to somebody typing a command",
 	},
 }
 
