@@ -111,24 +111,6 @@ func openProfile(opts *Options, r *output.Renderer) (*profile.Open, error) {
 	return opened, nil
 }
 
-// stream writes an iterator's items to stdout, one at a time, and stops at the
-// first failure.
-//
-// This is where the streaming promise in SPEC.md §11.2 is actually kept: an item
-// is written as it arrives, so a caller piping --json into jq sees the first
-// object before the last page has been fetched.
-//
-// It carries the one honest cost of streaming, and it is worth stating rather
-// than discovering. A failure on page four arrives after three pages have
-// already been written, and those lines cannot be recalled. What holds the
-// contract together instead is that the exit code is non-zero, the failure is on
-// stderr, and every line already written is a complete object rather than half
-// of one. A caller that checks the exit code is never misled; a caller that
-// ignores it was going to be misled by any incomplete answer.
-//
-// The alternative is to buffer every page before writing anything, which trades
-// the streaming property for the appearance of atomicity and would make `tail`
-// impossible in Milestone 4.
 // finish turns a read's failure into a dry-run report when that is what it is.
 //
 // --dry-run stops every request in the client, on the line before the send, so
@@ -157,7 +139,26 @@ func finish(r *output.Renderer, opened *profile.Open, err error) error {
 	return r.Block(dry.Request, dry.Request.Text())
 }
 
-// stream is generic over the row shape as well as the item, so a projection in
+// stream writes an iterator's items to stdout, one at a time, and stops at the
+// first failure.
+//
+// This is where the streaming promise in SPEC.md §11.2 is actually kept: an item
+// is written as it arrives, so a caller piping --json into jq sees the first
+// object before the last page has been fetched.
+//
+// It carries the one honest cost of streaming, and it is worth stating rather
+// than discovering. A failure on page four arrives after three pages have
+// already been written, and those lines cannot be recalled. What holds the
+// contract together instead is that the exit code is non-zero, the failure is on
+// stderr, and every line already written is a complete object rather than half
+// of one. A caller that checks the exit code is never misled; a caller that
+// ignores it was going to be misled by any incomplete answer.
+//
+// The alternative is to buffer every page before writing anything, which trades
+// the streaming property for the appearance of atomicity and would make `tail`
+// impossible in Milestone 4.
+//
+// It is generic over the row shape as well as the item, so a projection in
 // internal/rows can be passed by name rather than wrapped in a closure at every
 // call site. The renderer takes an any for the structured half, and one that
 // arrives as a concrete type is exactly as encodable.

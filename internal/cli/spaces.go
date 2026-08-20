@@ -248,13 +248,26 @@ reason there is none for a person.`,
 				HiddenGroups: &hidden,
 				Limit:        limit,
 			}), rows.ForMember))
-			if err != nil {
-				return err
-			}
+
+			// Before the error is returned rather than after it, which is the
+			// ordering search.go already uses and says why:
+			//
+			//	a warning is printed whether or not the search then failed: a
+			//	record the index holds and will not answer with is worth saying
+			//	either way
+			//
+			// The same reasoning fits here and this did the opposite. A walk
+			// that fails on page four has already written rows, and some of
+			// those pages may have had group rows filtered out beside them, so
+			// the reader was told about the failure and not about the
+			// filtering. Nothing was reported as complete, because the exit is
+			// non-zero either way; what was inconsistent is which of the two
+			// say-what-was-left-out paths speaks on the error path, and a
+			// reader learning the pattern from one would write the other wrong.
 			if hidden > 0 {
 				r.Warn("%s", hiddenGroupsNote(hidden))
 			}
-			return nil
+			return err
 		},
 	}
 

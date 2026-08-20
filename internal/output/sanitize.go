@@ -213,6 +213,15 @@ func grow(b *strings.Builder, s string, upTo int) {
 // strings.Builder's own methods are written to keep the receiver on the stack,
 // so WriteString and WriteByte do not have this effect. BenchmarkEscape is
 // what shows the difference, and `go build -gcflags=-m` names the cause.
+//
+// escapeRune still returns a fmt.Sprintf'd string in its four remaining
+// branches, and that is a decision rather than an oversight. Those branches run
+// only for a rune that is actually being escaped, so the cost is one allocation
+// per escaped rune on text that is trying something, where this one was paid by
+// every caller that escaped nothing. The numbers and the reasoning are in
+// BenchmarkEscape's own comment, and they are named here because a reader who
+// finds this function will otherwise reasonably conclude the file is
+// inconsistent and go looking for the argument.
 func writeHexByte(b *strings.Builder, c byte) {
 	const hexDigits = "0123456789abcdef"
 
