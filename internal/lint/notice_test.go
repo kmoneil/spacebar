@@ -15,6 +15,7 @@
 package lint
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"regexp"
@@ -119,7 +120,16 @@ func TestNoDependencyShipsANotice(t *testing.T) {
 	cmd.Dir = repoRoot(t)
 	out, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("go list -m all: %v", err)
+		// Stderr, because without it this reads as "exit status 1" and says
+		// nothing about why. The first CI run that removed the network from
+		// this job failed here and reported exactly that, and the reason it
+		// failed, an unresolvable module graph, was in the stderr that was
+		// being thrown away.
+		stderr := []byte(nil)
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			stderr = exitErr.Stderr
+		}
+		t.Fatalf("go list -m all: %v\n%s", err, stderr)
 	}
 
 	dirs := map[string]string{}

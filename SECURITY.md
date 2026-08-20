@@ -1434,13 +1434,47 @@ a tiebreaker rather than becoming a second sort key.
   gate re-runs `make ci` on a tag that cannot be moved.
   `internal/lint/toolversion_test.go` holds the one version that has to be
   written twice to the one that does not.
-- **The test suite never touches the network** (SPEC.md §16). CI runs with
-  egress blocked, and `TestEveryHostInATestIsUnreachable` reads every URL
-  literal in every test file: it must name a reserved TLD, a loopback address,
-  or one of three real hosts that are listed with the reason they are only ever
-  parsed. Egress blocking alone catches a stray request in CI and nowhere else,
-  so on the machine a test was written on the same test passes by quietly
-  reaching somebody.
+- **The test suite never touches the network** (SPEC.md §16). Two layers, and
+  they catch different mistakes. The `test` job in `.github/workflows/ci.yml`
+  runs `make test` inside a network namespace holding nothing but loopback, and
+  proves it by checking that a fetch from inside fails, because a namespace with
+  a route out reads exactly like one without. `TestEveryHostInATestIsUnreachable`
+  reads every URL literal in every test file: it must name a reserved TLD, a
+  loopback address, or one of three real hosts that are listed with the reason
+  they are only ever parsed. The blocking catches an address built at run time
+  and a request a dependency makes for us, and it catches them in CI and
+  nowhere else, so on the machine a test was written on the same test would
+  pass by quietly reaching somebody. The literal check catches the realistic
+  accident, a real URL pasted into a new fixture, and catches it where it was
+  written.
+
+  The blocking covers that one job, which is where `go test ./...` runs, and
+  the wording says so rather than saying "CI": the release gate runs `make ci`
+  in one job, `make vuln` is part of it, and govulncheck has to reach
+  vuln.go.dev. It was claimed here from the Milestone 1 scaffold on 2026-08-14
+  until 2026-08-20 while no workflow implemented it, and it was found by reading
+  the workflows against the claim rather than by anything failing.
+
+  It is a namespace rather than a firewall rule because the first attempt was a
+  rule, `iptables -A OUTPUT -j REJECT` with loopback accepted above it, and that
+  blocks the runner agent along with the tests. The agent holds its own
+  connection to GitHub to stream logs and report step results, so the job died
+  with "The hosted runner lost communication with the server", no logs and no
+  step conclusions, after forty-five minutes of looking like a hang rather than
+  a failure. A namespace contains the process under test and leaves the agent
+  where it was.
+
+  The first run of it found something, which is the argument for having built
+  it. `TestNoDependencyShipsANotice` shells out to `go list -m all`, that needs
+  the whole module graph resolved and every module in it extracted, and the
+  cache held only what the build imports, so the gate that asserts what NOTICE
+  must list was reaching the network on every machine it had ever run on. The
+  job warms the graph deliberately now. Nobody wrote a URL: the request came
+  from a tool this repository shells out to, which is the half of this rule
+  that `TestEveryHostInATestIsUnreachable` cannot see and the reason the second
+  layer is worth the trouble. A control that is documented and absent is worse than
+  one that was never claimed: it is read as a backstop by whoever is deciding
+  how much the layer above it has to carry.
 
   This claim used to read "every host in a test uses a reserved TLD", and that
   was not true on the day it was written: `chat.googleapis.com` appears in
