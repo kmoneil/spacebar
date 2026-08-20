@@ -50,13 +50,18 @@ To allow writing, and only if you mean it:
 | `get_message` | One message by resource name |
 | `send_message` | Post to a space. Requires `--allow-write` |
 | `react_to_message` | Add an emoji reaction. Requires `--allow-write` |
-| `search_messages` | Search the local index. Registered only when an index exists |
+| `sync_space` | Copy a space's messages onto this machine so `search_messages` can find them. Requires `--allow-write` |
+| `search_messages` | Search the local index. Registered when one holds something, or when `sync_space` can fill it |
 
 `search_messages` is the one tool gated on something other than a capability:
-it appears only when this machine has a local index with something in it,
-because there is no message search API and an empty index would answer every
-search with nothing, which reads as "nobody said that" rather than as "nobody
-synced anything". It needs no capability at all, so a webhook profile can search
+it appears when this machine has a local index with something in it, or when
+`sync_space` is registered and could fill one. The reason for the gate was that
+an empty index answers every search with nothing, which reads as "nobody said
+that" rather than as "nobody synced anything". That distinction now lives in the
+answer instead: an empty index returns an empty `searched`, an `unsearched`
+naming the spaces nobody has copied, and `coverage_known`. So a session that
+starts with nothing can see the gap and close it with `sync_space` rather than
+asking you to run a command it cannot see. It needs no capability at all, so a webhook profile can search
 what a user-authorized one copied down. Its results carry `unsearched`, the
 spaces this profile can reach that nobody has synced, and `coverage_known`,
 which is false when there is no cached space list on the machine and therefore
@@ -128,6 +133,19 @@ than connected with an empty tool list.
 `send_message` is registered only when `--allow-write` is passed. Without it a
 model has no message-sending tool at all, which is the point: a gate that
 depends on a model choosing not to call something is not a gate.
+
+**`sync_space` is behind the same flag, and it writes nothing to a space.** The
+flag means a model may cause a side effect you would care about, and copying
+somebody's messages onto your disk in plain text while spending a per-space API
+quota shared with every other app in that space is one. It is the one tool whose
+confirmation sentence differs, because "this posts a visible message to a real
+Google Chat space" would be false of it, and a false sentence to a reader who
+cannot check it is worse than a second wording.
+
+One space per call, where the command line has `--all`, and a bounded number of
+messages per call whether or not one is asked for. A model that wants a whole
+space calls it again; each call is one line in the audit log, so a person
+reading it can see where the quota went.
 
 `--allow-space` confines the server to the spaces it names, and is repeatable.
 **Reading as well as writing**: a tool call that resolves anywhere else is
