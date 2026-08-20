@@ -512,3 +512,43 @@ func TestADeletedNewestMessageDoesNotHideWhatCameAfterIt(t *testing.T) {
 		t.Errorf("the deleted message is still searchable: %+v", found)
 	}
 }
+
+// TestAnEditTheIndexCannotPlaceIsStillAnEdit.
+//
+// The space a record is written under comes from the name the API answered
+// with rather than from the name that was asked for, because that is the one
+// naming the record. So there is a branch where the edit happened and the
+// answer cannot be placed, and it has to behave like every other way of
+// failing to record: the edit is reported as the success it was, and a warning
+// says the copy is now wrong.
+//
+// It should not be reachable against Chat. It is here because deriving the
+// space from the answer is the honest way round, and a branch that exists and
+// is never exercised is a branch nobody knows the behaviour of.
+func TestAnEditTheIndexCannotPlaceIsStillAnEdit(t *testing.T) {
+	index := indexWith(t)
+	message := testSpace + "/messages/AAA"
+
+	edited, warnings, err := EditMessage(context.Background(), index, &fakeMutations{
+		reply: &chat.Message{Name: "not a message name", Text: "the replacement words"},
+	}, chat.EditRequest{Message: message, Text: "the replacement words"})
+	if err != nil {
+		t.Fatalf("EditMessage = %v, want the edit to be reported as the success it was", err)
+	}
+	if edited == nil || edited.Text != "the replacement words" {
+		t.Errorf("the edited message did not come back: %+v", edited)
+	}
+	assertNamesTheMessage(t, warnings, message, "not a message name")
+
+	// And nothing was written under a space nobody could name.
+	spaces, err := index.Spaces()
+	if err != nil {
+		t.Fatalf("Spaces: %v", err)
+	}
+	if !slices.Equal(spaces, []string{testSpace}) {
+		t.Errorf("the index holds %v, want only the space it started with", spaces)
+	}
+	if found := collect(t, index, Query{Text: "replacement"}); len(found) != 0 {
+		t.Errorf("an edit that could not be placed was written anyway: %+v", found)
+	}
+}

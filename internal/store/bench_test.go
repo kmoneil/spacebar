@@ -373,6 +373,55 @@ func BenchmarkBounds(b *testing.B) {
 	}
 }
 
+// BenchmarkAppend is what a sync pays to write a batch, and it exists because
+// this change made that number bigger.
+//
+// batchFor validates every message on the way in, so that the index can never
+// write a record its own reader calls foreign. That check is two regular
+// expressions per message: CheckMessageName on the name, and CheckSpaceName on
+// the space read back out of it, both inside chat.SpaceOfMessage. Append had no
+// measurement at all before, so there was no number to move.
+//
+// What it measured, 2026-08-20, on the machine this file's header describes,
+// one batch of 500 at fetchInto's own batch size:
+//
+//	Append, whole call            3.04ms       878KB     1,032 allocs
+//	batchFor alone             0.60-0.73ms     131KB         1 alloc
+//	the wrapping loop alone    0.07-0.21ms     131KB         1 alloc
+//
+// So validation is roughly a microsecond a message and a little under half of
+// the Append call, which is 100ms on a first sync of a hundred thousand
+// messages and nothing at all on an incremental one. That is a fifth of a
+// single Bounds scan, on a path that is otherwise network-bound.
+//
+// It is kept at that price rather than trimmed. Both halves of a record have to
+// agree with the file it is in or the reader skips it, counts it, and warns
+// that the file was copied or edited by hand, which would be untrue and would
+// name no message. The obvious trim is to check the space once for the batch
+// instead of once per message, and it is deliberately not taken: it turns a
+// direct question, is this message in this space, into a prefix comparison that
+// is only equivalent because a space name cannot itself contain "/messages/".
+func BenchmarkAppend(b *testing.B) {
+	batch := make([]rows.Message, 0, 500)
+	for i := range cap(batch) {
+		batch = append(batch, rows.Message{
+			Name:       benchSpace(0) + "/messages/" + messageID(i),
+			CreateTime: time.Date(2026, 8, 17, 9, 0, i, 0, time.UTC).Format(time.RFC3339Nano),
+			Text:       "deploy done, and then enough words to make this a realistic body",
+		})
+	}
+
+	ctx := context.Background()
+	index := NewNDJSON(b.TempDir())
+	b.ReportAllocs()
+
+	for b.Loop() {
+		if err := index.Append(ctx, benchSpace(0), batch); err != nil {
+			b.Fatalf("Append: %v", err)
+		}
+	}
+}
+
 // BenchmarkSearchOverEverySpace is the unscoped search, which reads every file
 // in the directory.
 //
