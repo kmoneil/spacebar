@@ -985,3 +985,57 @@ func formatBound(at time.Time) string {
 	}
 	return at.UTC().Format(time.RFC3339Nano)
 }
+
+// TestCoverageSaysWhatWasLookedInAndWhatWasNot.
+//
+// Both adapters have to answer "did this search look everywhere", and only one
+// of them did. The CLI compared the index against the resolver's cached space
+// list and named the missing spaces on stderr; search_messages said nothing at
+// all, so the same question asked over MCP was answered narrowly at the one
+// consumer that reports its answer to a person as fact.
+//
+// The comparison lives here now, and known is a parameter rather than something
+// this package discovers, because where the list comes from is the caller's
+// business. What has to be true is that missing names every space in known the
+// index does not hold, that it names nothing else, and that the order does not
+// depend on the caller's.
+func TestCoverageSaysWhatWasLookedInAndWhatWasNot(t *testing.T) {
+	ctx := context.Background()
+	index := NewNDJSON(t.TempDir())
+
+	for _, space := range []string{"spaces/AAAAOne", "spaces/AAAATwo"} {
+		if err := index.Append(ctx, space, []rows.Message{
+			{Name: space + "/messages/AAA", CreateTime: at(1)},
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+	}
+
+	// Deliberately not sorted, and one of them is a space the index holds, so
+	// this checks the comparison rather than a set difference by luck.
+	known := []string{"spaces/AAAAZed", "spaces/AAAATwo", "spaces/AAAANil"}
+
+	searched, missing, err := index.Coverage(known)
+	if err != nil {
+		t.Fatalf("Coverage: %v", err)
+	}
+
+	if want := []string{"spaces/AAAAOne", "spaces/AAAATwo"}; !slices.Equal(searched, want) {
+		t.Errorf("searched = %v, want %v", searched, want)
+	}
+	if want := []string{"spaces/AAAANil", "spaces/AAAAZed"}; !slices.Equal(missing, want) {
+		t.Errorf("missing = %v, want %v; it has to be sorted, or two runs of one query "+
+			"print the same fact in different orders", missing, want)
+	}
+
+	// A space the index holds and nobody listed is searched and is not missing.
+	// "known" is what could have been synced, not what must have been.
+	searched, missing, err = index.Coverage(nil)
+	if err != nil {
+		t.Fatalf("Coverage: %v", err)
+	}
+	if len(searched) != 2 || len(missing) != 0 {
+		t.Errorf("with nothing known: searched %v, missing %v; an empty known cannot invent a gap",
+			searched, missing)
+	}
+}

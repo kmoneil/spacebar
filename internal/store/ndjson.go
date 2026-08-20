@@ -329,6 +329,40 @@ func (s *NDJSON) Spaces() ([]string, error) {
 	return spaces, nil
 }
 
+// Coverage is what a search over this index would and would not look in.
+//
+// searched is every space the index holds something for. missing is the ones in
+// known that it does not, which is what a caller has to say out loud: a search
+// that quietly skipped an unsynced space answers a narrower question than the
+// one that was asked, and nothing in a list of results says so.
+//
+// known is passed in rather than discovered, because where it comes from is the
+// caller's business and neither answer belongs here. Today both adapters read
+// it from the resolver's cached space list, so the comparison costs no request;
+// a caller that has no such list passes nothing and gets an empty missing,
+// which is not the same fact as "nothing is missing" and is why the caller is
+// told how many it compared against.
+//
+// Here rather than in either adapter, because both need it and only one had it.
+// The CLI named the unsynced spaces on stderr and search_messages said nothing
+// at all, so the same question asked over MCP was answered narrowly with
+// nothing to say it was narrow, at the one consumer that reports its answer to
+// a person as fact.
+func (s *NDJSON) Coverage(known []string) (searched, missing []string, err error) {
+	searched, err = s.Spaces()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, space := range known {
+		if !slices.Contains(searched, space) {
+			missing = append(missing, space)
+		}
+	}
+	sort.Strings(missing)
+	return searched, missing, nil
+}
+
 // Search yields every matching message, newest first.
 //
 // A message that was edited appears once, with the text it has now, and one

@@ -265,7 +265,7 @@ reason there is none for a person.`,
 			// say-what-was-left-out paths speaks on the error path, and a
 			// reader learning the pattern from one would write the other wrong.
 			if hidden > 0 {
-				r.Warn("%s", hiddenGroupsNote(hidden))
+				r.WarnCode(output.WarnHiddenGroups, "%s", hiddenGroupsNote(hidden))
 			}
 			return err
 		},

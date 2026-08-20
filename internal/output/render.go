@@ -189,7 +189,15 @@ func (r *Renderer) Warn(format string, a ...any) {
 //
 // Separate rather than a parameter on Warn, because most warnings have nothing
 // to branch on and a code argument at every call site would be an empty string
-// repeated fifty times. The ones that need it are the ones a program acts on.
+// repeated fifty times. The ones that need it are the ones a program acts on,
+// and which those are is stated once, beside the codes themselves.
+//
+// It had one caller until 2026-08-20, which was Warn, passing "". No test named
+// it and no document mentioned it, so warning.code was the empty string in
+// every --json warning this tool had ever emitted and omitempty meant it had
+// never appeared in one. The three warnings that mean "this answer is short"
+// all went out codeless, which is exactly the case the Code field was added
+// for. A branch point nobody can branch on reads as protection and is not any.
 func (r *Renderer) WarnCode(code, format string, a ...any) {
 	if r.opts.Quiet {
 		return
@@ -218,8 +226,17 @@ func (r *Renderer) WarnCode(code, format string, a ...any) {
 // Warnings writes each of them. internal/auth returns its warnings rather than
 // printing them, because this is the package that prints.
 func (r *Renderer) Warnings(warnings []string) {
+	r.WarningsCode("", warnings)
+}
+
+// WarningsCode is Warnings for a set that shares one code.
+//
+// The index's warnings are the caller that needs it: each is a file holding
+// records it will not answer with, and a program reading --json has to be able
+// to tell that line from a credential warning without matching on prose.
+func (r *Renderer) WarningsCode(code string, warnings []string) {
 	for _, warning := range warnings {
-		r.Warn("%s", warning)
+		r.WarnCode(code, "%s", warning)
 	}
 }
 

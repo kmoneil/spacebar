@@ -489,7 +489,7 @@ func send(cmd *cobra.Command, r *output.Renderer, opened *profile.Open, req chat
 		return err
 	}
 
-	r.Warnings(unresolvedMentions(sent.Text))
+	r.WarningsCode(output.WarnMentionUnresolved, unresolvedMentions(sent.Text))
 
 	result := sendResult{
 		Message:    sent.Name,
