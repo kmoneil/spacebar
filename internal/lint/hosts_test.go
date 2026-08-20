@@ -60,9 +60,10 @@ var parsedNeverDialled = map[string]string{
 // network access in tests", from the direction a test can actually break it.
 //
 // It is the layer that works where the test was written. The `test` job in
-// .github/workflows/ci.yml rejects everything but loopback before running
-// `make test`, which catches a request there and nowhere else: on a
-// developer's machine the same test passes by quietly talking to somebody.
+// .github/workflows/ci.yml runs `make test` inside a network namespace with
+// nothing in it but loopback, which catches a request there and nowhere else:
+// on a developer's machine the same test passes by quietly talking to
+// somebody.
 // The realistic accident is not a deliberate call, it is a real URL pasted
 // into a new fixture, which is why this reads the literals. The two layers see
 // different mistakes, and the blocking was claimed in SECURITY.md from the
