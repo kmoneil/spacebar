@@ -382,17 +382,25 @@ func BenchmarkBounds(b *testing.B) {
 // the space read back out of it, both inside chat.SpaceOfMessage. Append had no
 // measurement at all before, so there was no number to move.
 //
-// What it measured, 2026-08-20, on the machine this file's header describes,
-// one batch of 500 at fetchInto's own batch size:
+// What it measured, 2026-08-20, on the machine and by the protocol this file's
+// header describes, six samples each, one batch of 500 at fetchInto's own batch
+// size:
 //
-//	Append, whole call            3.04ms       878KB     1,032 allocs
-//	batchFor alone             0.60-0.73ms     131KB         1 alloc
-//	the wrapping loop alone    0.07-0.21ms     131KB         1 alloc
+//	Append, whole call         656-722us    878KB    1,030 allocs
+//	batchFor alone             301-318us    131KB        1 alloc
+//	the wrapping loop it replaced   30-104us    131KB        1 alloc
 //
-// So validation is roughly a microsecond a message and a little under half of
-// the Append call, which is 100ms on a first sync of a hundred thousand
-// messages and nothing at all on an incremental one. That is a fifth of a
-// single Bounds scan, on a path that is otherwise network-bound.
+// So the check adds about 0.53us a message: roughly 265us of a 690us Append,
+// which is 53ms on a first sync of a hundred thousand messages and nothing at
+// all on an incremental one. That is a ninth of a single Bounds scan, on a path
+// that is otherwise network-bound.
+//
+// The first version of this comment carried numbers four times larger, taken
+// while a fuzz sweep had ten workers on the same twelve cores. They are left
+// out rather than kept as a second row, because a number measured against an
+// unstated load is not a measurement of anything. The wrapping-loop row is the
+// noisiest here for the same reason at a smaller scale: it is tens of
+// microseconds, which is where this machine stops resolving.
 //
 // It is kept at that price rather than trimmed. Both halves of a record have to
 // agree with the file it is in or the reader skips it, counts it, and warns
