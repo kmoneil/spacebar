@@ -15,6 +15,7 @@
 package resolve
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,5 +197,106 @@ func TestAReusedProfileNameDoesNotInheritTheOldAccountsSpaces(t *testing.T) {
 	second.now = func() time.Time { return fixedNow }
 	if spaces, ok := second.Read(); ok {
 		t.Errorf("a profile of the same name read %d spaces belonging to the account before it", len(spaces))
+	}
+}
+
+// TestACacheThatNamesNoSpacesIsAMissRatherThanAnEmptyAnswer.
+//
+// The condition Read's own doc comment stated and the code did not hold. A file
+// that parses, names this profile and is fresh, and lists nothing, used to be
+// answered as a known list of no spaces.
+//
+// What that costs is not the extra request a miss costs. `search` compares the
+// index against this list to say which spaces it did not look in, so a list of
+// nothing is a comparison that finds nothing missing, and a search of one space
+// out of six reports itself as whole. It was found on a real machine in exactly
+// that state, and over MCP the same value becomes coverage_known: true beside an
+// empty unsearched, which the tool description tells a model means nothing was
+// missed.
+//
+// Both spellings, because they are both real. encoding/json writes an empty
+// slice as null, so that is what a file this tool produced looks like, and []
+// is what a hand-edited or hand-written one looks like.
+func TestACacheThatNamesNoSpacesIsAMissRatherThanAnEmptyAnswer(t *testing.T) {
+	for _, spaces := range []string{"null", "[]"} {
+		t.Run(spaces, func(t *testing.T) {
+			dir := cacheRoot(t)
+			write(t, dir, "work", fixedNow, spaces)
+
+			c := NewCache("work")
+			c.now = func() time.Time { return fixedNow }
+			if got, ok := c.Read(); ok {
+				t.Errorf("Read answered with a known list of %d spaces", len(got))
+			}
+		})
+	}
+
+	// And a file that names one is still a hit, because a rule that refuses
+	// everything proves nothing.
+	t.Run("one space is still a hit", func(t *testing.T) {
+		dir := cacheRoot(t)
+		write(t, dir, "work", fixedNow, `[{"name":"spaces/AAA","displayName":"Ops"}]`)
+
+		c := NewCache("work")
+		c.now = func() time.Time { return fixedNow }
+		got, ok := c.Read()
+		if !ok || len(got) != 1 || got[0].Name != "spaces/AAA" {
+			t.Errorf("Read = %+v, %v, want the one space that was written", got, ok)
+		}
+	})
+}
+
+// TestAnEmptyListDoesNotReplaceOneThatHasSpacesInIt.
+//
+// The producer side, and it is what stops the state above from being sticky.
+// The only caller writes whatever the space listing yielded, so one answer of
+// nothing would replace a good list with an empty one, and Read would then have
+// to distrust it for a full TTL rather than for one command.
+//
+// Leaving the previous list in place can only overstate what a search did not
+// look in, by naming a space that has since gone away. That is the safe
+// direction: the failure this whole card is about is understating it.
+func TestAnEmptyListDoesNotReplaceOneThatHasSpacesInIt(t *testing.T) {
+	cacheRoot(t)
+
+	c := NewCache("work")
+	c.now = func() time.Time { return fixedNow }
+	if err := c.Write([]chat.Space{{Name: "spaces/AAA", DisplayName: "Ops"}}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	// Not a failure. The caller ignores the error and the answer is already in
+	// hand, so this has to be silent rather than loud.
+	if err := c.Write(nil); err != nil {
+		t.Errorf("writing an empty list reported a failure: %v", err)
+	}
+	if err := c.Write([]chat.Space{}); err != nil {
+		t.Errorf("writing an empty slice reported a failure: %v", err)
+	}
+
+	got, ok := c.Read()
+	if !ok || len(got) != 1 || got[0].Name != "spaces/AAA" {
+		t.Errorf("Read = %+v, %v, want the list that was there before", got, ok)
+	}
+}
+
+// write puts a cache file on disk with the spaces field spelled exactly as
+// given, which is how a state Write will no longer produce still gets tested.
+//
+// A file is also what arrives from a restore, a copy between machines, or a
+// build older than the rule, so the states worth defending against are not only
+// the ones this version can create.
+func write(t *testing.T, dir, profile string, fetched time.Time, spaces string) {
+	t.Helper()
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", dir, err)
+	}
+
+	body := fmt.Sprintf(`{"fetched":%q,"profile":%q,"spaces":%s}`,
+		fetched.UTC().Format(time.RFC3339Nano), profile, spaces)
+	path := filepath.Join(dir, "spaces-"+profile+".json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
 	}
 }

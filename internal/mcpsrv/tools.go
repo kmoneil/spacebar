@@ -667,9 +667,10 @@ var searchMessagesTool = &mcp.Tool{
 		"get_message, which reads the API. Use list_messages instead to read a space directly. " +
 		"Read searched and unsearched before reporting a result set as complete: unsearched names " +
 		"spaces this profile can reach that nobody has synced, and a message in one of those is not " +
-		"found no matter what it says. If coverage_known is false there is no cached space list on " +
-		"this machine, so an empty unsearched does not mean nothing was missed, and you should say " +
-		"so rather than reporting the answer as whole.",
+		"found no matter what it says. If coverage_known is false this machine has no cached space " +
+		"list to compare against, either because none was ever written or because the one it has " +
+		"names no spaces, so an empty unsearched does not mean nothing was missed, and you should " +
+		"say so rather than reporting the answer as whole.",
 }
 
 type searchMessagesIn struct {
@@ -733,7 +734,7 @@ type searchMessagesOut struct {
 	// what it did not look in. A model that read an empty unsearched as "I
 	// searched everything" would report a narrow answer as a whole one, which is
 	// the failure this whole field set exists to prevent.
-	CoverageKnown bool `json:"coverage_known" jsonschema:"false when this machine has no cached space list, so unsearched could not be worked out and an empty unsearched does not mean nothing was missed"`
+	CoverageKnown bool `json:"coverage_known" jsonschema:"false when this machine has no cached space list to compare against, so unsearched could not be worked out and an empty unsearched does not mean nothing was missed"`
 
 	HasMore bool `json:"has_more,omitempty" jsonschema:"true when more messages match than the limit returned"`
 }
