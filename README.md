@@ -730,6 +730,12 @@ and leaving no gap.
 already cached. A space you never synced is not searched, and a search that
 skipped it quietly would answer a narrower question than you asked.
 
+**A result is a snapshot, not the current state of the space.** `sync` walks
+`createTime`, and an edit does not change `createTime`, so a message edited
+after it was copied is found by the text it had then and one deleted after it
+was copied is still found. `spacebar messages get` reads the API and is how you
+check one.
+
 **The index is plaintext on your disk** and nothing removes it, because it holds
 messages the API will not serve again. [SECURITY.md](SECURITY.md) says what that
 costs. It is a scan, not a search engine: 0.34s at 50,000 messages, crossing one
