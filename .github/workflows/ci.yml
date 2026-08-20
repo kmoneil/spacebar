@@ -35,10 +35,32 @@ jobs:
       # made for themselves: a formatter that floats can fail a pull request
       # that changed nothing, and here it can also fail a release, because the
       # release gate re-runs `make ci` on a tag that cannot be moved.
+      # The tools this job installs come from the module proxy, and that is a
+      # network call in front of a gate on every run of every pull request. A
+      # hit skips it entirely; a miss installs and saves. release.yml has done
+      # this since a transient sum.golang.org error killed a release whose tag
+      # was already public, and ci.yml did not, until a proxy stream error
+      # reddened `main` on 2026-08-20 in the licence gate's first step, before
+      # a licence had been looked at.
+      #
+      # The key carries the job because these jobs install different subsets.
+      # release.yml runs `make tools` and one key is right for it; here, a
+      # shared key would let a cache saved by one job be restored by another,
+      # report a hit, and skip installing a tool that was never in it.
+      - name: the pinned tool versions
+        id: tools
+        run: echo "key=$(make -s tools-key)" >> "$GITHUB_OUTPUT"
+      - name: restore the tools
+        id: toolcache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin
+          key: ci-tools-fmt-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ steps.tools.outputs.key }}
       - name: gofumpt
-        run: |
-          go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
-          make fmt-check
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: go install mvdan.cc/gofumpt@$(make -s print-GOFUMPT_VERSION)
+      - name: fmt-check
+        run: make fmt-check
       - name: vet
         run: make vet
       # v8 is the first action release that runs golangci-lint v2, which
@@ -72,10 +94,32 @@ jobs:
           # in the toolchain rather than in anything this module wrote: the
           # toolchain is the exposure.
           go-version: ${{ env.GO_VERSION }}
+      # The tools this job installs come from the module proxy, and that is a
+      # network call in front of a gate on every run of every pull request. A
+      # hit skips it entirely; a miss installs and saves. release.yml has done
+      # this since a transient sum.golang.org error killed a release whose tag
+      # was already public, and ci.yml did not, until a proxy stream error
+      # reddened `main` on 2026-08-20 in the licence gate's first step, before
+      # a licence had been looked at.
+      #
+      # The key carries the job because these jobs install different subsets.
+      # release.yml runs `make tools` and one key is right for it; here, a
+      # shared key would let a cache saved by one job be restored by another,
+      # report a hit, and skip installing a tool that was never in it.
+      - name: the pinned tool versions
+        id: tools
+        run: echo "key=$(make -s tools-key)" >> "$GITHUB_OUTPUT"
+      - name: restore the tools
+        id: toolcache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin
+          key: ci-tools-vuln-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ steps.tools.outputs.key }}
       - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@$(make -s print-GOVULNCHECK_VERSION)
-          make vuln
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: go install golang.org/x/vuln/cmd/govulncheck@$(make -s print-GOVULNCHECK_VERSION)
+      - name: make vuln
+        run: make vuln
 
   test:
     name: test
@@ -90,7 +134,29 @@ jobs:
       # run reads exactly like one that passed. That argument only holds if CI
       # installs the tool, so this step is part of the gate and not a
       # convenience.
+      # The tools this job installs come from the module proxy, and that is a
+      # network call in front of a gate on every run of every pull request. A
+      # hit skips it entirely; a miss installs and saves. release.yml has done
+      # this since a transient sum.golang.org error killed a release whose tag
+      # was already public, and ci.yml did not, until a proxy stream error
+      # reddened `main` on 2026-08-20 in the licence gate's first step, before
+      # a licence had been looked at.
+      #
+      # The key carries the job because these jobs install different subsets.
+      # release.yml runs `make tools` and one key is right for it; here, a
+      # shared key would let a cache saved by one job be restored by another,
+      # report a hit, and skip installing a tool that was never in it.
+      - name: the pinned tool versions
+        id: tools
+        run: echo "key=$(make -s tools-key)" >> "$GITHUB_OUTPUT"
+      - name: restore the tools
+        id: toolcache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin
+          key: ci-tools-test-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ steps.tools.outputs.key }}
       - name: gocognit
+        if: steps.toolcache.outputs.cache-hit != 'true'
         run: go install github.com/uudashr/gocognit/cmd/gocognit@$(make -s print-GOCOGNIT_VERSION)
       # Everything the run needs has to be on disk before the next step, since
       # after it nothing can be fetched. setup-go sets GOTOOLCHAIN=local, so
@@ -175,7 +241,29 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: ${{ env.GO_VERSION }}
+      # The tools this job installs come from the module proxy, and that is a
+      # network call in front of a gate on every run of every pull request. A
+      # hit skips it entirely; a miss installs and saves. release.yml has done
+      # this since a transient sum.golang.org error killed a release whose tag
+      # was already public, and ci.yml did not, until a proxy stream error
+      # reddened `main` on 2026-08-20 in the licence gate's first step, before
+      # a licence had been looked at.
+      #
+      # The key carries the job because these jobs install different subsets.
+      # release.yml runs `make tools` and one key is right for it; here, a
+      # shared key would let a cache saved by one job be restored by another,
+      # report a hit, and skip installing a tool that was never in it.
+      - name: the pinned tool versions
+        id: tools
+        run: echo "key=$(make -s tools-key)" >> "$GITHUB_OUTPUT"
+      - name: restore the tools
+        id: toolcache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin
+          key: ci-tools-licence-${{ runner.os }}-go${{ env.GO_VERSION }}-${{ steps.tools.outputs.key }}
       - name: install the licence tools
+        if: steps.toolcache.outputs.cache-hit != 'true'
         run: |
           go install github.com/google/go-licenses@$(make -s print-GOLICENSES_VERSION)
           go install github.com/google/addlicense@$(make -s print-ADDLICENSE_VERSION)

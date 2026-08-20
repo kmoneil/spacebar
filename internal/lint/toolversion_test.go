@@ -15,7 +15,10 @@
 package lint
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -90,6 +93,83 @@ func TestEveryPinnedToolIsInstallable(t *testing.T) {
 		// serving the old binary for, silently.
 		if !regexp.MustCompile(`\$\(` + name + `\)`).MatchString(keyBody) {
 			t.Errorf("%s is pinned but is not in the `tools-key` cache key, so bumping it would not bust the cache", name)
+		}
+	}
+}
+
+// jobBlock splits a workflow into its jobs, keyed by the job id.
+//
+// By indentation rather than by parsing YAML, which is what every other gate in
+// this package does with a workflow and which keeps this from needing a
+// dependency the licence gate would then have to account for. A job starts at
+// two spaces and a name, and runs until the next one.
+func jobBlocks(t *testing.T, workflow string) map[string]string {
+	t.Helper()
+
+	header := regexp.MustCompile(`(?m)^  ([a-zA-Z0-9_-]+):[ \t]*$`)
+	found := header.FindAllStringSubmatchIndex(workflow, -1)
+	if len(found) == 0 {
+		t.Fatalf("no jobs found in a workflow, so this gate would pass by checking nothing")
+	}
+
+	jobs := map[string]string{}
+	for i, m := range found {
+		end := len(workflow)
+		if i+1 < len(found) {
+			end = found[i+1][0]
+		}
+		jobs[workflow[m[2]:m[3]]] = workflow[m[0]:end]
+	}
+	return jobs
+}
+
+// TestEveryToolAWorkflowInstallsIsCachedFirst.
+//
+// Every `go install` in a workflow is a network call to the module proxy in
+// front of a gate, on every run of every pull request, and the gate is
+// protected by a ruleset that requires all six checks green under a strict
+// policy. So a proxy hiccup is not a red square somebody shrugs at: it is a
+// merge that does not happen until a person notices and re-runs.
+//
+// It is not hypothetical and it is not rare enough to ignore. On 2026-08-20 the
+// post-merge run on `main` failed in the licence gate's first step, before a
+// licence had been looked at, because proxy.golang.org dropped the connection
+// sending a transitive dependency of go-licenses that this repository does not
+// import. Five of six jobs passed and the same commit had been green on its
+// branch minutes earlier.
+//
+// release.yml had already made this decision, after a transient
+// sum.golang.org error killed a release whose tag was already public, and
+// ci.yml did not have it. This gate is what stops the next job being added
+// without it, which is how the first one came to be missing.
+//
+// It asks for the cache and for the guard, because a restore step with no `if`
+// on the install below it is a cache that costs an upload and saves nothing.
+func TestEveryToolAWorkflowInstallsIsCachedFirst(t *testing.T) {
+	for _, path := range workflowFiles(t) {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", path, err)
+		}
+		name := filepath.Base(path)
+
+		for job, body := range jobBlocks(t, string(b)) {
+			if !strings.Contains(body, "go install") && !strings.Contains(body, "make tools") {
+				continue
+			}
+			if !strings.Contains(body, "uses: actions/cache@") {
+				t.Errorf("%s: job %q installs a tool and does not restore it from a cache first.\n"+
+					"That is a module-proxy fetch in front of a required check on every run, and one "+
+					"dropped connection is a merge that waits for somebody to notice and re-run.\n"+
+					"Copy the three steps from the job beside it: read `make tools-key`, restore "+
+					"~/go/bin, and install only on a miss.", name, job)
+				continue
+			}
+			if !strings.Contains(body, "cache-hit != 'true'") {
+				t.Errorf("%s: job %q restores a tool cache and installs anyway.\n"+
+					"Without the `if` on the install step the fetch still happens on every run, so "+
+					"the cache costs an upload and prevents nothing.", name, job)
+			}
 		}
 	}
 }
