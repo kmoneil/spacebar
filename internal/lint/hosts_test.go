@@ -59,10 +59,15 @@ var parsedNeverDialled = map[string]string{
 // TestEveryHostInATestIsUnreachable holds the rule SPEC.md §16 states as "no
 // network access in tests", from the direction a test can actually break it.
 //
-// CI runs with egress blocked, which catches a real request there and nowhere
-// else: on a developer's machine the same test passes by quietly talking to
-// somebody. The realistic accident is not a deliberate call, it is a real URL
-// pasted into a new fixture, which is why this reads the literals.
+// It is the layer that works where the test was written. The `test` job in
+// .github/workflows/ci.yml rejects everything but loopback before running
+// `make test`, which catches a request there and nowhere else: on a
+// developer's machine the same test passes by quietly talking to somebody.
+// The realistic accident is not a deliberate call, it is a real URL pasted
+// into a new fixture, which is why this reads the literals. The two layers see
+// different mistakes, and the blocking was claimed in SECURITY.md from the
+// Milestone 1 scaffold until 2026-08-20 without existing, so this one carried
+// both jobs alone for six milestones.
 //
 // SECURITY.md claimed this rule as "every host in a test uses a reserved TLD"
 // and that was not true when it was written down: chat.googleapis.com appears
@@ -148,8 +153,8 @@ func checkHost(t *testing.T, fset *token.FileSet, f sourceFile, pos token.Pos, v
 	}
 
 	t.Errorf("%s:%d names the host %q, which can resolve.\n"+
-		"A test never talks to anybody: CI blocks egress, so a real request fails there and nowhere else, "+
-		"and on the machine it was written on it passes by quietly reaching somebody.\n"+
+		"A test never talks to anybody: the CI test job blocks egress, so a real request fails there "+
+		"and nowhere else, and on the machine it was written on it passes by quietly reaching somebody.\n"+
 		"Use a reserved TLD (.invalid, .test, .example) or 127.0.0.1. If this host is only ever parsed "+
 		"and never dialled, add it to parsedNeverDialled with that reason.",
 		f.rel, fset.Position(pos).Line, host)

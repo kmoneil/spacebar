@@ -1434,13 +1434,28 @@ a tiebreaker rather than becoming a second sort key.
   gate re-runs `make ci` on a tag that cannot be moved.
   `internal/lint/toolversion_test.go` holds the one version that has to be
   written twice to the one that does not.
-- **The test suite never touches the network** (SPEC.md §16). CI runs with
-  egress blocked, and `TestEveryHostInATestIsUnreachable` reads every URL
-  literal in every test file: it must name a reserved TLD, a loopback address,
-  or one of three real hosts that are listed with the reason they are only ever
-  parsed. Egress blocking alone catches a stray request in CI and nowhere else,
-  so on the machine a test was written on the same test passes by quietly
-  reaching somebody.
+- **The test suite never touches the network** (SPEC.md §16). Two layers, and
+  they catch different mistakes. The `test` job in `.github/workflows/ci.yml`
+  rejects every packet that is not loopback before it runs `make test`, and
+  proves the rules took by checking that a fetch fails, because a rule that did
+  not take reads exactly like one that did. `TestEveryHostInATestIsUnreachable`
+  reads every URL literal in every test file: it must name a reserved TLD, a
+  loopback address, or one of three real hosts that are listed with the reason
+  they are only ever parsed. The blocking catches an address built at run time
+  and a request a dependency makes for us, and it catches them in CI and
+  nowhere else, so on the machine a test was written on the same test would
+  pass by quietly reaching somebody. The literal check catches the realistic
+  accident, a real URL pasted into a new fixture, and catches it where it was
+  written.
+
+  The blocking covers that one job, which is where `go test ./...` runs, and
+  the wording says so rather than saying "CI": the release gate runs `make ci`
+  in one job, `make vuln` is part of it, and govulncheck has to reach
+  vuln.go.dev. It was claimed here from the Milestone 1 scaffold on 2026-08-14
+  until 2026-08-20 while no workflow implemented it, and it was found by reading
+  the workflows against the claim rather than by anything failing. A control that is documented and absent is worse than
+  one that was never claimed: it is read as a backstop by whoever is deciding
+  how much the layer above it has to carry.
 
   This claim used to read "every host in a test uses a reserved TLD", and that
   was not true on the day it was written: `chat.googleapis.com` appears in

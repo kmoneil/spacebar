@@ -92,6 +92,47 @@ jobs:
       # convenience.
       - name: gocognit
         run: go install github.com/uudashr/gocognit/cmd/gocognit@$(make -s print-GOCOGNIT_VERSION)
+      # Everything the run needs has to be on disk before the next step, since
+      # after it nothing can be fetched. setup-go sets GOTOOLCHAIN=local, so
+      # the toolchain is already settled; this is the module cache.
+      - name: fill the module cache
+        run: go mod download
+      # From here on the job has no network, which is the second half of "a
+      # test never talks to anybody".
+      #
+      # internal/lint/hosts_test.go reads every URL literal in every test file
+      # and requires a reserved TLD, a loopback address, or an entry saying why
+      # that host is only ever parsed. That catches the realistic accident, a
+      # real URL pasted into a new fixture, and it catches it on the machine
+      # the test was written on. What it cannot see is an address built at run
+      # time, or a request a dependency makes on our behalf: x/oauth2 builds
+      # the token request itself and no literal here names the host it goes to.
+      #
+      # SECURITY.md claimed this step for several milestones before it existed.
+      # It exists now, and the claim names the job it covers rather than "CI",
+      # because the release gate runs `make ci`, which includes `make vuln`,
+      # and govulncheck has to reach vuln.go.dev.
+      #
+      # Loopback is accepted because the tests are full of httptest servers.
+      # Everything else is REJECT and not DROP, so a stray request fails at
+      # once with an error naming the address instead of hanging until the job
+      # times out with nothing to read. Names go the same way: a query to
+      # systemd-resolved on 127.0.0.53 is accepted and its own forward is not,
+      # so anything outside /etc/hosts fails to resolve.
+      #
+      # The last line proves the rules took. A gate that did not run reads
+      # exactly like one that passed, and a runner image that drops iptables
+      # would otherwise leave this claim untrue and green.
+      - name: block egress
+        run: |
+          sudo iptables  -A OUTPUT -o lo -j ACCEPT
+          sudo iptables  -A OUTPUT        -j REJECT
+          sudo ip6tables -A OUTPUT -o lo -j ACCEPT
+          sudo ip6tables -A OUTPUT        -j REJECT
+          if curl -sS --max-time 10 https://proxy.golang.org/ >/dev/null 2>&1; then
+            echo "egress is not blocked: the rules did not take, so this job would prove nothing"
+            exit 1
+          fi
       # -race, and so deliberately not with CGO_ENABLED=0: the race detector
       # needs cgo. The shipped binary is built without it (see the Makefile),
       # but a test run that cannot see a data race is worth less than the
