@@ -999,6 +999,49 @@ read. It is gated more tightly than the CLI, on purpose.
   exactly the read tools, and with it `send_message` and `react_to_message` join
   them and nothing else changes. A profile that can serve nothing at all is
   refused before the session starts rather than connected empty.
+  **`sync_space` is behind the same flag and writes nothing to a space**, which
+  stretches what the flag says on the tin. What it means is that a model may
+  cause a side effect the operator would care about, and this one has two: it
+  copies message bodies onto the operator's disk in plain text, which the local
+  index section above describes at length, and it spends a per-space API quota
+  shared with every other app acting in that space. Neither is visible in the
+  space, and both are things somebody would want to have agreed to.
+
+  Three things bound it, and none is the model's judgement. The flag is
+  required, so an operator who did not ask does not get it. `--allow-space`
+  applies after resolution, so a confined server copies nothing else, and
+  `TestASyncOutsideTheAllowlistReachesNoSpace` counts what reached the transport
+  rather than reading the refusal. And a bounded limit is always sent, because
+  the command line's `--limit 0` means every message in the space and an omitted
+  tool argument must never mean that:
+  `TestAnOmittedSyncLimitIsStillBounded` asserts it on the outgoing request, and
+  `TestASyncLimitBeyondTheCeilingIsRefusedRatherThanClamped` holds the house
+  rule that a value over a bound is refused rather than quietly altered.
+
+  It is one space per call where the command line has `--all`, so a model
+  copying several leaves one audit line per space rather than one line covering
+  an unbounded amount of work.
+
+  Its confirmation sentence is the one tool description in this server that does
+  not end with SPEC.md §14.2's words. Those words say the call posts a visible
+  message to a real Google Chat space, and of this tool that is false. A false
+  sentence written for a reader who cannot check it is worse than a second
+  wording, so there are two, both spelled out in
+  `TestEveryWriteToolSaysToConfirmFirst`, which also fails when either is a
+  promise no tool makes.
+
+  **`search_messages` is registered alongside it**, which relaxes a gate this
+  document used to describe as index-present. The gate's reason was that an
+  empty index answers every search with nothing and a model reads that as
+  "nobody said that". That distinction is in the answer now rather than in the
+  registration: an empty index returns an empty `searched`, an `unsearched`
+  naming what nobody has copied, and `coverage_known`. So the model can see the
+  gap and close it, which is the whole reason `sync_space` exists.
+  `TestSearchBecomesReachableInASessionThatStartedWithAnEmptyIndex` runs the
+  sequence end to end, and `TestTheSyncToolNeedsBothTheFlagAndAnIndex` holds the
+  other side: with no index there is no sync tool, and search goes back to being
+  gated on the index alone.
+
   `TestTheReactionToolIsGatedTheSameWayTheSendToolIs` holds the second write
   tool separately, including that a webhook, which can post and cannot react,
   is given the one and not the other.

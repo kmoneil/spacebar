@@ -340,7 +340,7 @@ func when(value string) (time.Time, error) {
 	return chat.ParseWhen(value, time.Now())
 }
 
-// confirmation is the sentence every write tool's description ends with, from
+// confirmation is the sentence a write tool's description ends with, from
 // SPEC.md §14.2, exactly.
 //
 // A constant rather than three copies, and asserted by string comparison in the
@@ -349,6 +349,30 @@ func when(value string) (time.Time, error) {
 // model reads it before deciding to call the tool.
 const confirmation = "This posts a visible message to a real Google Chat space. " +
 	"Confirm with the user before calling."
+
+// localConfirmation is the same promise for the one write tool that changes
+// this machine rather than a space.
+//
+// A second sentence, and it was worth arguing about, because "a per-tool
+// rewording is how a promise becomes six slightly different promises" is
+// written on the constant above and is right.
+//
+// It is here anyway, because the alternative was worse. sync_space is behind
+// --allow-write, which is the correct gate: the flag means a model may cause a
+// side effect the operator would care about, and copying somebody's messages
+// onto a disk in plain text qualifies. But it posts nothing, so ending its
+// description with "This posts a visible message to a real Google Chat space"
+// would be a false sentence written for a reader who cannot check it, and this
+// tool does not do that anywhere else.
+//
+// So the set is two and the test spells out both, and asserts that each is used
+// by at least one tool, which is what stops the set growing to six: a sentence
+// nobody uses fails the build rather than sitting there inviting a third.
+//
+// The last five words are the same five words on purpose. The promise being
+// made is the same promise, and only the side effect it is about differs.
+const localConfirmation = "This copies message bodies onto this machine's disk in plain text and " +
+	"spends the space's shared API quota. Confirm with the user before calling."
 
 var sendMessageTool = &mcp.Tool{
 	Name: "send_message",
@@ -496,6 +520,129 @@ func orderOf(order string) (string, error) {
 		return "", nil
 	}
 	return chat.OrderBy(order)
+}
+
+// The sync tool, and the one in this file with an argument against building it.
+//
+// A sync spends per-space quota in a loop for as long as the space is long, on a
+// quota shared with every other app acting in that space, and that is the
+// resource every other decision in this tool is careful about: the poll floor is
+// refused rather than clamped, and watch --all holds itself to a fifth of the
+// project budget. Handing that loop to something that decides on its own when to
+// call it is a different risk from handing it to somebody typing a command. It
+// also writes plaintext message bodies to disk, which SECURITY.md treats as a
+// real change to what is on the operator's machine.
+//
+// It is built because the alternative is worse in the way this tool cares about
+// most. A model that can search and cannot sync gives a confidently wrong answer
+// the first time it is asked about a space nobody synced, and it cannot fix
+// that: it has to ask a person to run a command it cannot see. search_messages
+// already reports what it did not look in, so the honest failure was handled and
+// the model was left holding it.
+//
+// Three things bound the risk, and none of them is the model's judgement.
+// --allow-write is required, so an operator who did not ask for this does not
+// get it. --allow-space applies after resolution, so a confined server syncs
+// nothing else. And a limit is always sent: the CLI's --limit 0 means every
+// message in the space, and an omitted tool argument must never mean that.
+//
+// One space per call, deliberately, where the CLI has --all. A loop over every
+// space is one audit line for an unbounded amount of work, and the model can
+// walk list_spaces itself, which puts one line in the log per space and lets a
+// person reading it see where the quota went.
+var syncSpaceTool = &mcp.Tool{
+	Name: "sync_space",
+	Description: "Copy a Google Chat space's messages onto this machine so that search_messages can " +
+		"find them. There is no message search API for an ordinary user, so this is the only way to " +
+		"make a space searchable, and a space nobody has synced is invisible to search_messages: it " +
+		"reports those in its unsearched field. Resumable and holds no cursor, so calling it again " +
+		"carries on from where it stopped, fetching nothing twice and leaving no gap. limit bounds " +
+		"one call rather than truncating anything, so if fetched equals the limit there is more to " +
+		"copy and calling again gets it. This spends the space's per-message-list quota, which is " +
+		"shared with every other app acting in that space, so do not loop it without being asked to. " +
+		localConfirmation,
+	Annotations: &mcp.ToolAnnotations{
+		// Not destructive: the index is append-only and a sync adds to it.
+		// Idempotent in the sense that matters here, which is that calling it
+		// twice does not copy anything twice, because the second call resumes
+		// from what the first left.
+		DestructiveHint: ptr(false),
+		ReadOnlyHint:    false,
+		IdempotentHint:  true,
+		OpenWorldHint:   ptr(true),
+	},
+}
+
+type syncSpaceIn struct {
+	Space string `json:"space" jsonschema:"the space: a resource name like spaces/AAAAAAA, an alias, a display name, or an email address"`
+	Limit int    `json:"limit,omitempty" jsonschema:"how many messages to copy in this call; omit for 500, maximum 5000. It bounds the call, not the answer: call again to copy more"`
+}
+
+// The sync bounds, which are not the list bounds and should not be.
+//
+// A list tool returns its rows to the model, so maxLimit is about a context
+// window. A sync returns five numbers whatever it copied, so what these bound is
+// requests against a shared quota and bytes onto somebody's disk.
+//
+// 500 is fetchInto's batch size, so a default call is one locked write. 5,000 is
+// the number the CLI's own help uses as its worked example of bringing a large
+// space down over several runs, and it is five pages at the API's maximum page
+// size.
+const (
+	defaultSyncLimit = 500
+	maxSyncLimit     = 5000
+)
+
+// syncLimitOf turns what a caller asked for into what will be fetched.
+//
+// Zero means "did not say", which is the default and never means every message
+// in the space. That is the one place this deliberately disagrees with the CLI,
+// where --limit 0 means all of them: a flag somebody typed is a decision, and an
+// omitted field is not.
+func syncLimitOf(asked int) (int, error) {
+	switch {
+	case asked < 0:
+		return 0, output.Errorf("USAGE", output.ExitUsage,
+			"limit is %d; it counts messages, so it cannot be negative.", asked)
+	case asked == 0:
+		return defaultSyncLimit, nil
+	case asked > maxSyncLimit:
+		return 0, output.Errorf("USAGE", output.ExitUsage,
+			"limit is %d, and one call copies at most %d messages.\n"+
+				"It bounds the call rather than the answer: call again to carry on from where "+
+				"this one stopped. A sync spends quota shared with every other app acting in "+
+				"that space, so it is bounded per call on purpose.", asked, maxSyncLimit)
+	}
+	return asked, nil
+}
+
+// syncSpace copies one space's messages into the local index.
+//
+// The walk is store.Sync, which is the same function the CLI calls: refactor-01
+// moved it out of internal/cli so that this could exist without duplicating it
+// or importing an adapter from an adapter.
+func (s *Server) syncSpace(ctx context.Context, _ *mcp.CallToolRequest, in syncSpaceIn) (*mcp.CallToolResult, store.Result, error) {
+	limit, err := syncLimitOf(in.Limit)
+	if err != nil {
+		return nil, store.Result{}, err
+	}
+
+	// Resolution first, then the allowlist, which is the ordering every tool
+	// here follows: an allowlist checked against what the caller typed is
+	// checked against a string the caller controls.
+	target, err := s.resolve(ctx, in.Space)
+	if err != nil {
+		return nil, store.Result{}, err
+	}
+	if err := s.checkAllowed(target); err != nil {
+		return nil, store.Result{}, err
+	}
+
+	result, err := store.Sync(ctx, s.index, s.profile.Transport, target, limit)
+	if err != nil {
+		return nil, store.Result{}, err
+	}
+	return nil, result, nil
 }
 
 // The search tool. §14.1 gates it on "index present", which makes it the only
