@@ -151,11 +151,23 @@ func (f *fake) Members(_ context.Context, req chat.ListMembersRequest) iter.Seq2
 // The space is recorded because that is how an allowlist claim is settled:
 // counting what reached the transport rather than reading the error, since a
 // refusal after the request carries the same error as one before it.
+//
+// It is also answered on, which it was not until 2026-08-20. The list was
+// returned whole whatever space was asked for, so a sync of one space was
+// handed the other one's messages, and the only reason no assertion noticed is
+// that the walk wrote them down without looking at the names. The index refuses
+// a record naming another space now, so a fake that ignores the request fails
+// the test rather than quietly making the request half of it meaningless. It is
+// the same reason this honours Limit and the reason the member fake honours the
+// group filter.
 func (f *fake) Messages(_ context.Context, req chat.ListMessagesRequest) iter.Seq2[chat.Message, error] {
 	f.messageRequests = append(f.messageRequests, req)
 
 	kept := make([]chat.Message, 0, len(f.messages))
 	for _, m := range f.messages {
+		if req.Space != "" && !strings.HasPrefix(m.Name, req.Space+"/messages/") {
+			continue
+		}
 		at, err := time.Parse(time.RFC3339Nano, m.CreateTime)
 		if err != nil {
 			continue

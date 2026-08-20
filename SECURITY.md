@@ -570,10 +570,17 @@ did not happen. `TestACacheThatCannotBeRemovedIsAWarningRatherThanAFailure`.
 
 ### The message index, which is a real change to what is on your disk
 
-`spacebar sync` is the one thing in this tool that stores message content at
-rest. It is stated at length because it is the largest change to this threat
-model since the credential store, and because it is the kind of change
-somebody discovers rather than reads.
+`spacebar sync` is what puts message content on your disk at rest. It is stated
+at length because it is the largest change to this threat model since the
+credential store, and because it is the kind of change somebody discovers rather
+than reads.
+
+Two commands add to what it holds. `spacebar messages edit` records the new text
+and `spacebar messages delete` records a tombstone, so that a search agrees with
+the space about a change this tool made rather than answering with words nobody
+can find in it. Neither creates a file: a space you have never synced stays a
+space nothing is stored for, held by `TestOnlyAppendBringsASpaceIntoTheIndex`
+and `TestARecordedChangeNeverBringsASpaceIntoTheIndex`.
 
 `internal/store` writes one file per space at
 `<data dir>/spaces/<spaceID>.ndjson`, under `XDG_DATA_HOME`,

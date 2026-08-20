@@ -123,7 +123,7 @@ func (s *NDJSON) path(space string) (string, error) {
 	return filepath.Join(s.root, "spaces", strings.TrimPrefix(space, "spaces/")+".ndjson"), nil
 }
 
-// Append records messages for one space.
+// Append records messages for one space, and is how a space enters the index.
 //
 // Every record is written by a single Write under an exclusive advisory lock,
 // which is what makes two `tail` processes on the same space safe. The lock
@@ -131,12 +131,63 @@ func (s *NDJSON) path(space string) (string, error) {
 // operation, and says nothing about a large write being interleaved with
 // somebody else's. A torn line is not recoverable, because the message it
 // carried may since have been deleted and the API will not answer for it again.
+//
+// It is the only writer here that may bring a space's file into existence, and
+// that is the difference between it and Update and Delete. See writeHeld.
 func (s *NDJSON) Append(ctx context.Context, space string, msgs []rows.Message) error {
+	batch, err := batchFor(space, msgs)
+	if err != nil {
+		return err
+	}
+	return s.write(ctx, space, batch, true)
+}
+
+// Update records a message as it is now, for a space the index already holds.
+//
+// An ordinary record rather than a kind of its own, because that is already how
+// an edit is stored: the log is append-only and read newest-record-per-name, so
+// the later line supersedes the earlier one and a search answers with the text
+// the message has now. Append writes the same shape. What differs is only that
+// this one will not create the file.
+//
+// The caller is a mutation this tool made, where the API has just handed back
+// the message it changed. An edit made by anybody else is invisible until
+// something reads the space's events, which is a pass this walk does not have.
+func (s *NDJSON) Update(ctx context.Context, space string, msg rows.Message) error {
+	batch, err := batchFor(space, []rows.Message{msg})
+	if err != nil {
+		return err
+	}
+	return s.writeHeld(ctx, space, batch)
+}
+
+// batchFor wraps messages as records, refusing any that names another space.
+//
+// The check is here rather than left to the reader, and that is the same
+// argument NewCache makes for checking a profile name it is already given
+// safe. belongs refuses a record whose message names a space other than the
+// file's when it is read back, counts it, and warns that the file has been
+// copied or edited by hand. A writer that can produce one makes that warning a
+// lie about where the record came from, and the record itself is invisible: it
+// is in the file, it will never be answered with, and nothing says which
+// message is missing.
+//
+// A first layer that needs the layer below it to be safe is not a first layer.
+func batchFor(space string, msgs []rows.Message) ([]record, error) {
 	batch := make([]record, 0, len(msgs))
 	for _, m := range msgs {
+		within, err := chat.SpaceOfMessage(m.Name)
+		if err != nil {
+			return nil, err
+		}
+		if within != space {
+			return nil, storeErr("%s is a message in %s, so it cannot be recorded under %s.\n"+
+				"A record read from the wrong file answers for a space it was never in.",
+				m.Name, within, space)
+		}
 		batch = append(batch, record{Space: space, Message: m})
 	}
-	return s.write(ctx, space, batch)
+	return batch, nil
 }
 
 // Delete records a tombstone, so a search stops answering with a message that
@@ -146,15 +197,39 @@ func (s *NDJSON) Append(ctx context.Context, space string, msgs []rows.Message) 
 // mean holding the whole file, which is the shape that loses everything when a
 // process dies half way, and this log is the only copy: the API will not answer
 // for a deleted message a second time.
+//
+// A tombstone for a space the index does not hold is nothing, so it writes
+// nothing. See writeHeld: what is at stake is not the empty record but the file
+// it would create.
 func (s *NDJSON) Delete(ctx context.Context, space, message string) error {
-	if err := chat.CheckMessageName(message); err != nil {
+	batch, err := batchFor(space, []rows.Message{{Name: message}})
+	if err != nil {
 		return err
 	}
-	return s.write(ctx, space, []record{{
-		Space:   space,
-		Deleted: true,
-		Message: rows.Message{Name: message},
-	}})
+	batch[0].Deleted = true
+	return s.writeHeld(ctx, space, batch)
+}
+
+// writeHeld appends to a space's file only when the index already has one.
+//
+// The rule this exists for is about coverage rather than about the record. A
+// space's file is what says the space has been looked at: Spaces reads the
+// directory, Coverage compares that against the profile's cached space list,
+// and `search` names what is missing so that a narrower answer is never
+// reported as a whole one. Visit creates an empty file for exactly that reason,
+// so that a space with no messages is not reported as unsynced.
+//
+// So a writer that creates a file moves a space from "never synced" to "synced
+// and empty", and the message it was recording is the only thing in it. A
+// search would then stop naming that space as unsearched while holding nothing
+// from it, which is this project's worst failure shape reached from a command
+// that never mentions the index.
+//
+// Nothing to record and nothing recorded is not a failure and is not worth
+// saying: the message is gone from a space this machine was never keeping a
+// copy of, so there is nothing for a later search to be wrong about.
+func (s *NDJSON) writeHeld(ctx context.Context, space string, records []record) error {
+	return s.write(ctx, space, records, false)
 }
 
 // Visit records that a space has been looked at, whether or not it said
@@ -185,7 +260,15 @@ func (s *NDJSON) Visit(space string) error {
 	return f.Close()
 }
 
-func (s *NDJSON) write(ctx context.Context, space string, records []record) error {
+// write appends records to a space's file under the append lock.
+//
+// create says whether the file may be brought into existence. It is the one
+// question the two kinds of writer answer differently: Append fills the index
+// and a first message is how a space's file starts, while Update and Delete
+// record a change to a space the index is supposed to hold already. The open
+// itself decides, rather than a check before it, so there is no window between
+// asking whether the file exists and writing to it.
+func (s *NDJSON) write(ctx context.Context, space string, records []record, create bool) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -193,13 +276,13 @@ func (s *NDJSON) write(ctx context.Context, space string, records []record) erro
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return storeErr("cannot create %s: %v", filepath.Dir(path), err)
-	}
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := openForAppend(path, create)
 	if err != nil {
-		return storeErr("cannot open %s: %v", path, err)
+		return err
+	}
+	if f == nil {
+		return nil
 	}
 	defer func() { _ = f.Close() }()
 
@@ -226,6 +309,36 @@ func (s *NDJSON) write(ctx context.Context, space string, records []record) erro
 		return storeErr("cannot write to %s: %v", path, err)
 	}
 	return nil
+}
+
+// openForAppend opens a space's file for the append, or reports that there is
+// nothing to append to.
+//
+// A nil file and a nil error is the second answer, and it is only reachable
+// when create is false: the file does not exist, so this write is a change to a
+// space the index does not hold and there is nothing to record it against. See
+// writeHeld for why that is not an error.
+//
+// Split from write for the complexity ceiling, and the split is where the two
+// jobs already were: this one decides whether there is a file, and write
+// decides what goes in it.
+func openForAppend(path string, create bool) (*os.File, error) {
+	flags := os.O_APPEND | os.O_WRONLY
+	if create {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return nil, storeErr("cannot create %s: %v", filepath.Dir(path), err)
+		}
+		flags |= os.O_CREATE
+	}
+
+	f, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		if !create && os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, storeErr("cannot open %s: %v", path, err)
+	}
+	return f, nil
 }
 
 // Bounds is the window a space's index covers, and how many messages are in it.

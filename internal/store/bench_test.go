@@ -373,6 +373,63 @@ func BenchmarkBounds(b *testing.B) {
 	}
 }
 
+// BenchmarkAppend is what a sync pays to write a batch, and it exists because
+// this change made that number bigger.
+//
+// batchFor validates every message on the way in, so that the index can never
+// write a record its own reader calls foreign. That check is two regular
+// expressions per message: CheckMessageName on the name, and CheckSpaceName on
+// the space read back out of it, both inside chat.SpaceOfMessage. Append had no
+// measurement at all before, so there was no number to move.
+//
+// What it measured, 2026-08-20, on the machine and by the protocol this file's
+// header describes, six samples each, one batch of 500 at fetchInto's own batch
+// size:
+//
+//	Append, whole call         656-722us    878KB    1,030 allocs
+//	batchFor alone             301-318us    131KB        1 alloc
+//	the wrapping loop it replaced   30-104us    131KB        1 alloc
+//
+// So the check adds about 0.53us a message: roughly 265us of a 690us Append,
+// which is 53ms on a first sync of a hundred thousand messages and nothing at
+// all on an incremental one. That is a ninth of a single Bounds scan, on a path
+// that is otherwise network-bound.
+//
+// The first version of this comment carried numbers four times larger, taken
+// while a fuzz sweep had ten workers on the same twelve cores. They are left
+// out rather than kept as a second row, because a number measured against an
+// unstated load is not a measurement of anything. The wrapping-loop row is the
+// noisiest here for the same reason at a smaller scale: it is tens of
+// microseconds, which is where this machine stops resolving.
+//
+// It is kept at that price rather than trimmed. Both halves of a record have to
+// agree with the file it is in or the reader skips it, counts it, and warns
+// that the file was copied or edited by hand, which would be untrue and would
+// name no message. The obvious trim is to check the space once for the batch
+// instead of once per message, and it is deliberately not taken: it turns a
+// direct question, is this message in this space, into a prefix comparison that
+// is only equivalent because a space name cannot itself contain "/messages/".
+func BenchmarkAppend(b *testing.B) {
+	batch := make([]rows.Message, 0, 500)
+	for i := range cap(batch) {
+		batch = append(batch, rows.Message{
+			Name:       benchSpace(0) + "/messages/" + messageID(i),
+			CreateTime: time.Date(2026, 8, 17, 9, 0, i, 0, time.UTC).Format(time.RFC3339Nano),
+			Text:       "deploy done, and then enough words to make this a realistic body",
+		})
+	}
+
+	ctx := context.Background()
+	index := NewNDJSON(b.TempDir())
+	b.ReportAllocs()
+
+	for b.Loop() {
+		if err := index.Append(ctx, benchSpace(0), batch); err != nil {
+			b.Fatalf("Append: %v", err)
+		}
+	}
+}
+
 // BenchmarkSearchOverEverySpace is the unscoped search, which reads every file
 // in the directory.
 //
