@@ -189,8 +189,8 @@ func reportUnsearched(r *output.Renderer, profileName string, index *store.NDJSO
 		// so a --json search run the morning after a space listing said nothing
 		// about its own coverage at all.
 		r.WarnCode(output.WarnPartialCoverage,
-			"searched %d indexed spaces. This profile has no cached space list, "+
-				"so there is no way to say which spaces are missing from the index.\n"+
+			"searched %d indexed spaces. This profile has no cached space list to compare "+
+				"against, so there is no way to say which spaces are missing from the index.\n"+
 				"Run: %s spaces list", len(searched), meta.AppName)
 		return nil
 	}
@@ -199,7 +199,14 @@ func reportUnsearched(r *output.Renderer, profileName string, index *store.NDJSO
 		// A Note, and this is the branch that should be one. A complete answer
 		// needs no caveat, and a line on every complete search is the noise that
 		// teaches people to skip the line that mattered.
-		r.Note("searched all %d spaces this profile can reach.", len(searched))
+		//
+		// The count is what was compared against and not what is in the index,
+		// which are different numbers whenever the index holds a space this
+		// profile can no longer reach: one that was synced and then left, or
+		// synced under a profile name that has since been authorized as
+		// somebody else. The sentence is about the spaces the profile can
+		// reach, so it counts those.
+		r.Note("searched all %d spaces this profile can reach.", len(known))
 		return nil
 	}
 

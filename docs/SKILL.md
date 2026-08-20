@@ -64,8 +64,9 @@ starts with nothing can see the gap and close it with `sync_space` rather than
 asking you to run a command it cannot see. It needs no capability at all, so a webhook profile can search
 what a user-authorized one copied down. Its results carry `unsearched`, the
 spaces this profile can reach that nobody has synced, and `coverage_known`,
-which is false when there is no cached space list on the machine and therefore
-no way to work `unsearched` out at all. An empty `unsearched` beside a false
+which is false when the machine has no cached space list to compare against,
+either because none was ever written or because the one it has names no spaces,
+and therefore no way to work `unsearched` out at all. An empty `unsearched` beside a false
 `coverage_known` does not mean nothing was missed, and a model that reads it
 that way reports a narrow answer as a whole one. They carry `searched`, the list
 of spaces the index actually holds, because an answer over an index is bounded

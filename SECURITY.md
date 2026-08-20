@@ -1439,6 +1439,31 @@ opened. A report of coverage has to be right in both directions or it is
 decoration. One filter now, and the listing is a projection of it.
 `TestASearchReadsExactlyTheSpacesItReports`.
 
+**And a comparison against nothing is not a comparison.** The other half of
+that report is the space list it is measured against, which comes from the
+resolver's cache so that it costs no request. A cache file that parses, names
+this profile and is fresh but lists no spaces used to be answered as a known
+list of none, so nothing came back missing and a search of one space out of six
+called itself complete. Found on a real machine in that state on 2026-08-20,
+not reasoned about.
+
+`resolve.Cache.Read` treats an empty list as a miss now, which its own doc
+comment had said all along, and `Write` declines to record one, so a single odd
+answer from the API cannot replace a good list and be believed for a day. The
+CLI's note also counts what it compared against rather than what is in the
+index, which are different numbers as soon as the index holds a space this
+profile can no longer reach.
+`TestACacheThatNamesNoSpacesIsAMissRatherThanAnEmptyAnswer`,
+`TestAnEmptyListDoesNotReplaceOneThatHasSpacesInIt`,
+`TestACompleteSearchCountsWhatItComparedAgainst`.
+
+Over MCP the same value is `coverage_known`, and that is the reader it matters
+for: the tool description tells a model that a false one means an empty
+`unsearched` proves nothing, so a wrongly true one does not produce a wrong
+field, it produces a confident sentence about somebody's own space to the one
+reader who cannot check it.
+`TestASearchOverMCPNamesTheSpacesNobodySynced`.
+
 **A record answers only for the space whose file it is in.** Every line carries
 its own space so that one which has been copied, concatenated or restored still
 says what it is, and nothing read it. Both halves of a record now have to agree
