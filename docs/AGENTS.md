@@ -353,8 +353,17 @@ newest message it holds and everything older than the oldest, so an interrupted
 run resumes by being run again, with nothing fetched twice and no gap. `--limit`
 bounds one run rather than truncating the result.
 
-A message that was edited is found by the text it has now, and one that was
-deleted is not found at all, because the index records both.
+**A search result is a snapshot, not the current state of the space.** `sync`
+walks `createTime` in two windows, everything newer than the newest message it
+holds and everything older than the oldest, and an edit does not change
+`createTime`. So a message edited after it was copied is found by the text it
+had then, and a message deleted after it was copied is still found.
+`spacebar messages delete` removes a message from the space and leaves the copy
+alone.
+
+Confirm with `spacebar messages get` before acting on a search result, which
+reads the API rather than the index. There is no reindex: the index is the only
+copy of a message the API will not answer for twice, so nothing prunes it.
 
 ## Capabilities
 

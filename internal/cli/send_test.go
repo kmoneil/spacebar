@@ -566,7 +566,6 @@ func TestACapabilityThisProfileLacksIsExitFiveWithNoRequest(t *testing.T) {
 		flag, value, says string
 	}{
 		{"--file", "report.pdf", "attachment upload"},
-		{"--reply-to", "spaces/AAAATestSpace/messages/CCC", "read access"},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
 			got := runCLIIn(t, "", "send", tc.flag, tc.value, "hi")
@@ -582,6 +581,79 @@ func TestACapabilityThisProfileLacksIsExitFiveWithNoRequest(t *testing.T) {
 	}
 	if s.count() != 0 {
 		t.Errorf("%d requests were made by refused invocations", s.count())
+	}
+}
+
+// TestReplyToIsRefusedOnEveryProfileRatherThanIgnoredOnSome.
+//
+// The half nothing tested. `--reply-to` was registered, read once to choose
+// transport.CanRead as the capability to require, and then dropped, because
+// chat.SendRequest has no field a reply target reaches.
+//
+// On a webhook the capability check refused it and this file asserted that, so
+// the flag looked covered. On any profile that can read, the check passed, the
+// message posted as a new top-level message, and the command exited 0 printing
+// the success fields. Somebody replying in a busy space got a detached message
+// with nothing saying so, which is the failure this project puts above every
+// other: a false report is worse than a refusal.
+//
+// Both transports are run, because the defect was the difference between them.
+// The webhook half counts requests, which is the house pattern for a refusal:
+// an error read off stderr cannot tell a refusal before the POST from one
+// after it. The user-OAuth half has no server and cannot have one, so it
+// carries --dry-run instead, and the assertion is sharper for it. --dry-run
+// stops the client on the line before the send and exits 0 with the request it
+// stopped, so an exit of 5 here means the refusal fired first. Remove the
+// refusal and this half goes green at exit 0 with a request preview, which is
+// exactly the shape the bug had.
+func TestReplyToIsRefusedOnEveryProfileRatherThanIgnoredOnSome(t *testing.T) {
+	const target = "spaces/AAAATestSpace/messages/CCC"
+
+	t.Run("webhook", func(t *testing.T) {
+		s := configured(t)
+
+		got := runCLIIn(t, "", "send", "--reply-to", target, "hi")
+		assertReplyToRefused(t, got)
+		if s.count() != 0 {
+			t.Errorf("%d requests were made by a refused send", s.count())
+		}
+	})
+
+	t.Run("user oauth", func(t *testing.T) {
+		configuredUserOAuth(t)
+
+		got := runCLIIn(t, "", "--dry-run", "send", "spaces/AAAATestSpace", "hi", "--reply-to", target)
+		assertReplyToRefused(t, got)
+		if got.stdout != "" {
+			t.Errorf("a refused send wrote to stdout:\n%s", got.stdout)
+		}
+	})
+}
+
+// assertReplyToRefused holds the exit code and what the message has to say.
+//
+// The exit code is 5 and not 2 because 5 is what this invocation already
+// answered: a webhook caller got it from transport.Require before any of this,
+// and an exit code never changes meaning.
+//
+// What the message must not do is send somebody to another profile, which is
+// what every other exit-5 refusal in this tool does and what would be a second
+// dead end here. So the words checked are the flag that does work rather than
+// the capability that does not.
+func assertReplyToRefused(t *testing.T, got result) {
+	t.Helper()
+
+	if got.exit != output.ExitUnsupported {
+		t.Fatalf("exit = %d, want %d\n%s", got.exit, output.ExitUnsupported, got.stderr)
+	}
+	for _, want := range []string{"--reply-to", "cannot do it", "--thread-key"} {
+		if !strings.Contains(got.stderr, want) {
+			t.Errorf("the refusal does not mention %q:\n%s", want, got.stderr)
+		}
+	}
+	if strings.Contains(got.stderr, "Use a profile whose transport") {
+		t.Errorf("the refusal sends the reader to another profile, and no profile in this build has it:\n%s",
+			got.stderr)
 	}
 }
 

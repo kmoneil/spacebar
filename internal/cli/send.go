@@ -58,10 +58,15 @@ type sendFlags struct {
 	idempotent bool
 	cardFile   string
 
-	// replyTo and file are registered and not implemented. See the comment on
-	// requireCapabilities.
+	// replyTo is registered and refused. Nothing this build sends can carry it:
+	// chat.SendRequest has no field a reply target reaches, so a message sent
+	// with this flag would arrive as a new top-level message. See check.
 	replyTo string
-	file    string
+
+	// file is registered and implemented. It was in the same sentence as
+	// replyTo until 2026-08-20, three milestones after uploadAttachment gave it
+	// a caller.
+	file string
 
 	// contentType overrides what --file's bytes are declared as.
 	contentType string
@@ -154,7 +159,7 @@ again.`,
 	f.StringVar(&flags.file, "file", "", "attach a file (requires a profile that can upload)")
 	f.StringVar(&flags.contentType, "content-type", "",
 		"declare --file as this media type instead of detecting it from its bytes")
-	f.StringVar(&flags.replyTo, "reply-to", "", "reply to a message by name (requires a profile that can read)")
+	f.StringVar(&flags.replyTo, "reply-to", "", "not implemented in this build; use --thread-key to thread a message")
 	addRefreshFlag(cmd, &flags.refresh)
 
 	return cmd
@@ -256,9 +261,16 @@ func runSend(cmd *cobra.Command, opts *Options, args []string, flags *sendFlags)
 	return send(cmd, r, opened, req)
 }
 
-// check refuses the flag combinations that contradict each other, before
-// anything is read or resolved.
+// check refuses what cannot work, before anything is read or resolved.
+//
+// Two contradictions and one flag this build does not have. All three are
+// answered here rather than further down, because none of them needs a profile
+// to decide and a refusal that costs a keyring read is a refusal that costs
+// more than it has to.
 func (f *sendFlags) check() error {
+	if err := f.checkReplyTo(); err != nil {
+		return err
+	}
 	if f.messageID != "" && f.idempotent {
 		return output.Usagef("--message-id and --idempotent both name the message, and they disagree.\n" +
 			"Use --message-id to choose the name, or --idempotent to have one derived.")
@@ -272,6 +284,43 @@ func (f *sendFlags) check() error {
 			chat.MessageIDPrefix)
 	}
 	return nil
+}
+
+// checkReplyTo refuses the one flag this build registers and cannot honour.
+//
+// It is registered rather than left out, which is the reason --file and --card
+// are, and the reason survives the fact that this one does nothing: an
+// unregistered flag is exit 2 "unknown flag: --reply-to", which says this tool
+// has no notion of replying to a message, and that is a different and wronger
+// answer than "it has one and this build cannot do it".
+//
+// What it was doing until 2026-08-20 was worse than either. The flag's value
+// was read once, to choose transport.CanRead as the capability to require, and
+// then dropped: chat.SendRequest has no field a reply target reaches. On a
+// webhook the capability check refused it, which is the population it was
+// written for and the only one anybody tested. On any profile that can read it
+// passed the check, posted a new top-level message, and exited 0 printing the
+// success fields, so somebody replying in a busy space got a detached message
+// and no way to tell. A false report is worse than a refusal, and this was one
+// for four milestones.
+//
+// Exit 5 rather than exit 2, and the reason is that exit 5 is what this
+// invocation already returns. A webhook caller gets it today from
+// transport.Require, so refusing here at exit 2 would change what a real
+// invocation answers, and an exit code never changes meaning. The message is
+// where the difference lives: it does not say to use another profile, because
+// no profile in this build has it.
+func (f *sendFlags) checkReplyTo() error {
+	if f.replyTo == "" {
+		return nil
+	}
+	return output.Errorf("UNSUPPORTED", output.ExitUnsupported,
+		"--reply-to names a message to reply to, and this build cannot do it. Nothing was sent.\n"+
+			"There is nowhere for the value to go: a reply carries the thread the named message is "+
+			"in, and no request this build makes has a field for one, so a message sent with this "+
+			"flag would arrive as a new top-level message rather than as a reply.\n"+
+			"Use --thread-key to group messages into a thread. Both transports can do that, and it "+
+			"needs no read access.")
 }
 
 // splitArgs works out which argument is which.
@@ -294,19 +343,21 @@ func splitArgs(t transport.Transport, args []string) (target, text string, err e
 
 // requireCapabilities refuses before anything is built or sent.
 //
-// SPEC.md §8.2: exit 5, naming the profile and the fix. Every flag here is one
-// this build cannot honour on any profile yet, which is exactly why they are
-// registered: the failure says which capability is missing rather than
-// pretending the flag does not exist.
+// SPEC.md §8.2: exit 5, naming the profile and the fix. Each flag here changes
+// which capability the send needs, so the refusal can say which one is missing
+// rather than reporting the generic inability to send.
+//
+// The original comment here said every flag was one no profile could honour
+// yet, which is why registering them was worth doing: an unregistered --file is
+// exit 2 "unknown flag", which says this tool cannot do attachments at all,
+// where a registered one is exit 5 naming the profile. That was true in
+// Milestone 2, when the only transport was a webhook. It stopped being true in
+// Milestone 3 and nothing revisited it: --file is honoured on user OAuth and
+// --card on a webhook, and --reply-to reached no request on any of them. The
+// reasoning survives; the sentence about what this build can do did not.
 func requireCapabilities(t transport.Transport, flags *sendFlags) error {
 	if flags.file != "" {
 		return transport.Require(t, "send --file", transport.CanUpload)
-	}
-	if flags.replyTo != "" {
-		// Replying to a message means finding out which thread it is in, which
-		// means reading the space. A webhook cannot, which is why this is a
-		// read capability rather than a threading one.
-		return transport.Require(t, "send --reply-to", transport.CanRead)
 	}
 	if flags.cardFile != "" {
 		return transport.Require(t, "send --card", transport.CanSendCards)

@@ -1070,6 +1070,28 @@ read. It is gated more tightly than the CLI, on purpose.
   `TestEveryToolThatNamesASpaceIsHeldToTheAllowlist` walks all five and
   `TestListingSpacesUnderAnAllowlistShowsOnlyThose` holds the filtering.
 
+  **And the filtering has to answer the whole question, not a window of it.**
+  `list_spaces` took a page of `limit + 1` rows and applied the allowlist to
+  whatever survived, so a space the model may not touch spent a slot the model
+  would never see. With one allowed space out of three and a limit of one, the
+  tool that exists to say what a model can reach answered
+  `{"has_more":true,"spaces":[]}`, and it carries no page cursor, so the only
+  way out was to raise the limit against a ceiling of 200.
+
+  That is not a way into a space the allowlist excludes, and the confinement
+  never weakened. It is the same failure the truncation rule names, on the
+  answer rather than on the reach: an operator reads "your agent can see
+  nothing" as their allowlist being wrong. The filter now runs before a row is
+  counted, which is what `internal/chat` already does for the group memberships
+  it drops and what `searchAllowed` already does for the index, and the request
+  carries no fetch limit while an allowlist is in force, because a limit on the
+  fetch bounds rows the filter has not seen yet.
+  `TestAnAllowedSpaceIsFoundWhereverTheAllowlistPutsItInTheList` puts the
+  allowed spaces last and asserts all three halves, and
+  `TestAListWithNoAllowlistStillAsksForOnlyWhatItNeeds` holds the other side, so
+  a server with no allowlist still asks the API for one row more than it needs
+  rather than for a thousand.
+
   The flag was extended rather than a second one added. Two flags that both take
   space names is the shape somebody sets one of and believes they set both, and
   nothing is released, so there is no agent whose reach this silently narrows.

@@ -869,6 +869,123 @@ func FuzzARecordOnlyAnswersForItsOwnSpace(f *testing.F) {
 	})
 }
 
+// TestBoundsIsTheWindowAndTheCountAndNothingElse.
+//
+// Bounds went through resolve until 2026-08-20, which sorts every surviving
+// record into a total order so that the two ends could be read off the slice.
+// It now walks the map once for a minimum, a maximum and a count, and this is
+// what says the two agree.
+//
+// The four cases are the four ways the old shape's answer was decided, and
+// three of them are only visible because the sort put the records somewhere
+// specific. An unparseable create time sorted to the zero time, which put it at
+// the end of a newest-first list, and oldest was read by walking back from
+// there until a record had a time at all; so such a record counted and bounded
+// nothing, and that is preserved rather than tidied. A space where every record
+// is like that had no non-zero time to find, so both ends stayed zero while the
+// count did not.
+//
+// The tombstone case has no production caller today: nothing in this tool
+// writes one, which is what fix-06 is about. It is asserted anyway, because
+// Bounds reads record.Deleted and a change that stopped honouring it would be
+// invisible until something did start writing them.
+func TestBoundsIsTheWindowAndTheCountAndNothingElse(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name     string
+		messages []rows.Message
+		deleted  string
+		oldest   string
+		newest   string
+		count    int
+	}{
+		{
+			name:  "an index with nothing in it bounds nothing",
+			count: 0,
+		},
+		{
+			name: "the ends of an ordinary space",
+			messages: []rows.Message{
+				{Name: testSpace + "/messages/BBB", CreateTime: at(5)},
+				{Name: testSpace + "/messages/AAA", CreateTime: at(1)},
+				{Name: testSpace + "/messages/CCC", CreateTime: at(9)},
+			},
+			oldest: at(1),
+			newest: at(9),
+			count:  3,
+		},
+		{
+			name: "a create time that will not parse counts and bounds nothing",
+			messages: []rows.Message{
+				{Name: testSpace + "/messages/AAA", CreateTime: at(1)},
+				{Name: testSpace + "/messages/BBB", CreateTime: "not a time"},
+				{Name: testSpace + "/messages/CCC", CreateTime: at(9)},
+			},
+			oldest: at(1),
+			newest: at(9),
+			count:  3,
+		},
+		{
+			name: "a space where nothing has a readable time has a count and no window",
+			messages: []rows.Message{
+				{Name: testSpace + "/messages/AAA", CreateTime: "not a time"},
+				{Name: testSpace + "/messages/BBB", CreateTime: ""},
+			},
+			count: 2,
+		},
+		{
+			name: "a tombstone is neither counted nor a bound",
+			messages: []rows.Message{
+				{Name: testSpace + "/messages/AAA", CreateTime: at(1)},
+				{Name: testSpace + "/messages/BBB", CreateTime: at(5)},
+				{Name: testSpace + "/messages/CCC", CreateTime: at(9)},
+			},
+			deleted: testSpace + "/messages/CCC",
+			oldest:  at(1),
+			newest:  at(5),
+			count:   2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			index := NewNDJSON(t.TempDir())
+			if len(tc.messages) > 0 {
+				if err := index.Append(ctx, testSpace, tc.messages); err != nil {
+					t.Fatalf("Append: %v", err)
+				}
+			}
+			if tc.deleted != "" {
+				if err := index.Delete(ctx, testSpace, tc.deleted); err != nil {
+					t.Fatalf("Delete: %v", err)
+				}
+			}
+
+			oldest, newest, count, err := index.Bounds(ctx, testSpace)
+			if err != nil {
+				t.Fatalf("Bounds: %v", err)
+			}
+			if count != tc.count {
+				t.Errorf("count = %d, want %d", count, tc.count)
+			}
+			if got := formatBound(oldest); got != tc.oldest {
+				t.Errorf("oldest = %q, want %q", got, tc.oldest)
+			}
+			if got := formatBound(newest); got != tc.newest {
+				t.Errorf("newest = %q, want %q", got, tc.newest)
+			}
+		})
+	}
+}
+
+// formatBound writes a bound the way the test table spells one, so that the
+// zero time compares as the empty string rather than as a year nobody typed.
+func formatBound(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
+}
+
 // TestCoverageSaysWhatWasLookedInAndWhatWasNot.
 //
 // Both adapters have to answer "did this search look everywhere", and only one
