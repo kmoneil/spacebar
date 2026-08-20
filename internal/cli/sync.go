@@ -16,6 +16,7 @@ package cli
 
 import (
 	"context"
+	"iter"
 	"strconv"
 	"time"
 
@@ -124,7 +125,7 @@ func runSync(cmd *cobra.Command, r *output.Renderer, opened *profile.Open,
 	}
 
 	for _, space := range spaces {
-		result, err := syncOne(cmd.Context(), r, opened, index, space, limit)
+		result, err := syncOne(cmd.Context(), r, opened.Transport, index, space, limit)
 		if err != nil {
 			return finish(r, opened, err)
 		}
@@ -172,10 +173,54 @@ func syncTargets(ctx context.Context, opened *profile.Open, all bool, args []str
 	return []string{space}, nil
 }
 
+// messageLister is the part of a transport a sync uses, which is one method.
+//
+// Declared here, at the point of use, rather than taken as the whole
+// *profile.Open the caller happens to hold. Two things come of that and the
+// second is the reason.
+//
+// A sync reads messages and does nothing else, so a parameter that could also
+// send is a parameter one bug away from sending. That is the same argument
+// transport.Profiled makes for a refusal needing only three methods.
+//
+// And it is what makes the walk testable at all. `sync` gates on CanRead, which
+// only a user-OAuth profile has, and no test in this package can point one at a
+// test server, because chat.BaseURL is a constant so that nothing can redirect
+// where a credential goes. So the whole command cannot be driven end to end,
+// and until this existed neither could any part of it: syncOne and fetchInto
+// held the resumable-copy algorithm and had no test of any kind.
+//
+// The alternative was to give internal/chat a way to be pointed somewhere else,
+// which trades the guarantee that keeps a credential where it belongs for the
+// convenience of testing. This costs one interface.
+//
+// refactor-01 moves this walk out of internal/cli so that an MCP tool can call
+// it too, and proposes the same interface in whatever package it lands in. This
+// is a step along that path rather than away from it.
+type messageLister interface {
+	Messages(ctx context.Context, req chat.ListMessagesRequest) iter.Seq2[chat.Message, error]
+}
+
+// syncIndex is the part of the store a sync writes through.
+//
+// Three methods, for the reason messageLister is one: this is what the walk
+// uses, and a parameter narrowed to it cannot reach Search or Delete.
+//
+// It also makes the thing perf-03 is about observable. Bounds is a full scan of
+// the space, and how many times one run makes it is a property of this walk that
+// no assertion about the answer can see: a test can only tell three scans from
+// two by counting them. The fake in sync_test.go counts and delegates to a real
+// *store.NDJSON, so nothing about the index itself is faked.
+type syncIndex interface {
+	Visit(space string) error
+	Bounds(ctx context.Context, space string) (oldest, newest time.Time, count int, err error)
+	Append(ctx context.Context, space string, msgs []rows.Message) error
+}
+
 // syncOne brings one space down, forwards from the newest held and backwards
 // from the oldest.
-func syncOne(ctx context.Context, r *output.Renderer, opened *profile.Open,
-	index *store.NDJSON, space string, limit int,
+func syncOne(ctx context.Context, r *output.Renderer, messages messageLister,
+	index syncIndex, space string, limit int,
 ) (syncResult, error) {
 	// Recorded before anything is fetched, so that a space which turns out to
 	// have no messages still counts as looked at. Otherwise `search` reports it
@@ -185,7 +230,7 @@ func syncOne(ctx context.Context, r *output.Renderer, opened *profile.Open,
 		return syncResult{}, err
 	}
 
-	_, newest, _, err := index.Bounds(ctx, space)
+	oldest, newest, _, err := index.Bounds(ctx, space)
 	if err != nil {
 		return syncResult{}, err
 	}
@@ -193,7 +238,7 @@ func syncOne(ctx context.Context, r *output.Renderer, opened *profile.Open,
 	// Forwards first. A person who leaves this running wants today's messages
 	// before last year's, and an interrupted run should have caught up rather
 	// than have gone further back.
-	fetched, err := fetchInto(ctx, opened, index, space, chat.ListMessagesRequest{
+	fetched, err := fetchInto(ctx, messages, index, space, chat.ListMessagesRequest{
 		Space:   space,
 		Since:   newest,
 		OrderBy: chat.OrderOldestFirst,
@@ -202,35 +247,95 @@ func syncOne(ctx context.Context, r *output.Renderer, opened *profile.Open,
 		return syncResult{}, err
 	}
 
-	oldest, _, _, err := index.Bounds(ctx, space)
-	if err != nil {
-		return syncResult{}, err
+	// The oldest end, and usually it is the one already in hand.
+	//
+	// The forward fetch above is bounded createTime > newest, so everything it
+	// appended is newer than the newest message held, and newest is at or after
+	// oldest. Nothing it could have added is older than the oldest end, so that
+	// end has not moved and the scan to re-read it is a scan of the whole space
+	// for an answer that cannot have changed. Bounds is 480ms and 131MB at a
+	// hundred thousand records, per BenchmarkBounds, so it is not a small one.
+	//
+	// The exception is a zero watermark, and it is not only the empty index.
+	// Bounds returns no window for a space whose records all have create times
+	// that will not parse, and reports a count for them anyway, which
+	// TestBoundsIsTheWindowAndTheCountAndNothingElse pins. A zero newest makes
+	// messageFilter build no lower bound at all, so the forward fetch runs
+	// unbounded and does move the oldest end.
+	//
+	// So the guard is the watermark and not the count, and the difference
+	// between those two is a bug that ships: a count of zero is right about the
+	// empty index and wrong about the unreadable one, where the stale oldest
+	// then leaves the backward window unbounded as well and the run copies
+	// every message down a second time. Held looks correct afterwards, because
+	// a repeat supersedes by name, so the only visible trace is in Fetched.
+	// TestASyncReportsTheWindowTheIndexActuallyHolds asserts that number for
+	// exactly this reason.
+	if newest.IsZero() {
+		oldest, _, _, err = index.Bounds(ctx, space)
+		if err != nil {
+			return syncResult{}, err
+		}
 	}
 
 	// Then backwards, but only while there is budget left. A --limit that was
 	// spent catching up is spent.
-	if limit <= 0 || fetched < limit {
-		remaining := 0
-		if limit > 0 {
-			remaining = limit - fetched
-		}
-		older, err := fetchInto(ctx, opened, index, space, chat.ListMessagesRequest{
-			Space:   space,
-			Until:   oldest,
-			OrderBy: chat.OrderNewestFirst,
-		}, remaining)
-		if err != nil {
-			return syncResult{}, err
-		}
-		fetched += older
+	older, err := fetchOlder(ctx, messages, index, space, oldest, limit, fetched)
+	if err != nil {
+		return syncResult{}, err
+	}
+	fetched += older
+
+	return reportOn(ctx, r, index, space, fetched)
+}
+
+// fetchOlder is the backward pass, and it spends what the forward pass left.
+//
+// Split from syncOne for the complexity ceiling, and the split is where the two
+// jobs already were: catching up and going back are different questions about
+// the same space, and only this one has budget arithmetic in it.
+//
+// A limit that was spent catching up is spent, so this makes no request at all
+// then. That is deliberate: a run bounded by --limit stops where it stopped and
+// the next one carries on, so spending the last of a budget on history rather
+// than on today would make a caught-up run fall behind.
+func fetchOlder(ctx context.Context, messages messageLister, index syncIndex,
+	space string, oldest time.Time, limit, spent int,
+) (int, error) {
+	if limit > 0 && spent >= limit {
+		return 0, nil
 	}
 
-	result := syncResult{Space: space, Fetched: fetched}
+	remaining := 0
+	if limit > 0 {
+		remaining = limit - spent
+	}
+	return fetchInto(ctx, messages, index, space, chat.ListMessagesRequest{
+		Space:   space,
+		Until:   oldest,
+		OrderBy: chat.OrderNewestFirst,
+	}, remaining)
+}
+
+// reportOn is the window the index covers once a run has finished.
+//
+// The third and last scan of the space, and the one that cannot be avoided: it
+// is the only one taken after both fetches, so it is the only one that can
+// answer what the index now holds. See syncOne for why the other two collapsed
+// into one.
+//
+// Split from syncOne for the complexity ceiling. It is also the only part of
+// that function that writes anything to a stream, which makes it the natural
+// piece to lift out.
+func reportOn(ctx context.Context, r *output.Renderer, index syncIndex,
+	space string, fetched int,
+) (syncResult, error) {
 	from, to, total, err := index.Bounds(ctx, space)
 	if err != nil {
 		return syncResult{}, err
 	}
-	result.Held = total
+
+	result := syncResult{Space: space, Fetched: fetched, Held: total}
 	if !from.IsZero() {
 		result.Oldest = from.UTC().Format(time.RFC3339Nano)
 	}
@@ -250,7 +355,7 @@ func syncOne(ctx context.Context, r *output.Renderer, opened *profile.Open,
 // file lock, and a hundred thousand locks is a hundred thousand chances to be
 // interrupted between two of them. A batch is written by one locked Write, so
 // an interrupted sync leaves whole records and resumes from the last one.
-func fetchInto(ctx context.Context, opened *profile.Open, index *store.NDJSON,
+func fetchInto(ctx context.Context, messages messageLister, index syncIndex,
 	space string, req chat.ListMessagesRequest, limit int,
 ) (int, error) {
 	const batchSize = 500
@@ -270,7 +375,7 @@ func fetchInto(ctx context.Context, opened *profile.Open, index *store.NDJSON,
 	}
 
 	req.Limit = limit
-	for message, err := range opened.Transport.Messages(ctx, req) {
+	for message, err := range messages.Messages(ctx, req) {
 		if err != nil {
 			// Whatever was already batched is written before the failure is
 			// reported, so an interrupted sync keeps its work and the next run
