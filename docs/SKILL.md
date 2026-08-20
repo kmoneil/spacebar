@@ -57,7 +57,12 @@ it appears only when this machine has a local index with something in it,
 because there is no message search API and an empty index would answer every
 search with nothing, which reads as "nobody said that" rather than as "nobody
 synced anything". It needs no capability at all, so a webhook profile can search
-what a user-authorized one copied down. Its results carry `searched`, the list
+what a user-authorized one copied down. Its results carry `unsearched`, the
+spaces this profile can reach that nobody has synced, and `coverage_known`,
+which is false when there is no cached space list on the machine and therefore
+no way to work `unsearched` out at all. An empty `unsearched` beside a false
+`coverage_known` does not mean nothing was missed, and a model that reads it
+that way reports a narrow answer as a whole one. They carry `searched`, the list
 of spaces the index actually holds, because an answer over an index is bounded
 by what somebody remembered to sync.
 

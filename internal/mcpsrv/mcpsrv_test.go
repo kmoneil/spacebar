@@ -32,6 +32,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/config"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/profile"
+	"github.com/kmoneil/spacebar/internal/resolve"
 	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/store"
 	"github.com/kmoneil/spacebar/internal/transport"
@@ -201,6 +202,14 @@ func connect(t *testing.T, f *fake) *mcp.ClientSession {
 // connectWith is the same, for a test that cares about the options.
 func connectWith(t *testing.T, opts Options) *mcp.ClientSession {
 	t.Helper()
+
+	// search_messages reads the resolver's cached space list to say which
+	// spaces it did not look in, so without this every test in this package
+	// would read the developer's own ~/.cache/spacebar and answer differently
+	// depending on whose machine it ran on. internal/cli's isolate carries the
+	// same three lines and the same reason, and its comment records the golden
+	// that failed before it did.
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 
 	server, err := New(opts)
 	if err != nil {
@@ -1446,4 +1455,104 @@ func TestAMemberListThatLeftGroupsOutSaysSoInTheResult(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestASearchOverMCPNamesTheSpacesNobodySynced.
+//
+// searched said what the index holds and nothing said what it does not, which
+// is half of "did this search look everywhere". The CLI answered both halves,
+// on stderr, from the resolver's cached space list at no request cost. This
+// answered one, at the reader that cannot see stderr and cannot work it out for
+// itself: list_spaces needs a capability and search_messages is registered on a
+// fact about this machine, so a webhook profile has the search tool and no way
+// to enumerate anything at all.
+//
+// The third case is the one that would otherwise be reported as complete. With
+// no cached space list there is nothing to compare against, so unsearched is
+// empty for a reason that has nothing to do with coverage, and a model reading
+// an empty list as "I searched everything" would report a narrow answer as a
+// whole one. coverage_known is what tells the two apart, and it is not
+// omitempty for exactly that reason: a missing field and a false one read the
+// same to something checking for truth.
+func TestASearchOverMCPNamesTheSpacesNobodySynced(t *testing.T) {
+	const indexed = "spaces/AAAATestSpace"
+	const never = "spaces/AAAANeverSynced"
+
+	t.Run("a space nobody synced is named", func(t *testing.T) {
+		cache := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cache)
+		if err := resolve.NewCache("work").Write([]chat.Space{
+			{Name: indexed}, {Name: never},
+		}); err != nil {
+			t.Fatalf("seeding the space list: %v", err)
+		}
+
+		session := connectWith(t, Options{
+			Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			Index:   indexWith(t, indexed),
+		})
+		// connectWith gives every session its own cache directory, so the one
+		// seeded above has to be put back for this session's own reads.
+		t.Setenv("XDG_CACHE_HOME", cache)
+
+		var out searchMessagesOut
+		callTool(t, session, "search_messages", map[string]any{"query": "deploy"}, &out)
+
+		if !out.CoverageKnown {
+			t.Error("coverage_known is false, and there is a cached space list")
+		}
+		if want := []string{indexed}; !slices.Equal(out.Searched, want) {
+			t.Errorf("searched = %v, want %v", out.Searched, want)
+		}
+		if want := []string{never}; !slices.Equal(out.Unsearched, want) {
+			t.Errorf("unsearched = %v, want %v", out.Unsearched, want)
+		}
+	})
+
+	t.Run("no cached list says so rather than saying nothing", func(t *testing.T) {
+		session := connectWith(t, Options{
+			Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			Index:   indexWith(t, indexed),
+		})
+
+		var out searchMessagesOut
+		callTool(t, session, "search_messages", map[string]any{"query": "deploy"}, &out)
+
+		if out.CoverageKnown {
+			t.Error("coverage_known is true, and no space list was ever cached")
+		}
+		if len(out.Unsearched) != 0 {
+			t.Errorf("unsearched = %v with nothing to compare against", out.Unsearched)
+		}
+	})
+
+	t.Run("the allowlist narrows what is named", func(t *testing.T) {
+		cache := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cache)
+		if err := resolve.NewCache("work").Write([]chat.Space{
+			{Name: indexed}, {Name: never}, {Name: "spaces/AAAAConfinedOut"},
+		}); err != nil {
+			t.Fatalf("seeding the space list: %v", err)
+		}
+
+		session := connectWith(t, Options{
+			Profile:     &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			Index:       indexWith(t, indexed),
+			AllowSpaces: []string{indexed, never},
+		})
+		t.Setenv("XDG_CACHE_HOME", cache)
+
+		var out searchMessagesOut
+		callTool(t, session, "search_messages", map[string]any{"query": "deploy"}, &out)
+
+		// Naming a space the allowlist excludes would publish the name of a
+		// room this server was confined out of, in the field that exists to be
+		// honest about coverage.
+		if slices.Contains(out.Unsearched, "spaces/AAAAConfinedOut") {
+			t.Errorf("unsearched names a space outside the allowlist: %v", out.Unsearched)
+		}
+		if want := []string{never}; !slices.Equal(out.Unsearched, want) {
+			t.Errorf("unsearched = %v, want %v", out.Unsearched, want)
+		}
+	})
 }

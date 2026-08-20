@@ -325,6 +325,29 @@ when a directory has been copied or restored: those are not answered with, and
 the warning says which file and how many. Read that line too before treating a
 result set as complete.
 
+## Warning codes
+
+Under `--json`, stderr carries one JSON document per line. A warning looks like
+this, and the `code` is what to branch on:
+
+```json
+{"warning":{"code":"PARTIAL_COVERAGE","message":"searched 1 of 5 spaces. Not searched, because they are not in the index: spaces/BBB\nRun: spacebar sync --all"}}
+```
+
+**A code means one thing: the answer above is narrower than it looks.** An
+advisory warning carries none, so a line with no `code` is one a program can
+ignore. Codes are frozen the way the exit codes are: a new condition gets a new
+code, and a code never changes meaning.
+
+| Code | What it means |
+|---|---|
+| `PARTIAL_COVERAGE` | A search did not look everywhere, or cannot say whether it did. The message names the spaces, or says there is no cached space list to compare against. |
+| `HIDDEN_GROUPS` | A member list left Google Group memberships out. Everybody in such a group is in the space without a membership of their own, so the list is not the whole answer to who is in it. |
+| `MENTION_UNRESOLVED` | A `--mention` matched nobody. The message posted and the exit is 0, and somebody who meant to notify a colleague did not. |
+| `INDEX_SKIPPED` | A file in the local index holds records belonging to another space, so those records are excluded from every search. |
+
+If you treat a result set as complete, check for these first.
+
 `sync` is resumable and holds no cursor. It fetches everything newer than the
 newest message it holds and everything older than the oldest, so an interrupted
 run resumes by being run again, with nothing fetched twice and no gap. `--limit`
