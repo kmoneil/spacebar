@@ -502,3 +502,94 @@ func (b *safeBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// TestAWarningAProgramActsOnCarriesACode.
+//
+// WarnCode had one caller until 2026-08-20, which was Warn, passing "". No test
+// named it and no document mentioned it, so warning.code was the empty string in
+// every --json warning this tool had ever emitted, and omitempty meant it had
+// never appeared in one. The three warnings that mean "this answer is short"
+// all went out codeless, which is exactly the case the field was added for.
+//
+// This is what stops that being true again. It asserts the code reaches the
+// wire, that the codeless path is still available for an advisory warning, and
+// that a code changes nothing about the text a person reads: the two renderings
+// are different documents and only one of them has a machine on the end.
+func TestAWarningAProgramActsOnCarriesACode(t *testing.T) {
+	t.Run("json carries the code", func(t *testing.T) {
+		var out, errw bytes.Buffer
+		NewRenderer(&out, &errw, Options{JSON: true}).
+			WarnCode(WarnPartialCoverage, "searched %d of %d spaces", 1, 5)
+
+		var got struct {
+			Warning struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"warning"`
+		}
+		if err := json.Unmarshal(errw.Bytes(), &got); err != nil {
+			t.Fatalf("the warning is not one JSON object: %v\n%s", err, errw.String())
+		}
+		if got.Warning.Code != WarnPartialCoverage {
+			t.Errorf("code = %q, want %q", got.Warning.Code, WarnPartialCoverage)
+		}
+		if got.Warning.Message != "searched 1 of 5 spaces" {
+			t.Errorf("message = %q", got.Warning.Message)
+		}
+		if out.Len() != 0 {
+			t.Errorf("a warning reached stdout: %q", out.String())
+		}
+	})
+
+	t.Run("an advisory warning carries none", func(t *testing.T) {
+		var out, errw bytes.Buffer
+		NewRenderer(&out, &errw, Options{JSON: true}).Warn("Chat has no tables")
+
+		if strings.Contains(errw.String(), `"code"`) {
+			t.Errorf("an advisory warning carries a code, and only one that says the answer is "+
+				"short should:\n%s", errw.String())
+		}
+	})
+
+	t.Run("text output is unchanged by the code", func(t *testing.T) {
+		var coded, plain bytes.Buffer
+		var ignored bytes.Buffer
+
+		NewRenderer(&ignored, &coded, Options{}).WarnCode(WarnHiddenGroups, "one membership was left out")
+		NewRenderer(&ignored, &plain, Options{}).Warn("one membership was left out")
+
+		if coded.String() != plain.String() {
+			t.Errorf("a code changed what a person reads:\n%q\n%q", coded.String(), plain.String())
+		}
+	})
+}
+
+// TestEveryWarningCodeIsDistinctAndSpelledLikeAnErrorCode.
+//
+// The codes are part of the output contract the moment anything compares
+// against one, and they are frozen the way the exit codes are: a new condition
+// gets a new code and a code never changes meaning. Two constants that
+// collapsed to one string would silently merge two conditions a caller was
+// branching between.
+func TestEveryWarningCodeIsDistinctAndSpelledLikeAnErrorCode(t *testing.T) {
+	codes := map[string]string{
+		"WarnPartialCoverage":   WarnPartialCoverage,
+		"WarnHiddenGroups":      WarnHiddenGroups,
+		"WarnMentionUnresolved": WarnMentionUnresolved,
+		"WarnIndexSkipped":      WarnIndexSkipped,
+	}
+
+	seen := map[string]string{}
+	for name, code := range codes {
+		if code == "" {
+			t.Errorf("%s is empty, which is what an uncoded warning already carries", name)
+		}
+		if code != strings.ToUpper(code) {
+			t.Errorf("%s is %q; a code is upper case and underscored, like the Error codes", name, code)
+		}
+		if other, ok := seen[code]; ok {
+			t.Errorf("%s and %s are both %q, so a caller cannot tell them apart", name, other, code)
+		}
+		seen[code] = name
+	}
+}

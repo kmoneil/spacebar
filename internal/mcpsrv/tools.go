@@ -24,6 +24,7 @@ import (
 	"github.com/kmoneil/spacebar/internal/format"
 	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
+	"github.com/kmoneil/spacebar/internal/resolve"
 	"github.com/kmoneil/spacebar/internal/rows"
 	"github.com/kmoneil/spacebar/internal/store"
 )
@@ -514,7 +515,12 @@ var searchMessagesTool = &mcp.Tool{
 		"found by the text it had then, and a message deleted after it was copied is still found, " +
 		"because sync walks createTime and an edit does not change createTime. Do not report a " +
 		"result as the current state of a space. Confirm anything you are about to act on with " +
-		"get_message, which reads the API. Use list_messages instead to read a space directly.",
+		"get_message, which reads the API. Use list_messages instead to read a space directly. " +
+		"Read searched and unsearched before reporting a result set as complete: unsearched names " +
+		"spaces this profile can reach that nobody has synced, and a message in one of those is not " +
+		"found no matter what it says. If coverage_known is false there is no cached space list on " +
+		"this machine, so an empty unsearched does not mean nothing was missed, and you should say " +
+		"so rather than reporting the answer as whole.",
 }
 
 type searchMessagesIn struct {
@@ -557,6 +563,29 @@ type searchMessagesOut struct {
 	// be about another file costs a model nothing but a sentence it can check.
 	Skipped []string `json:"skipped,omitempty" jsonschema:"records this machine's index holds but will not answer with, one line per file; a file that holds records belonging to another space has been copied, restored, or edited, and those records are excluded from every search"`
 
+	// Unsearched is what this profile can reach and the index does not hold.
+	//
+	// Searched said what was looked in and nothing said what was not, which is
+	// half the question. The CLI names the missing spaces on stderr and this
+	// said nothing at all, so the same search over MCP answered narrowly and
+	// gave the model no way to know: stderr is invisible to it, and it cannot
+	// work the answer out either, because list_spaces needs a capability and
+	// search_messages is registered on a fact about this machine, so a webhook
+	// profile has the search tool and no way to enumerate anything.
+	//
+	// Empty means either that nothing is missing or that this server has no
+	// cached space list to compare against, and those are different facts.
+	// CoverageKnown is what tells them apart.
+	Unsearched []string `json:"unsearched,omitempty" jsonschema:"spaces this profile can reach that the index does not hold, so this search did not look in them; a message in one of these would not be found no matter what it says"`
+
+	// CoverageKnown says whether the unsearched list could be computed at all.
+	//
+	// False means this machine has no cached space list, so nothing here knows
+	// what it did not look in. A model that read an empty unsearched as "I
+	// searched everything" would report a narrow answer as a whole one, which is
+	// the failure this whole field set exists to prevent.
+	CoverageKnown bool `json:"coverage_known" jsonschema:"false when this machine has no cached space list, so unsearched could not be worked out and an empty unsearched does not mean nothing was missed"`
+
 	HasMore bool `json:"has_more,omitempty" jsonschema:"true when more messages match than the limit returned"`
 }
 
@@ -584,7 +613,8 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 		}
 	}
 
-	indexed, err := s.index.Spaces()
+	known, cached := s.knownSpaces()
+	indexed, unsearched, err := s.index.Coverage(known)
 	if err != nil {
 		return nil, searchMessagesOut{}, err
 	}
@@ -593,16 +623,20 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 	// space is the one read that reaches every space at once, so an allowlist
 	// that did not narrow it would confine every other tool and leave the index
 	// open, which is the same account's messages by another route.
-	searched := make([]string, 0, len(indexed))
-	for _, space := range indexed {
-		if s.allows(space) {
-			searched = append(searched, space)
-		}
+	//
+	// The unsearched list is narrowed the same way and for the same reason:
+	// naming a space the allowlist excludes would publish the name of a room
+	// this server was confined out of, in the field that exists to be honest
+	// about coverage.
+	out := searchMessagesOut{
+		Messages:      []rows.Message{},
+		Searched:      allowedOf(s, indexed),
+		Unsearched:    allowedOf(s, unsearched),
+		CoverageKnown: cached,
 	}
-
-	out := searchMessagesOut{Messages: []rows.Message{}, Searched: searched}
 	if target != "" {
 		out.Searched = []string{target}
+		out.Unsearched = nil
 	}
 
 	out.Messages, out.HasMore, err = s.searchAllowed(ctx, store.Query{
@@ -620,6 +654,37 @@ func (s *Server) searchMessages(ctx context.Context, _ *mcp.CallToolRequest, in 
 	// for the same reason. See searchMessagesOut.Skipped.
 	out.Skipped = s.index.Warnings()
 	return nil, out, nil
+}
+
+// knownSpaces is what this profile could have synced, from the resolver's cache.
+//
+// The same source the CLI reads, so the two adapters answer the same question
+// from the same place and neither makes a request to do it. The second result
+// is the difference between "nothing is missing" and "there is no way to tell",
+// and it reaches the model as coverage_known rather than being flattened into
+// an empty list.
+func (s *Server) knownSpaces() ([]string, bool) {
+	spaces, ok := resolve.NewCache(s.profile.Name).Read()
+	if !ok {
+		return nil, false
+	}
+
+	names := make([]string, 0, len(spaces))
+	for _, space := range spaces {
+		names = append(names, space.Name)
+	}
+	return names, true
+}
+
+// allowedOf keeps the spaces this server may name.
+func allowedOf(s *Server, spaces []string) []string {
+	kept := make([]string, 0, len(spaces))
+	for _, space := range spaces {
+		if s.allows(space) {
+			kept = append(kept, space)
+		}
+	}
+	return kept
 }
 
 // searchAllowed reads matches out of the index, keeping only the spaces this

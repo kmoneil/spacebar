@@ -1047,6 +1047,12 @@ read. It is gated more tightly than the CLI, on purpose.
   well as writing, so that an agent given a scratch space has neither write
   access nor read access to the company-wide announcements space.
 
+  The coverage fields a search returns are narrowed the same way. `unsearched`
+  names spaces this profile can reach and the index does not hold, so naming one
+  the allowlist excludes would publish the name of a room this server was
+  confined out of, in the field that exists to be honest about coverage.
+  `TestASearchOverMCPNamesTheSpacesNobodySynced` holds it.
+
   It restricted **writes only** until this was written down, and its own help
   said it "narrows it further" without saying which half. So an operator who
   confined a server to one space had confined half of it: every read tool still

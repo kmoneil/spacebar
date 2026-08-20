@@ -100,6 +100,42 @@ func Usagef(format string, a ...any) *Error {
 	return Errorf("USAGE", ExitUsage, format, a...)
 }
 
+// The warning codes, which are the machine-readable half of a warning the way
+// Error.Code is the machine-readable half of a failure.
+//
+// A code means one thing: the answer above is narrower than it looks. It is not
+// a label on every warning. An advisory one, such as a Markdown table that Chat
+// cannot render, tells somebody their message will read differently and does
+// not say the result is short, so it carries none and a program has nothing to
+// branch on there.
+//
+// That rule is what stops this becoming a taxonomy nobody maintains, and it is
+// the rule to apply to a new warning: if a program that ignored this line would
+// report an incomplete answer as a whole one, it takes a code.
+//
+// Frozen the way the exit codes are. A new condition gets a new code and a code
+// never changes meaning, because the only reason to have one is that something
+// out there is comparing against the string.
+const (
+	// WarnPartialCoverage is a search that did not look everywhere, or that
+	// cannot say whether it did.
+	WarnPartialCoverage = "PARTIAL_COVERAGE"
+
+	// WarnHiddenGroups is a member list with Google Group memberships left out.
+	// Everybody in such a group is in the space without a membership of their
+	// own, so the list is not the whole answer to who is in it.
+	WarnHiddenGroups = "HIDDEN_GROUPS"
+
+	// WarnMentionUnresolved is a --mention that matched nobody. The message
+	// posted, so the exit code is 0, and somebody who meant to notify a
+	// colleague did not.
+	WarnMentionUnresolved = "MENTION_UNRESOLVED"
+
+	// WarnIndexSkipped is a record the local index holds and will not answer
+	// with, because the file it is in belongs to another space.
+	WarnIndexSkipped = "INDEX_SKIPPED"
+)
+
 // ExitCodeOf reports how err should leave the process. Anything that does not
 // carry a code of its own is a generic failure.
 func ExitCodeOf(err error) ExitCode {

@@ -130,7 +130,7 @@ knowing what that discards.`,
 			// warning is printed whether or not the search then failed: a
 			// record the index holds and will not answer with is worth saying
 			// either way.
-			r.Warnings(index.Warnings())
+			r.WarningsCode(output.WarnIndexSkipped, index.Warnings())
 			return finish(r, opened, err)
 		},
 	}
@@ -156,47 +156,74 @@ knowing what that discards.`,
 // it costs no request. A profile that has never listed its spaces has no cache
 // and therefore nothing to compare, and says that instead of guessing.
 func reportUnsearched(r *output.Renderer, profileName string, index *store.NDJSON, target string) error {
-	indexed, err := index.Spaces()
+	known, cached := knownSpaces(profileName)
+	searched, missing, err := index.Coverage(known)
 	if err != nil {
 		return err
 	}
 
 	if target != "" {
-		if !slices.Contains(indexed, target) {
+		if !slices.Contains(searched, target) {
 			return output.Usagef("%s is not in the local index, so there is nothing to search.\n"+
 				"Copy it down first:\n  %s sync %s", target, meta.AppName, target)
 		}
 		return nil
 	}
 
-	if len(indexed) == 0 {
+	if len(searched) == 0 {
 		return output.Usagef("the local index is empty, so there is nothing to search.\n"+
 			"Copy a space down first:\n  %s sync --all", meta.AppName)
 	}
 
-	known, ok := resolve.NewCache(profileName).Read()
-	if !ok {
-		// No cached list means no way to know what is missing. Saying that is
-		// better than saying nothing, because "3 results" reads as complete.
-		r.Note("searched %d indexed spaces. This profile has no cached space list, "+
-			"so there is no way to say which spaces are missing from the index.", len(indexed))
+	if !cached {
+		// Warn and not Note, which was the first version and was wrong for the
+		// reason spaces.go records for the same choice: Note is suppressed under
+		// --json, and --json is what a program reads. The comment here already
+		// said why the line has to exist, that "3 results" reads as complete,
+		// and then said it through the one channel the reader it describes
+		// cannot see. It is reachable on an ordinary machine within a day,
+		// because resolve.Cache treats a list older than resolve.TTL as a miss,
+		// so a --json search run the morning after a space listing said nothing
+		// about its own coverage at all.
+		r.WarnCode(output.WarnPartialCoverage,
+			"searched %d indexed spaces. This profile has no cached space list, "+
+				"so there is no way to say which spaces are missing from the index.\n"+
+				"Run: %s spaces list", len(searched), meta.AppName)
 		return nil
 	}
 
-	var missing []string
-	for _, s := range known {
-		if !slices.Contains(indexed, s.Name) {
-			missing = append(missing, s.Name)
-		}
-	}
 	if len(missing) == 0 {
-		r.Note("searched all %d spaces this profile can reach.", len(indexed))
+		// A Note, and this is the branch that should be one. A complete answer
+		// needs no caveat, and a line on every complete search is the noise that
+		// teaches people to skip the line that mattered.
+		r.Note("searched all %d spaces this profile can reach.", len(searched))
 		return nil
 	}
 
-	r.Warn("searched %d of %d spaces. Not searched, because they are not in the index: %s\nRun: %s sync --all",
-		len(indexed), len(indexed)+len(missing), strings.Join(missing, " "), meta.AppName)
+	r.WarnCode(output.WarnPartialCoverage,
+		"searched %d of %d spaces. Not searched, because they are not in the index: %s\nRun: %s sync --all",
+		len(searched), len(searched)+len(missing), strings.Join(missing, " "), meta.AppName)
 	return nil
+}
+
+// knownSpaces is what this profile could have synced, from the resolver's cache.
+//
+// The second result is the difference between "nothing is missing" and "there
+// is no way to tell", which are different answers and are reported differently.
+// A cache miss is an empty list, and an empty list compared against anything
+// yields no missing spaces, so a caller that dropped this bool would report
+// complete coverage on every machine that had not listed its spaces today.
+func knownSpaces(profileName string) ([]string, bool) {
+	spaces, ok := resolve.NewCache(profileName).Read()
+	if !ok {
+		return nil, false
+	}
+
+	names := make([]string, 0, len(spaces))
+	for _, space := range spaces {
+		names = append(names, space.Name)
+	}
+	return names, true
 }
 
 // searchRow is the projection for a result that is already a published message.
