@@ -332,6 +332,47 @@ func BenchmarkSearchOverOneSpace(b *testing.B) {
 	}
 }
 
+// BenchmarkBounds is what sync pays to find out what it already holds.
+//
+// It exists because nothing measured this path. make bench covered Search and
+// the match loop, and Bounds is the one place in the tree where a full index
+// scan is overhead on the request rather than the request itself: syncOne asks
+// three times per space per run, before anything reaches the network.
+//
+// What it measured, 2026-08-20, on the machine and by the protocol this file's
+// header describes, one space, six interleaved pairs, one sample per process:
+//
+//	through resolve, with the sort   593ms to 639ms   153.9MB   1,501,105 allocs
+//	one pass for min, max and count  472ms to 480ms   130.7MB   1,501,095 allocs
+//
+// No overlap across the six pairs. The allocation counts are identical to
+// within ten in 1.5 million, so the honest claim is the 23.2MB, which is the
+// rows.Message slice at 232 bytes each, and the clock is its consequence.
+//
+// Two sizes rather than three, because the shape of the curve is Search's
+// question and this one only has to stay comparable to it.
+func BenchmarkBounds(b *testing.B) {
+	for _, records := range []int{10_000, 100_000} {
+		b.Run(fmt.Sprintf("%d", records), func(b *testing.B) {
+			dir := fixture(b, records, 1)
+			b.ReportAllocs()
+
+			count := 0
+			for b.Loop() {
+				_, _, n, err := NewNDJSON(dir).Bounds(context.Background(), benchSpace(0))
+				if err != nil {
+					b.Fatalf("Bounds: %v", err)
+				}
+				count = n
+			}
+			if count != records {
+				b.Fatalf("Bounds counted %d of %d records, so this measured the wrong thing", count, records)
+			}
+			sink = count
+		})
+	}
+}
+
 // BenchmarkSearchOverEverySpace is the unscoped search, which reads every file
 // in the directory.
 //
