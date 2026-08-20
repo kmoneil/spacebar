@@ -32,6 +32,7 @@ import (
 
 	"github.com/kmoneil/spacebar/internal/chat"
 	"github.com/kmoneil/spacebar/internal/config"
+	"github.com/kmoneil/spacebar/internal/meta"
 	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/profile"
 	"github.com/kmoneil/spacebar/internal/resolve"
@@ -1784,6 +1785,40 @@ func TestASearchOverMCPNamesTheSpacesNobodySynced(t *testing.T) {
 		}
 	})
 
+	// The state a real machine was found in on 2026-08-20: a cache file that
+	// parses, names this profile and is fresh, and lists nothing.
+	//
+	// It has to answer the way "no cached list" answers, and this is the reader
+	// that makes it matter. A model is told that coverage_known true beside an
+	// empty unsearched means nothing was missed, so the wrong value here does
+	// not produce a wrong field, it produces a confident sentence about
+	// somebody's own space to the one reader who cannot check it.
+	//
+	// Written by hand rather than through Write, which now declines an empty
+	// list, because a file also arrives from a restore, a copy, or an older
+	// build.
+	t.Run("a cached list with nothing in it is not a comparison", func(t *testing.T) {
+		cache := t.TempDir()
+		t.Setenv("XDG_CACHE_HOME", cache)
+		writeSpaceList(t, cache, "work", "null")
+
+		session := connectWith(t, Options{
+			Profile: &profile.Open{Name: "work", Transport: &fake{kind: config.TransportUserOAuth, caps: full()}},
+			Index:   indexWith(t, indexed),
+		})
+		t.Setenv("XDG_CACHE_HOME", cache)
+
+		var out searchMessagesOut
+		callTool(t, session, "search_messages", map[string]any{"query": "deploy"}, &out)
+
+		if out.CoverageKnown {
+			t.Error("coverage_known is true, and the cached list names no spaces")
+		}
+		if len(out.Unsearched) != 0 {
+			t.Errorf("unsearched = %v with nothing to compare against", out.Unsearched)
+		}
+	})
+
 	t.Run("the allowlist narrows what is named", func(t *testing.T) {
 		cache := t.TempDir()
 		t.Setenv("XDG_CACHE_HOME", cache)
@@ -2021,4 +2056,22 @@ func TestTheSyncToolNeedsBothTheFlagAndAnIndex(t *testing.T) {
 			t.Errorf("search_messages is advertised over an index that cannot be filled: %v", tools)
 		}
 	})
+}
+
+// writeSpaceList puts a cache file under root with the spaces field spelled
+// exactly as given, for a state resolve.Cache.Write will no longer produce.
+func writeSpaceList(t *testing.T, root, profileName, spaces string) {
+	t.Helper()
+
+	dir := filepath.Join(root, meta.AppName)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("creating %s: %v", dir, err)
+	}
+
+	body := fmt.Sprintf(`{"fetched":%q,"profile":%q,"spaces":%s}`,
+		time.Now().UTC().Format(time.RFC3339Nano), profileName, spaces)
+	path := filepath.Join(dir, "spaces-"+profileName+".json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
 }

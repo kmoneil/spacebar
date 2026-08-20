@@ -102,6 +102,22 @@ func NewCache(profile string) *Cache {
 // truncated, or half-written cache file should cost one extra API call, not a
 // command that will not run until somebody deletes a file they did not know
 // existed. The only cost of being wrong here is a request.
+//
+// "When there are some" is a condition and not a turn of phrase, and it was
+// only the phrase until 2026-08-20. A file that parses, names this profile and
+// is fresh but lists nothing answered "known: nothing", and the caller cannot
+// tell that from "known: these six". What it costs is not one request.
+// `search` compares the index against this list to say which spaces it did not
+// look in, so an empty list is a comparison that finds nothing missing, and a
+// search of one space out of six then reports itself as whole. Over MCP it is
+// `coverage_known: true` beside an empty `unsearched`, which the tool
+// description tells a model to read as "nothing was missed", to the one reader
+// that cannot check.
+//
+// A profile that genuinely reaches no spaces and a list that never got filled
+// are the same bytes, so the safe reading is the second. The cost of being
+// wrong that way is one listing on a command that was going to fail anyway,
+// because a resolve against no spaces matches nothing.
 func (c *Cache) Read() ([]chat.Space, bool) {
 	if c == nil {
 		return nil, false
@@ -128,13 +144,24 @@ func (c *Cache) Read() ([]chat.Space, bool) {
 		// the alternative is a cache that never expires.
 		return nil, false
 	}
+	if len(file.Spaces) == 0 {
+		return nil, false
+	}
 	return file.Spaces, true
 }
 
 // Write records a space list. A failure is returned and ignored by the caller:
 // the answer is already in hand, and a full disk is not a reason to refuse it.
+//
+// A list with nothing in it is not recorded, and that is the producer side of
+// the rule Read states. It matters for a reason beyond symmetry: the only
+// caller writes whatever the listing yielded, so without this one odd answer
+// from the API replaces a good cached list with an empty one, and Read then has
+// to distrust it for a full TTL. Declining leaves the previous list in place,
+// which can only overstate what a search did not look in, and overstating that
+// is the safe direction.
 func (c *Cache) Write(spaces []chat.Space) error {
-	if c == nil {
+	if c == nil || len(spaces) == 0 {
 		return nil
 	}
 
