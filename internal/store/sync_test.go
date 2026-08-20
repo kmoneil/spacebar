@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cli
+package store
 
 import (
-	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 	"slices"
@@ -24,9 +24,7 @@ import (
 	"time"
 
 	"github.com/kmoneil/spacebar/internal/chat"
-	"github.com/kmoneil/spacebar/internal/output"
 	"github.com/kmoneil/spacebar/internal/rows"
-	"github.com/kmoneil/spacebar/internal/store"
 )
 
 // This file is the harness the sync walk never had.
@@ -135,7 +133,7 @@ func spaceOfMinutes(space string, minutes ...int) []chat.Message {
 // three of them per run is three times the work of one, and only counting tells
 // them apart.
 type countingIndex struct {
-	*store.NDJSON
+	*NDJSON
 	scans int
 }
 
@@ -149,7 +147,6 @@ func (c *countingIndex) Bounds(ctx context.Context, space string) (time.Time, ti
 type syncHarness struct {
 	index  *countingIndex
 	source *fakeMessages
-	r      *output.Renderer
 	space  string
 }
 
@@ -158,7 +155,7 @@ func newSyncHarness(t *testing.T, held, available []chat.Message) *syncHarness {
 	t.Helper()
 	const space = "spaces/AAAATestSpace"
 
-	index := &countingIndex{NDJSON: store.NewNDJSON(t.TempDir())}
+	index := &countingIndex{NDJSON: NewNDJSON(t.TempDir())}
 	if len(held) > 0 {
 		rowsHeld := make([]rows.Message, 0, len(held))
 		for _, m := range held {
@@ -173,14 +170,13 @@ func newSyncHarness(t *testing.T, held, available []chat.Message) *syncHarness {
 	return &syncHarness{
 		index:  index,
 		source: &fakeMessages{messages: available},
-		r:      output.NewRenderer(&bytes.Buffer{}, &bytes.Buffer{}, output.Options{}),
 		space:  space,
 	}
 }
 
-func (h *syncHarness) run(t *testing.T, limit int) syncResult {
+func (h *syncHarness) run(t *testing.T, limit int) Result {
 	t.Helper()
-	got, err := syncOne(context.Background(), h.r, h.source, h.index, h.space, limit)
+	got, err := Sync(context.Background(), h.index, h.source, h.space, limit)
 	if err != nil {
 		t.Fatalf("syncOne: %v", err)
 	}
@@ -210,7 +206,7 @@ func formatSyncBound(at time.Time) string {
 
 // TestASyncReportsTheWindowTheIndexActuallyHolds.
 //
-// syncResult carries Oldest, Newest and Held, and syncOne reads all three by
+// Result carries Oldest, Newest and Held, and syncOne reads all three by
 // asking Bounds a third time after both fetches. Whatever else changes about
 // how often it asks, the answer has to be the one the index would give, because
 // that is what a caller acts on: Oldest is the answer to "how far back does my
@@ -341,7 +337,7 @@ func TestAnInterruptedSyncKeepsWhatItAlreadyFetched(t *testing.T) {
 	h := newSyncHarness(t, nil, available)
 	h.source.failAfter = 2
 
-	if _, err := syncOne(context.Background(), h.r, h.source, h.index, h.space, 0); err == nil {
+	if _, err := Sync(context.Background(), h.index, h.source, h.space, 0); err == nil {
 		t.Fatal("an interrupted sync reported success")
 	}
 
@@ -456,4 +452,45 @@ func TestASyncScansTheIndexTwiceRatherThanThreeTimes(t *testing.T) {
 				h.index.scans)
 		}
 	})
+}
+
+// TestTheSyncResultIsTheContractAnAgentParses.
+//
+// Result is what `sync --json` prints, one object per space, and what a
+// sync_space tool would return if one is ever built. No golden records it: the
+// three sync goldens are all refusals, because a successful run needs a
+// user-OAuth profile and there is no way to give a golden one. So the shape had
+// no gate at all until the walk moved down here, where it can be asserted
+// directly the way internal/rows asserts its own.
+//
+// Written out as a string rather than compared field by field, for the reason
+// internal/rows does it: a field renamed, a tag dropped, or omitempty added or
+// removed is a change every caller sees, and only the encoded form shows all
+// four.
+func TestTheSyncResultIsTheContractAnAgentParses(t *testing.T) {
+	whole, err := json.Marshal(Result{
+		Space:   "spaces/AAA",
+		Fetched: 12,
+		Held:    340,
+		Oldest:  "2026-01-01T00:00:00Z",
+		Newest:  "2026-08-17T09:00:00Z",
+	})
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if want := `{"space":"spaces/AAA","fetched":12,"held":340,` +
+		`"oldest":"2026-01-01T00:00:00Z","newest":"2026-08-17T09:00:00Z"}`; string(whole) != want {
+		t.Errorf("shape changed, which every caller sees:\n got %s\nwant %s", whole, want)
+	}
+
+	// A space with nothing in it drops both ends and keeps the three counts. A
+	// caller reading oldest has to be able to tell "no window" from a zero time
+	// it would otherwise have to parse.
+	empty, err := json.Marshal(Result{Space: "spaces/AAA"})
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if want := `{"space":"spaces/AAA","fetched":0,"held":0}`; string(empty) != want {
+		t.Errorf("an empty result is %s, want %s", empty, want)
+	}
 }

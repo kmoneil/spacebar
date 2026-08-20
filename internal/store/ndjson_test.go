@@ -184,13 +184,18 @@ func TestTwoConcurrentAppendersProduceNoInterleavedLine(t *testing.T) {
 	}
 }
 
-// TestLastSeenAfterATornAppendReturnsTheLastCompleteRecord, the card's third
-// claim.
+// TestATornAppendLeavesEverythingBeforeItAnswering, the card's third claim.
 //
 // A process killed mid-append leaves a partial final line. Refusing to read the
 // whole space because of it would make a crash cost more than it already did,
 // so the torn record is skipped and everything before it still answers.
-func TestLastSeenAfterATornAppendReturnsTheLastCompleteRecord(t *testing.T) {
+//
+// It asked LastSeen until 2026-08-20, which had no production caller and went
+// with store.Index when the sync walk moved down and gave that interface a real
+// contract to describe. The claim is unchanged and is now read off the two
+// things a sync actually uses: Bounds for the watermark it resumes from, and a
+// search for which records survived.
+func TestATornAppendLeavesEverythingBeforeItAnswering(t *testing.T) {
 	dir := t.TempDir()
 	index := NewNDJSON(dir)
 
@@ -212,15 +217,20 @@ func TestLastSeenAfterATornAppendReturnsTheLastCompleteRecord(t *testing.T) {
 	}
 	_ = f.Close()
 
-	when, name, err := index.LastSeen(context.Background(), testSpace)
+	_, when, count, err := index.Bounds(context.Background(), testSpace)
 	if err != nil {
-		t.Fatalf("LastSeen: %v", err)
+		t.Fatalf("Bounds: %v", err)
 	}
-	if name != testSpace+"/messages/BBB" {
-		t.Errorf("LastSeen returned %q, want the last complete record", name)
+	if count != 2 {
+		t.Errorf("the space holds %d records, want the 2 complete ones", count)
 	}
 	if got := when.Format(time.RFC3339Nano); got != at(5) {
-		t.Errorf("LastSeen time = %s, want %s", got, at(5))
+		t.Errorf("the watermark is %s, want %s: a sync would resume from the torn record", got, at(5))
+	}
+
+	found := collect(t, index, Query{Space: testSpace})
+	if len(found) != 2 || found[0].Name != testSpace+"/messages/BBB" {
+		t.Errorf("the surviving records are %+v, want the two complete ones newest first", found)
 	}
 }
 
@@ -411,8 +421,8 @@ func TestASearchWithNoSpaceReadsEverySpaceIndexed(t *testing.T) {
 // TestAnEmptyIndexAnswersRatherThanFailing.
 //
 // Nothing has been synced yet is the state every user starts in, so it is a
-// normal answer and not an error. LastSeen returning a zero time is what tells
-// a sync to start from the beginning.
+// normal answer and not an error. A zero watermark out of Bounds is what tells
+// Sync to fetch forward unbounded rather than from somewhere.
 func TestAnEmptyIndexAnswersRatherThanFailing(t *testing.T) {
 	index := NewNDJSON(t.TempDir())
 	ctx := context.Background()
@@ -424,12 +434,12 @@ func TestAnEmptyIndexAnswersRatherThanFailing(t *testing.T) {
 		t.Errorf("an unindexed space returned %d messages", len(found))
 	}
 
-	when, name, err := index.LastSeen(ctx, testSpace)
+	oldest, newest, count, err := index.Bounds(ctx, testSpace)
 	if err != nil {
-		t.Fatalf("LastSeen on an empty index: %v", err)
+		t.Fatalf("Bounds on an empty index: %v", err)
 	}
-	if !when.IsZero() || name != "" {
-		t.Errorf("LastSeen on an empty index = %s, %q, want the zero values", when, name)
+	if !oldest.IsZero() || !newest.IsZero() || count != 0 {
+		t.Errorf("Bounds on an empty index = %s, %s, %d, want the zero values", oldest, newest, count)
 	}
 
 	// Appending nothing is not an error either, and creates no file: a sync
