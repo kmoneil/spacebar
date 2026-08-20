@@ -309,10 +309,46 @@ func (s *Server) allows(space string) bool {
 // result is one document, and a partial one with a success code is the failure
 // mode the truncation rule exists to prevent.
 func collect[T any](seq iter.Seq2[T, error], limit int) ([]T, bool, error) {
+	return collectWhere(seq, limit, func(T) bool { return true })
+}
+
+// collectWhere is collect for a list something is filtered out of, and the
+// difference is which rows spend the limit.
+//
+// A dropped row does not. That is the rule internal/chat already states for the
+// group memberships it filters, where the drop happens in the pager's decode,
+// upstream of where emit counts:
+//
+//	dropping downstream of it would spend limit budget on rows nobody sees
+//	and shorten the next page as well
+//
+// and it is the rule searchAllowed states for the index:
+//
+//	a limit counts what the caller gets, not what the index looked at
+//
+// list_spaces was the third place in this repository that filters a list
+// against something its caller cannot see, and the only one that counted the
+// rows it then threw away. With --allow-space naming one space out of three and
+// a limit of one, it answered {"has_more":true,"spaces":[]}: the window closed
+// on two spaces the model may not touch, and the tool that exists to say what a
+// model can reach said nothing. There is no page cursor on that tool, so the
+// only way out was to raise the limit, and maxLimit caps that at 200.
+//
+// The filter cannot move into the pager's decode the way the membership one
+// did, because an allowlist is this server's policy and internal/chat may not
+// hold it. So it happens here and the counting moves to match: keep is asked
+// before a row is counted, and the caller passes a request limit of zero so the
+// walk carries on until enough rows have survived. Stopping the range once they
+// have is what ends the walk, and a caller that stops ranging is not a
+// truncation.
+func collectWhere[T any](seq iter.Seq2[T, error], limit int, keep func(T) bool) ([]T, bool, error) {
 	out := make([]T, 0, limit)
 	for item, err := range seq {
 		if err != nil {
 			return nil, false, err
+		}
+		if !keep(item) {
+			continue
 		}
 		out = append(out, item)
 		if len(out) > limit {
