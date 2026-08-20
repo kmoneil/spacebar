@@ -60,6 +60,15 @@ type fake struct {
 	// same error as one before it.
 	sends     int
 	reactions int
+
+	// spacesLimit is the Limit the last Spaces request carried.
+	//
+	// Recorded because fetchLimit is a decision about the request rather than
+	// about the answer, and a fake that ignored Limit would let it be wrong
+	// while every assertion about what came back stayed green. That is the same
+	// reason Members above filters instead of yielding its canned list: a fake
+	// that honours a contract loosely lets the real thing violate it.
+	spacesLimit int
 }
 
 func (f *fake) Kind() config.Transport               { return f.kind }
@@ -74,8 +83,17 @@ func (f *fake) Send(_ context.Context, req chat.SendRequest) (*chat.Message, err
 	}, nil
 }
 
-func (f *fake) Spaces(context.Context, chat.ListSpacesRequest) iter.Seq2[chat.Space, error] {
-	return yield(f.spaces, f.fail)
+func (f *fake) Spaces(_ context.Context, req chat.ListSpacesRequest) iter.Seq2[chat.Space, error] {
+	f.spacesLimit = req.Limit
+
+	// Honoured rather than ignored, because a limit on the fetch is what
+	// fetchLimit decides not to send when an allowlist is in force, and a fake
+	// that returned everything regardless would answer the same either way.
+	spaces := f.spaces
+	if req.Limit > 0 && req.Limit < len(spaces) {
+		spaces = spaces[:req.Limit]
+	}
+	return yield(spaces, f.fail)
 }
 
 func (f *fake) GetSpace(_ context.Context, name string) (*chat.Space, error) {
@@ -1274,6 +1292,95 @@ func TestListingSpacesUnderAnAllowlistShowsOnlyThose(t *testing.T) {
 	}
 	if strings.Contains(body, "spaces/BBB") {
 		t.Errorf("a space outside the allowlist was listed:\n%s", body)
+	}
+}
+
+// TestAnAllowedSpaceIsFoundWhereverTheAllowlistPutsItInTheList.
+//
+// The half the test above cannot see. It uses two spaces and the default limit
+// of twenty-five, so the window never closes and the order of the filter and
+// the limit does not matter.
+//
+// It mattered. list_spaces took a window of limit+1 rows and applied the
+// allowlist to the survivors, so a space the model may not touch spent a slot
+// the model would never see. Three spaces, an allowlist naming the third, and a
+// limit of one answered:
+//
+//	{"has_more":true,"spaces":[]}
+//
+// The tool that exists to say what a model can reach said it can reach nothing,
+// and there is no page cursor on it, so the only way out was to raise the limit
+// against a ceiling of maxLimit. internal/chat states the rule this broke, for
+// the memberships it filters, and searchAllowed states it again for the index:
+// a limit counts what the caller gets, not what was looked at.
+//
+// Three assertions, because there are three ways to get this wrong. The allowed
+// space is returned wherever it sits; has_more counts allowed spaces rather
+// than fetched ones; and the request carries no fetch limit when an allowlist
+// is in force, which is the half that would otherwise be decided by whichever
+// page the API happened to return.
+func TestAnAllowedSpaceIsFoundWhereverTheAllowlistPutsItInTheList(t *testing.T) {
+	spaces := make([]chat.Space, 8)
+	for i := range spaces {
+		spaces[i] = chat.Space{Name: "spaces/" + strings.Repeat(string(rune('A'+i)), 3)}
+	}
+	transport := &fake{kind: config.TransportUserOAuth, caps: full(), spaces: spaces}
+
+	session := connectWith(t, Options{
+		Profile:     &profile.Open{Name: "work", Transport: transport},
+		AllowSpaces: []string{"spaces/GGG", "spaces/HHH"},
+	})
+
+	var last listSpacesOut
+	callTool(t, session, "list_spaces", map[string]any{"limit": 1}, &last)
+
+	if len(last.Spaces) != 1 || last.Spaces[0].Name != "spaces/GGG" {
+		t.Errorf("a limit of 1 over an allowlist of two late spaces returned %+v, want spaces/GGG",
+			last.Spaces)
+	}
+	if !last.HasMore {
+		t.Error("has_more is false, and a second allowed space was left out")
+	}
+	if transport.spacesLimit != 0 {
+		t.Errorf("the request carried Limit %d; under an allowlist it has to carry none, "+
+			"or the window closes on rows the filter has not seen", transport.spacesLimit)
+	}
+
+	var both listSpacesOut
+	callTool(t, session, "list_spaces", map[string]any{"limit": 5}, &both)
+
+	if len(both.Spaces) != 2 {
+		t.Errorf("a limit of 5 returned %d allowed spaces, want 2: %+v", len(both.Spaces), both.Spaces)
+	}
+	if both.HasMore {
+		t.Error("has_more is true, and every allowed space was returned")
+	}
+}
+
+// TestAListWithNoAllowlistStillAsksForOnlyWhatItNeeds.
+//
+// The other side of fetchLimit, and the reason it is a function rather than an
+// unconditional zero. Without an allowlist nothing is dropped on the way back,
+// so the request may bound itself, and a default call asks the API for
+// twenty-six spaces rather than a thousand. Removing that bound would spend
+// somebody's quota to fix a case they are not in.
+func TestAListWithNoAllowlistStillAsksForOnlyWhatItNeeds(t *testing.T) {
+	spaces := make([]chat.Space, 4)
+	for i := range spaces {
+		spaces[i] = chat.Space{Name: "spaces/" + strings.Repeat(string(rune('A'+i)), 3)}
+	}
+	transport := &fake{kind: config.TransportUserOAuth, caps: full(), spaces: spaces}
+	session := connect(t, transport)
+
+	var out listSpacesOut
+	callTool(t, session, "list_spaces", map[string]any{"limit": 2}, &out)
+
+	if transport.spacesLimit != 3 {
+		t.Errorf("the request carried Limit %d, want 3: one more than asked for, so that "+
+			"has_more is observed rather than guessed", transport.spacesLimit)
+	}
+	if len(out.Spaces) != 2 || !out.HasMore {
+		t.Errorf("limit 2 of 4 returned %d spaces, has_more %v", len(out.Spaces), out.HasMore)
 	}
 }
 
