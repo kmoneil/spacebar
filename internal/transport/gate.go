@@ -162,18 +162,6 @@ func (c *Capabilities) clear(want Capability) {
 	capabilityTable[want].clear(c)
 }
 
-// Require refuses, before anything is built or sent, when this profile's
-// transport cannot do what the command needs (SPEC.md §8.2).
-//
-// The exit code is 5 and the message names both the profile and the fix. What
-// makes it worth having, given that a transport refuses from the inside anyway,
-// is the command name: a transport cannot know which one was run, and "'tail'
-// needs read access" sends somebody somewhere useful in a way that "this
-// profile cannot read" does not.
-//
-// The first missing capability is reported rather than all of them. Somebody
-// whose profile cannot read also cannot edit, delete, or react, and listing
-// four consequences of one fact reads as four problems.
 // Profiled is the part of a Transport a refusal needs: what kind it is, which
 // profile it belongs to, and what it can do.
 //
@@ -187,6 +175,18 @@ type Profiled interface {
 	Capabilities() Capabilities
 }
 
+// Require refuses, before anything is built or sent, when this profile's
+// transport cannot do what the command needs (SPEC.md §8.2).
+//
+// The exit code is 5 and the message names both the profile and the fix. What
+// makes it worth having, given that a transport refuses from the inside anyway,
+// is the command name: a transport cannot know which one was run, and "'tail'
+// needs read access" sends somebody somewhere useful in a way that "this
+// profile cannot read" does not.
+//
+// The first missing capability is reported rather than all of them. Somebody
+// whose profile cannot read also cannot edit, delete, or react, and listing
+// four consequences of one fact reads as four problems.
 func Require(t Profiled, command string, needed ...Capability) error {
 	caps := t.Capabilities()
 	for _, want := range needed {
