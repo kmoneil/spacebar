@@ -481,10 +481,12 @@ var searchMessagesTool = &mcp.Tool{
 	Description: "Search the messages copied into this machine's local index. This does NOT search " +
 		"Google Chat: there is no message search API for an ordinary user, so only what `" + meta.AppName + " sync` " +
 		"has already copied can be found, and a space nobody has synced returns nothing rather than an " +
-		"error. Matching is case-folded substring over the message body. A message that was edited is " +
-		"found by the text it has now and one that was deleted is not found at all, so results agree " +
-		"with what somebody would see in the space. Use list_messages instead to read a space directly " +
-		"from the API.",
+		"error. Matching is case-folded substring over the message body. Results are a snapshot of " +
+		"what sync copied, NOT what is in the space now: a message edited after it was copied is " +
+		"found by the text it had then, and a message deleted after it was copied is still found, " +
+		"because sync walks createTime and an edit does not change createTime. Do not report a " +
+		"result as the current state of a space. Confirm anything you are about to act on with " +
+		"get_message, which reads the API. Use list_messages instead to read a space directly.",
 }
 
 type searchMessagesIn struct {

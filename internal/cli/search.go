@@ -61,10 +61,22 @@ readable history rather than a corpus, and a scan of it returns in well under a
 second; anything cleverer is a decision that needs evidence rather than a
 feature.
 
-A message that was edited is found by the text it has now, and one that was
-deleted is not found at all, because the index records both. That is the point
-of it: the copy is what somebody would search, and it should agree with what
-they would see.`,
+The index is a snapshot of what sync copied, and this is the part worth knowing
+before you rely on it. A message edited after it was copied is found by the text
+it had then, and a message deleted after it was copied is still found. sync
+walks createTime in two windows, everything newer than the newest message it
+holds and everything older than the oldest, and an edit does not change
+createTime, so nothing brings a message it already holds back for a second look.
+Deleting a message with this tool removes it from the space and leaves the copy
+alone.
+
+So a result is what was said, not necessarily what is there now. Check against
+the space with ` + meta.AppName + ` messages get before acting on an old one.
+
+There is no reindex. The index is the only copy of a message the API will not
+answer for twice, which is why nothing here prunes it and why the honest way to
+refresh a space is to move its file out of the data directory and sync again,
+knowing what that discards.`,
 
 		Args: exactlyOne("search needs something to look for.\n  %s search \"deploy\""),
 		RunE: func(cmd *cobra.Command, args []string) error {
