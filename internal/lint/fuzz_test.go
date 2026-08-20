@@ -127,6 +127,10 @@ var requiredFuzzTargets = map[string]map[string]string{
 			"package derives a path the same way the resolver does.",
 		"FuzzARecordOnlyAnswersForItsOwnSpace": "a line off the local disk is the one input that is " +
 			"neither the API's nor the operator's, and a foreign record moves where sync resumes.",
+		"FuzzAWrittenRecordIsNeverForeignToItsOwnFile": "the writing half of the same rule. A record " +
+			"this index accepts and then cannot answer with is lost silently, and the warning it " +
+			"eventually produces says the file was copied or edited by hand, which would be untrue " +
+			"of a file this tool wrote itself.",
 	},
 }
 

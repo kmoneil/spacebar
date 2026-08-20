@@ -21,6 +21,7 @@ import (
 	"go/token"
 	"io/fs"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -439,4 +440,92 @@ func reportStreamUse(t *testing.T, fset *token.FileSet, f sourceFile, pos token.
 		"escaped by the one package that knows how.\n"+
 		"Take an io.Writer, or render through %s.",
 		f.rel, fset.Position(pos).Line, what, stream, streamOwner, streamOwner)
+}
+
+// adapters are the two packages that translate a caller's request into calls on
+// the internal packages, and decide nothing themselves.
+var adapters = []string{"internal/cli", "internal/mcpsrv"}
+
+// storePackage is the import path the recorded mutations live behind.
+const storePackage = "github.com/kmoneil/spacebar/internal/store"
+
+// recordedMutations are the transport methods that change a message the local
+// index may hold a copy of, and the store function each one belongs behind.
+//
+// The names are shared with the functions in front of them, deliberately: an
+// adapter's call site reads the same either way, so what the gate is checking
+// is which package it is aimed at.
+//
+// React is deliberately absent. A reaction is not stored: rows.Message has no
+// field for one, so a reaction cannot make the index disagree with the space.
+// Send is absent too, and for a sharper reason. Appending a sent message would
+// move the forward watermark past anything posted by somebody else since the
+// last sync, and the next run would step over those messages in silence, which
+// is a gap rather than a stale copy.
+var recordedMutations = map[string]string{
+	"EditMessage":   "store.EditMessage",
+	"DeleteMessage": "store.DeleteMessage",
+}
+
+// TestAnAdapterCannotChangeAMessageWithoutRecordingIt is what keeps the index
+// honest about the changes this tool makes itself.
+//
+// The index is a copy of what `sync` fetched, and sync walks createTime in two
+// windows. An edit does not change createTime and a deletion produces no
+// message at all, so neither is ever re-read: a message this tool edits or
+// deletes keeps its old text in the copy for as long as the file lives, and
+// `search` answers with words nobody can find in the space.
+//
+// internal/store closes that for the changes this tool makes, because the API
+// has just answered and what happened is in hand. The rule only holds if it is
+// the only route: an adapter calling the transport directly is a change that
+// happens in the space and is invisible locally, and it would look exactly like
+// the code that was there before this existed.
+//
+// So the gate is on the call rather than on the import. Both adapters may hold
+// a transport, and do, for every read there is.
+//
+// Test files are exempt, and internal/store is not covered because that is
+// where the call is supposed to be. internal/transport implements these methods
+// and is not an adapter.
+func TestAnAdapterCannotChangeAMessageWithoutRecordingIt(t *testing.T) {
+	fset, files := repoSource(t)
+
+	for _, f := range files {
+		if f.test || !slices.ContainsFunc(adapters, func(pkg string) bool { return inPackage(f.dir, pkg) }) {
+			continue
+		}
+
+		names := importPaths(t, f)
+
+		ast.Inspect(f.syn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			behind, ok := recordedMutations[sel.Sel.Name]
+			if !ok {
+				return true
+			}
+			// The call this rule exists to require. store.EditMessage takes
+			// the transport and calls the method itself, one package further
+			// in, where the record is written in the same breath.
+			if pkg, ok := sel.X.(*ast.Ident); ok && names[pkg.Name] == storePackage {
+				return true
+			}
+
+			t.Errorf("%s:%d calls %s directly, and an adapter may not.\n"+
+				"The local index holds a copy of the message, and nothing else in this tool ever "+
+				"re-reads it: sync walks createTime, which an edit does not change and a deletion "+
+				"does not produce. A change made this way is invisible in the copy and `search` goes "+
+				"on answering with it.\n"+
+				"Go through %s.",
+				f.rel, fset.Position(call.Pos()).Line, sel.Sel.Name, behind)
+			return true
+		})
+	}
 }

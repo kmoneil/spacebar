@@ -62,13 +62,16 @@ second; anything cleverer is a decision that needs evidence rather than a
 feature.
 
 The index is a snapshot of what sync copied, and this is the part worth knowing
-before you rely on it. A message edited after it was copied is found by the text
-it had then, and a message deleted after it was copied is still found. sync
-walks createTime in two windows, everything newer than the newest message it
-holds and everything older than the oldest, and an edit does not change
-createTime, so nothing brings a message it already holds back for a second look.
-Deleting a message with this tool removes it from the space and leaves the copy
-alone.
+before you rely on it. A message you edit or delete with this tool is recorded
+here at the same time, so a search agrees with the space about that one: the new
+text is what is found, and a deleted message is not found at all.
+
+A change made anywhere else is invisible. sync walks createTime in two windows,
+everything newer than the newest message it holds and everything older than the
+oldest, and an edit does not change createTime, so nothing brings a message it
+already holds back for a second look. A message somebody else edited is found by
+the text it had when it was copied, and a message somebody else deleted is still
+found.
 
 So a result is what was said, not necessarily what is there now. Check against
 the space with ` + meta.AppName + ` messages get before acting on an old one.

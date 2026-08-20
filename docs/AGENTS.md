@@ -358,8 +358,13 @@ walks `createTime` in two windows, everything newer than the newest message it
 holds and everything older than the oldest, and an edit does not change
 `createTime`. So a message edited after it was copied is found by the text it
 had then, and a message deleted after it was copied is still found.
-`spacebar messages delete` removes a message from the space and leaves the copy
-alone.
+
+A change made with this tool is the exception. `spacebar messages edit` records
+the new text and `spacebar messages delete` records the deletion, both at the
+moment the API confirms it, so a search agrees with the space about those. It
+happens only for a space the index already holds: neither command creates one,
+because a file is what says a space has been synced and `search` reads that to
+say what it did not look in.
 
 Confirm with `spacebar messages get` before acting on a search result, which
 reads the API rather than the index. There is no reindex: the index is the only
