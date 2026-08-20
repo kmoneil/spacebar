@@ -68,7 +68,11 @@ type listSpacesOut struct {
 	// asked for, and this says whether it arrived. A model handed the default
 	// twenty-five with no way to tell a full space from a small one would either
 	// treat a page as the whole answer or ask again forever.
-	HasMore bool `json:"has_more,omitempty" jsonschema:"true when more spaces exist beyond the limit"`
+	//
+	// It counts spaces this server would list, not spaces that exist. Under
+	// --allow-space the two differ, and the one worth reporting is the one a
+	// larger limit would actually return.
+	HasMore bool `json:"has_more,omitempty" jsonschema:"true when the limit cut this list short, so a larger one would return more"`
 }
 
 func (s *Server) listSpaces(ctx context.Context, _ *mcp.CallToolRequest, in listSpacesIn) (*mcp.CallToolResult, listSpacesOut, error) {
@@ -77,27 +81,51 @@ func (s *Server) listSpaces(ctx context.Context, _ *mcp.CallToolRequest, in list
 		return nil, listSpacesOut{}, err
 	}
 
-	found, more, err := collect(s.profile.Transport.Spaces(ctx, chat.ListSpacesRequest{
-		Filter: in.Filter,
-		Limit:  limit + 1,
-	}), limit)
-	if err != nil {
-		return nil, listSpacesOut{}, err
-	}
-
 	// Filtered rather than refused. A model asking what it can reach is
 	// answered with what it can reach, and listing a space it may not touch
 	// would publish the name and the display name of a room the operator
 	// confined it out of.
+	//
+	// Filtered before the limit is counted rather than after it, which is the
+	// half that was wrong. See collectWhere.
+	found, more, err := collectWhere(s.profile.Transport.Spaces(ctx, chat.ListSpacesRequest{
+		Filter: in.Filter,
+		Limit:  fetchLimit(limit, len(s.allowed)),
+	}), limit, func(space chat.Space) bool { return s.allows(space.Name) })
+	if err != nil {
+		return nil, listSpacesOut{}, err
+	}
+
 	out := listSpacesOut{Spaces: make([]rows.Space, 0, len(found)), HasMore: more}
 	for _, space := range found {
-		if !s.allows(space.Name) {
-			continue
-		}
 		row, _ := rows.ForSpace(space)
 		out.Spaces = append(out.Spaces, row)
 	}
 	return nil, out, nil
+}
+
+// fetchLimit is how many rows to ask the API for, given how many the caller
+// wants and whether anything is being filtered out on the way back.
+//
+// With no allowlist the two numbers are the same and the request carries
+// limit+1, so a default call asks for twenty-six spaces and no more. That is
+// the common case and it is unchanged.
+//
+// With an allowlist the request carries no limit at all, because a limit on the
+// fetch is a limit on rows the filter has not seen yet: the allowed space may
+// be the two hundredth the API returns, and asking for twenty-six would answer
+// that a confined server can reach nothing.
+//
+// It does not become an unbounded walk. collectWhere stops ranging as soon as
+// it holds one more row than the caller asked for, which ends the pager, so a
+// server whose allowed spaces are near the front still costs one page. Only a
+// server whose allowed spaces are sparse pays for more, and that is the case
+// that was answering wrongly.
+func fetchLimit(limit, allowed int) int {
+	if allowed == 0 {
+		return limit + 1
+	}
+	return 0
 }
 
 var getSpaceTool = &mcp.Tool{
