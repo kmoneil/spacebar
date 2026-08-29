@@ -51,6 +51,10 @@ var parsedNeverDialled = map[string]string{
 		"the endpoint constant has not drifted. Writing that assertion against the constant itself " +
 		"would prove nothing, and nothing dials the literal.",
 
+	"claude.ai": "the host in the session URL a coding agent appends to a commit message. It is a " +
+		"fixture for the commit-msg hook's attribution gate, matched as text by a shell script and " +
+		"never fetched.",
+
 	"localhost": "a fixture in the test that asserts it is refused. SPEC.md §15.4 will not accept the " +
 		"name for a loopback address, because it resolves through whatever the machine's resolver " +
 		"says, and the test exists to prove the refusal.",
