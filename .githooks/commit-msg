@@ -117,4 +117,34 @@ printf '%s\n' "$body" | grep -Eq '\*\*[^*/ ][^*/]*\*\*' &&
 printf '%s\n' "$body" | grep -Eq '\[[^]]+\]\([^)]+\)' &&
 	flag "a markdown link" '\[[^]]+\]\([^)]+\)' "Put the bare URL, which a terminal can follow."
 
+# No agent attribution in the history.
+#
+# Four shapes, which are the four a coding agent appends: a session trailer,
+# the session URL on a line of its own, a co-author line naming the tool, and a
+# "Generated with" line. Fourteen commits carried one onto main between #46 and
+# #59, and it had to be taken back out of fourteen pull request descriptions by
+# hand.
+#
+# The setting that suppresses it lives outside the repository, in the agent's
+# own configuration. That file is one edit, one new machine, or one fresh clone
+# away from being wrong, and nothing in a checkout would notice: the commits
+# arrive looking exactly like the ones before them, and the trailer is at the
+# bottom of a body nobody rereads. This is the layer that ships with the
+# repository.
+#
+# The four are named exactly rather than caught by a rule about who wrote the
+# commit, because a gate that guesses at authorship refuses somebody's real
+# name. Ordinary trailers and bare URLs stay welcome, which is what the
+# paragraph above promises.
+attribution='^[Cc]laude-[Ss]ession:|claude\.ai/code/session|^[Cc]o-[Aa]uthored-[Bb]y:.*[Cc]laude|noreply@anthropic\.com|[Gg]enerated with .*[Cc]laude [Cc]ode'
+if printf '%s\n' "$body" | grep -Eq "$attribution"; then
+	echo "commit-msg: agent attribution in the body, and that does not go in the history."
+	echo
+	printf '%s\n' "$body" | grep -nE "$attribution" | head -3 | sed 's/^/  /'
+	echo
+	echo "  Take the line out, and turn attribution off in the agent's own"
+	echo "  settings so that the next commit does not need this hook."
+	exit 1
+fi
+
 exit 0

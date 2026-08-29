@@ -62,6 +62,13 @@ blocks for code and log output, backticks around identifiers, bare URLs, and
 trailers all survive; markdown headings, tables, fences, `**emphasis**`, and
 `[links](url)` do not, and the hook refuses them.
 
+**No agent attribution.** A session trailer, a session URL, a co-author line
+naming the tool, a "Generated with" line: the hook refuses all four. The
+setting that suppresses them lives in the agent's own configuration, which is
+outside the repository and invisible from a clone, so this is the copy of the
+rule that travels with the code. Fourteen commits carried a session trailer
+onto `main` before anybody read the bottom of a body.
+
 Say what was wrong and why the fix is shaped the way it is. A reviewer has the
 diff; somebody reading `git log` in two years does not.
 
@@ -338,6 +345,12 @@ against a deliberately wrong input, would have shown that.
   nobody has to make a mistake for it to happen, because an editor that
   soft-wraps does it for them. The subject is now required to be one line with
   a blank one after it.
+
+  It also refuses agent attribution, in the four shapes one gets appended in.
+  Fourteen commits carried a session trailer before anything in the repository
+  could refuse one, because the setting that suppresses it is in a file no
+  clone can read, and a gate that only exists on the machine it was configured
+  on is not a gate.
 - **A function over the cognitive complexity ceiling.** Split it. Raising the
   ceiling is not the fix.
 - **`go.mod` and a workflow disagreeing about the Go patch version.** They move

@@ -37,6 +37,13 @@ import (
 // to be true is that the file in .githooks refuses these, because that file is
 // what runs on somebody's machine.
 
+// sessionURL is the shape a coding agent appends to a message it wrote.
+//
+// The identifier is invented; the host and the path are the parts the hook
+// matches. claude.ai is in parsedNeverDialled for exactly this reason: it is a
+// string in a fixture, and nothing here constructs a client for it.
+const sessionURL = "https://claude.ai/code/session_000000000000000000000000"
+
 // commitMsg runs the hook against a message and reports whether it was allowed.
 func commitMsg(t *testing.T, message string) (bool, string) {
 	t.Helper()
@@ -98,6 +105,16 @@ func TestTheCommitMessageHookReadsTheSubjectGitWillRecord(t *testing.T) {
 			message: fits + "\n\nbody\n",
 			allowed: true,
 		},
+		{
+			name:    "a bare URL, which the body rules keep",
+			message: "fix(auth): redact a fragment\n\nthe shape is at https://x.invalid/docs\n",
+			allowed: true,
+		},
+		{
+			name:    "a trailer that is not attribution",
+			message: "fix(auth): redact a fragment\n\nbody\n\nSigned-off-by: A Name <a@x.invalid>\n",
+			allowed: true,
+		},
 
 		// The defect this test exists for.
 		{
@@ -120,6 +137,19 @@ func TestTheCommitMessageHookReadsTheSubjectGitWillRecord(t *testing.T) {
 		{name: "a markdown table in the body", message: "fix(auth): redact it\n\n| a | b |\n"},
 		{name: "markdown emphasis in the body", message: "fix(auth): redact it\n\nthis is **bold** text\n"},
 		{name: "a markdown link in the body", message: "fix(auth): redact it\n\nsee [the docs](https://x.invalid)\n"},
+
+		// Attribution an agent appends. Fourteen commits carried a session
+		// trailer onto main between #46 and #59, and nothing in the repository
+		// could have refused one: the setting that suppresses it is in the
+		// agent's own configuration, which no clone can see.
+		//
+		// All four shapes, rather than the one that happened. They are the same
+		// defect wearing different words, and the next agent is not obliged to
+		// pick the one this repository has met.
+		{name: "a session trailer", message: "fix(auth): redact it\n\nbody\n\nClaude-Session: " + sessionURL + "\n"},
+		{name: "the session URL on a line of its own", message: "fix(auth): redact it\n\nbody\n\n" + sessionURL + "\n"},
+		{name: "a co-author line naming the tool", message: "fix(auth): redact it\n\nbody\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n"},
+		{name: "a generated-with line", message: "fix(auth): redact it\n\nbody\n\nGenerated with Claude Code\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			allowed, out := commitMsg(t, tc.message)
@@ -150,5 +180,20 @@ func TestTheHookQuotesTheSubjectGitWouldHaveRecorded(t *testing.T) {
 	joined := "feat(auth): finish a login by pasting the callback the browser could not deliver"
 	if !strings.Contains(out, joined) {
 		t.Errorf("the refusal does not show the subject git would record:\n%s", out)
+	}
+}
+
+// TestTheHookShowsTheAttributionLineItRefused.
+//
+// The line sits at the bottom of a body somebody else generated, which is the
+// part a person skims. A refusal that says only that attribution is present
+// sends them reading the whole message to find out where.
+func TestTheHookShowsTheAttributionLineItRefused(t *testing.T) {
+	allowed, out := commitMsg(t, "fix(auth): redact a fragment\n\nbody\n\nClaude-Session: "+sessionURL+"\n")
+	if allowed {
+		t.Fatal("a session trailer was allowed")
+	}
+	if !strings.Contains(out, sessionURL) {
+		t.Errorf("the refusal does not show the line it objected to:\n%s", out)
 	}
 }
