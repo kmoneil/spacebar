@@ -117,6 +117,16 @@ merge teaches people to press re-run. What runs on the pull request is the
 deterministic half, inside `go test`: every seed, and every crasher ever
 committed under `testdata/fuzz`.
 
+**A red nightly is not always a find.** `go test -fuzz` exits non-zero both for
+a crashing input and for the fuzzing harness falling over, and reports the two
+almost identically. `scripts/fuzz-verdict.sh` decides which and says so in the
+job log, rather than leaving it to be inferred from an exit code by whoever is
+reading at the time, and `internal/lint/verdict_test.go` holds it. A find always
+leaves its input on disk, so that is the check that runs first; an engine fault
+is matched by name and the list of names is short on purpose. A red that is
+neither is a find until somebody shows otherwise: add the new failure mode to
+the script, with what identifies it, rather than re-running until it passes.
+
 **A find is committed twice.** The file Go wrote goes under the target's
 `testdata/fuzz` directory, which is what replays it, and the same value goes in
 as an `f.Add` seed in the same change, which is what makes the regression
