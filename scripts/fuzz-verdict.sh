@@ -61,6 +61,31 @@ for pattern in \
 	fi
 done
 
+# The coordinator's own deadline, reported as a failure.
+#
+# A run that ends `--- FAIL: FuzzX (601.02s)` with `context deadline exceeded`
+# under it and no input on disk is the -fuzztime budget running out, not a
+# find. The coordinator wakes on its parent context's Done channel and asks
+# whether the error it just read is the one it uses to stop its workers. That
+# worker context is a child of the parent, and a parent closes its own channel
+# before it cancels its children, so a coordinator scheduled inside that window
+# reads no error from the child, decides the deadline was somebody else's, and
+# records it. Go's own CI hits it: golang/go#72088 and golang/go#72104 are
+# one-second fuzz runs failing at 1.10s with exactly this line.
+#
+# Matched on the whole line rather than as a substring, and listed apart from
+# the patterns above because it is the only one that needs to be. It is safe
+# because the crasher check has already run: a deadline that lands while a
+# crash is being minimized still writes the input to testdata/fuzz, so that
+# case is a find before it ever reaches here.
+if grep -qE '^[[:space:]]*context deadline exceeded$' "$log"; then
+	echo "verdict: ENGINE"
+	echo "The fuzz budget ran out and the coordinator reported its own deadline"
+	echo "as a failure. Nothing was written under $pkgdir/testdata/fuzz, which"
+	echo "a find always does. See golang/go#72088."
+	exit 0
+fi
+
 echo "verdict: FIND"
 echo "The run failed and nothing identifies it as an engine fault."
 echo "Read the log. If this is a new engine failure mode, add it to this script"

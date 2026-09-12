@@ -143,6 +143,26 @@ jobs:
       contents: read
       issues: write
     steps:
+      # `gh issue create --label` fails the whole call when the label is not
+      # there, and it was not. This job had never run: the sweep was green for
+      # its first twenty-five nights, and the first time it was reached, on
+      # 2026-09-12, it died at "could not add label: 'fuzz' not found" and
+      # wrote no issue. So the report path was broken in the one state it
+      # exists for, and a night that found something would have left a red X
+      # and nothing else.
+      #
+      # Created here rather than by hand in the repository settings, so that
+      # the tree is what says it exists rather than a setting nobody can see
+      # from a checkout. --force makes it idempotent.
+      - name: make sure the label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create fuzz \
+            --repo "${{ github.repository }}" \
+            --description "The nightly fuzz sweep found a crashing input" \
+            --color b60205 \
+            --force
       # One issue per run rather than one per package, because a crasher in a
       # shared helper lights up several at once and ten issues describing one
       # bug is worse than one issue naming ten packages.
