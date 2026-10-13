@@ -901,9 +901,9 @@ SOFTWARE.
 
 --------------------------------------------------------------------------------
 golang.org/x/oauth2
-  version: v0.36.0
+  version: v0.37.0
   licence: BSD-3-Clause
-  source:  https://cs.opensource.google/go/x/oauth2/+/v0.36.0:LICENSE
+  source:  https://cs.opensource.google/go/x/oauth2/+/v0.37.0:LICENSE
 --------------------------------------------------------------------------------
 
 Copyright 2009 The Go Authors.
