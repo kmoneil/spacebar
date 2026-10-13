@@ -20,7 +20,7 @@ env:
   # the module cache, no package looks like stdlib any more, and the licence
   # gate dies with an error that mentions none of this. The Makefile passes the
   # real GOROOT through to survive that; the two numbers still move together.
-  GO_VERSION: "1.26.6"
+  GO_VERSION: "1.26.9"
 
 jobs:
   check:
