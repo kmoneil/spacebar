@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/kmoneil/spacebar/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/kmoneil/spacebar/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="Licence" src="https://img.shields.io/badge/licence-Apache--2.0-blue"></a>
-  <a href="go.mod"><img alt="Go" src="https://img.shields.io/badge/go-1.26.6-00ADD8"></a>
+  <a href="go.mod"><img alt="Go" src="https://img.shields.io/badge/go-1.26.9-00ADD8"></a>
   <a href="#why-it-is-shaped-this-way"><img alt="Dependencies" src="https://img.shields.io/badge/direct%20dependencies-5-brightgreen"></a>
   <a href="SECURITY.md"><img alt="CGO" src="https://img.shields.io/badge/CGO__ENABLED-0-brightgreen"></a>
 </p>
